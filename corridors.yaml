@@ -1,0 +1,253 @@
+# ============================================================================
+# THE SEED NETWORK for build.py — the OSM bootstrap path.
+# Day-to-day editing happens in the web editor (python editor.py), which owns
+# network.yaml. This file exists to (re)build that network from street names:
+# `python build.py` resolves each corridor's real geometry from OpenStreetMap
+# and writes output/network.yaml (+ maps).
+#
+# RULES
+#  * Each corridor is one street segment that will get a separated bike facility.
+#  * `from`/`to` MUST be precise intersections ON `on_street`
+#    (e.g. "Main Street & Pleasant Street") — never neighborhood names like
+#    "Malden Center". build.py validates this and resolves real geometry from
+#    OpenStreetMap. If an intersection doesn't physically exist, build.py warns
+#    and skips it — fix the names and re-run with --refresh.
+#  * type:   quick_build_separated | concrete_separated | shared_use_path | buffered_painted
+#  * status: proposed | funded | existing
+#  * phase:  1, 2, 3, ... (labels/deadlines in the `phases:` block below)
+#  * directions (optional, default 2): 2 = a facility each way (normal two-way
+#    street); 1 = a single one-way facility. Drives "bicycle lane miles"
+#    (= corridor-miles x directions), the Cambridge/Somerville mandate metric.
+#  * jurisdiction (optional, default city): city = Malden controls it; state =
+#    a numbered MassDOT route the City must REQUEST (drawn with a magenta outline,
+#    excluded from the binding city mandate/cost). State routes in Malden found in
+#    OpenStreetMap: Route 60 (Pleasant St, Centre St, Eastern Ave, Salem St) and
+#    Route 99 (Broadway). VERIFY exact city/state segment boundaries with MassDOT.
+#
+# All intersections below were verified against OpenStreetMap. This is still a
+# FIRST-PASS draft for discussion — expect to add/remove/rephase corridors as
+# feedback comes in. That's the whole point of the tool.
+# ============================================================================
+
+city: Malden
+state: Massachusetts
+
+phases:
+  - phase: 1
+    label: Core Network (quick-build spine)
+    deadline: December 31, 2029
+  - phase: 2
+    label: Connector Network
+    deadline: December 31, 2032
+  - phase: 3
+    label: Citywide Completion & Cross-Border Links
+    deadline: December 31, 2035
+
+corridors:
+  # ---------------------------------------------------------------------------
+  # PHASE 1 — Core downtown spine + Orange Line + Northern Strand links (quick-build)
+  # ---------------------------------------------------------------------------
+  - name: Main Street (Salem to Pleasant)
+    on_street: Main Street
+    from: Main Street & Salem Street
+    to: Main Street & Pleasant Street
+    phase: 1
+    type: quick_build_separated
+    status: proposed
+    notes: Downtown spine through Malden Center; Orange Line station area.
+
+  - name: Pleasant Street (Centre to Main)
+    on_street: Pleasant Street
+    from: Pleasant Street & Centre Street
+    to: Pleasant Street & Main Street
+    phase: 1
+    type: quick_build_separated
+    status: proposed
+    jurisdiction: state
+    notes: MA Route 60. Downtown east-west; City Hall frontage.
+
+  - name: Centre Street (Pleasant to Eastern)
+    on_street: Centre Street
+    from: Centre Street & Pleasant Street
+    to: Centre Street & Eastern Avenue
+    phase: 1
+    type: quick_build_separated
+    status: proposed
+    jurisdiction: state
+    notes: MA Route 60. Already endorsed for bus+bike redesign; runs toward Northern Strand.
+
+  - name: Ferry Street (Main to Eastern)
+    on_street: Ferry Street
+    from: Ferry Street & Main Street
+    to: Ferry Street & Eastern Avenue
+    phase: 1
+    type: quick_build_separated
+    status: proposed
+    notes: Southeast connector toward Everett line.
+
+  - name: Salem Street (Main to Cross)
+    on_street: Salem Street
+    from: Salem Street & Main Street
+    to: Salem Street & Cross Street
+    phase: 1
+    type: quick_build_separated
+    status: proposed
+    jurisdiction: state
+    notes: MA Route 60 (verify extent). Central east-west arterial near Malden High
+      School (Main and Ferry meet Salem at nearly the same junction, so this runs
+      east to Cross Street instead).
+
+  - name: Commercial Street (Pleasant to Centre)
+    on_street: Commercial Street
+    from: Commercial Street & Pleasant Street
+    to: Commercial Street & Centre Street
+    phase: 1
+    type: quick_build_separated
+    status: proposed
+    notes: Block beside the Orange Line / commuter rail station.
+
+  # ---------------------------------------------------------------------------
+  # PHASE 2 — Connector network (arterials between neighborhoods)
+  # ---------------------------------------------------------------------------
+  - name: Main Street (Pleasant to Charles)
+    on_street: Main Street
+    from: Main Street & Pleasant Street
+    to: Main Street & Charles Street
+    phase: 2
+    type: quick_build_separated
+    status: proposed
+    notes: Extends the spine south.
+
+  - name: Lebanon Street (Salem to Forest)
+    on_street: Lebanon Street
+    from: Lebanon Street & Salem Street
+    to: Lebanon Street & Forest Street
+    phase: 2
+    type: quick_build_separated
+    status: proposed
+    notes: Northbound connector (Lebanon & Main meet up in Melrose, so this runs
+      Salem to Forest, staying within Malden).
+
+  - name: Salem Street (Lebanon to Main)
+    on_street: Salem Street
+    from: Salem Street & Lebanon Street
+    to: Salem Street & Main Street
+    phase: 2
+    type: quick_build_separated
+    status: proposed
+    jurisdiction: state
+    notes: MA Route 60 (verify extent). Western leg of the Salem Street arterial.
+
+  - name: Ferry Street (Eastern to Broadway)
+    on_street: Ferry Street
+    from: Ferry Street & Eastern Avenue
+    to: Ferry Street & Broadway
+    phase: 2
+    type: quick_build_separated
+    status: proposed
+    notes: Southeast extension toward Everett.
+
+  - name: Cross Street (Salem to Eastern)
+    on_street: Cross Street
+    from: Cross Street & Salem Street
+    to: Cross Street & Eastern Avenue
+    phase: 2
+    type: quick_build_separated
+    status: proposed
+    notes: East-side grid connector.
+
+  - name: Eastern Avenue (Centre to Cross)
+    on_street: Eastern Avenue
+    from: Eastern Avenue & Centre Street
+    to: Eastern Avenue & Cross Street
+    phase: 2
+    type: quick_build_separated
+    status: proposed
+    jurisdiction: state
+    notes: MA Route 60. East-side north-south connector linking to the Northern Strand.
+
+  - name: Highland Avenue (Pleasant to Medford)
+    on_street: Highland Avenue
+    from: Highland Avenue & Pleasant Street
+    to: Highland Avenue & Medford Street
+    phase: 2
+    type: quick_build_separated
+    status: proposed
+    notes: Southwest-side connector.
+
+  # ---------------------------------------------------------------------------
+  # PHASE 3 — Citywide completion & cross-border links
+  # ---------------------------------------------------------------------------
+  - name: Pleasant Street (Main to Washington)
+    on_street: Pleasant Street
+    from: Pleasant Street & Main Street
+    to: Pleasant Street & Washington Street
+    phase: 3
+    type: concrete_separated
+    status: proposed
+    notes: West extension toward the Medford line.
+
+  - name: Washington Street (Pleasant to Mountain)
+    on_street: Washington Street
+    from: Washington Street & Pleasant Street
+    to: Washington Street & Mountain Avenue
+    phase: 3
+    type: concrete_separated
+    status: proposed
+    notes: West-side connector near Oak Grove station.
+
+  - name: Broadway (Ferry to Salem)
+    on_street: Broadway
+    from: Broadway & Ferry Street
+    to: Broadway & Salem Street
+    phase: 3
+    type: concrete_separated
+    status: proposed
+    jurisdiction: state
+    notes: MA Route 99 corridor in southeast Malden.
+
+  - name: Medford Street (Commercial to Highland)
+    on_street: Medford Street
+    from: Medford Street & Commercial Street
+    to: Medford Street & Highland Avenue
+    phase: 3
+    type: quick_build_separated
+    status: proposed
+    notes: West-side connector.
+
+  - name: Charles Street (Main to Highland)
+    on_street: Charles Street
+    from: Charles Street & Main Street
+    to: Charles Street & Highland Avenue
+    phase: 3
+    type: quick_build_separated
+    status: proposed
+    notes: Southwest link.
+
+  - name: Mountain Avenue (Main to Washington)
+    on_street: Mountain Avenue
+    from: Mountain Avenue & Main Street
+    to: Mountain Avenue & Washington Street
+    phase: 3
+    type: quick_build_separated
+    status: proposed
+    notes: North-neighborhood connector.
+
+  - name: Forest Street (Main to Lebanon)
+    on_street: Forest Street
+    from: Forest Street & Main Street
+    to: Forest Street & Lebanon Street
+    phase: 3
+    type: quick_build_separated
+    status: proposed
+    notes: Northern connector.
+
+  # ---------------------------------------------------------------------------
+  # EXISTING + COMMITTED INFRASTRUCTURE (shown for context)
+  #   * Existing off-street paths (Northern Strand) -> data/existing_infra.geojson
+  #   * Approved/funded but not-yet-built paths (Spot Pond Brook Greenway, approved
+  #     for 2029) -> data/committed_infra.geojson   (drawn in orange, NOT counted
+  #     toward the new construction mandate/cost since they're already funded)
+  # These load automatically. For on-street lanes that are already built or funded,
+  # add them here with status: existing  or  status: funded.
+  # ---------------------------------------------------------------------------

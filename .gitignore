@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Generated deliverables (regenerate with the editor / build.py).
+# Anything under output/ is an OUTPUT; the editable source of truth is
+# network.yaml (tracked).
+output/
+
+# NOTE: data/street_graph.json IS tracked here (unlike the pre-split repo,
+# where it was a rebuildable cache) — the static web editor ships it as the
+# snap-to-road asset. data/osm_cache.json is tracked so build.py works offline.
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Local Claude Code launch config (absolute paths, machine-specific)
+.claude/
+
+# Editor scratch / OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+
+# Node (web/ port tooling)
+node_modules/
