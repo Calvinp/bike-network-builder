@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Help — Bike Network Builder</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    /* The help page renders editor/help.md (markdown) into #content. */
+    body { display: block; overflow: auto; }
+    .help-wrap { max-width: 780px; margin: 0 auto; padding: 24px 18px 64px; }
+    .help-wrap h1 { font-size: 26px; letter-spacing: -.01em; margin: 18px 0 10px; }
+    .help-wrap h2 { font-size: 19px; margin: 26px 0 8px; }
+    .help-wrap p, .help-wrap li { font-size: 15px; line-height: 1.65; }
+    .help-wrap code { background: #eef1f4; border-radius: 4px; padding: 1px 5px;
+      font-size: 13.5px; }
+    .help-wrap pre { background: #f6f8fa; border: 1px solid var(--line);
+      border-radius: 8px; padding: 12px; overflow-x: auto; }
+    .help-wrap pre code { background: none; padding: 0; }
+    .help-wrap table { border-collapse: collapse; margin: 10px 0; }
+    .help-wrap th, .help-wrap td { border: 1px solid var(--line);
+      padding: 6px 10px; font-size: 14px; }
+    .help-wrap blockquote { border-left: 3px solid var(--line); margin: 10px 0;
+      padding: 2px 14px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">Bike Network <span>Builder</span> · Help</div>
+    <div class="spacer"></div>
+    <a class="btnlike" href="index.html">← Back to the editor</a>
+  </header>
+  <main class="help-wrap" id="content">Loading…</main>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script>
+    fetch("help.md")
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+      .then(t => { document.getElementById("content").innerHTML = marked.parse(t); })
+      .catch(() => {
+        document.getElementById("content").textContent =
+          "Couldn’t load the help text (editor/help.md).";
+      });
+  </script>
+</body>
+</html>

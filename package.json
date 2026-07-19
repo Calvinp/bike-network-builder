@@ -1,0 +1,9 @@
+{
+  "name": "bike-network-builder-web",
+  "private": true,
+  "type": "module",
+  "description": "Static (client-only) port of the bike network editor. No build step, no runtime dependencies beyond the vendored js-yaml and CDN Leaflet/Geoman. Run the offline test suite with: node --test web/test/",
+  "scripts": {
+    "test": "node --test"
+  }
+}
