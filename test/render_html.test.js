@@ -29,6 +29,15 @@ test("one-way arrows use plain rotated DivIcon markers, no plugins", () => {
   assert.ok(!html.toLowerCase().replace(/-/g, "_").includes("polyline_text_path"));
 });
 
+test("arrows hide below the minimum zoom", () => {
+  // Fixed-size chevron icons dwarf the streets when zoomed way out, so the
+  // page toggles them on zoomend (and overlayadd, for layer-control re-adds).
+  const html = renderHtml([p("OneWay", { directions: 1 })], net([]));
+  assert.ok(html.includes("zoomend"));
+  assert.ok(html.includes("overlayadd"));
+  assert.ok(html.includes("getZoom() >= 14"));
+});
+
 test("html embeds popups, tooltip, legend and boundary", () => {
   const paths = [p("Main Street"), p("Trail", { status: "existing", phase: null })];
   const html = renderHtml(paths, net(paths),
