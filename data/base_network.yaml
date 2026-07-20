@@ -631,12 +631,13 @@ paths:
   geometry:
   - [42.430546, -71.069259]
   - [42.432022, -71.069701]
-- name: Existing path
+- name: Florence St
   type: quick_build_separated
   status: existing
   jurisdiction: city
   phase: 1
   directions: 1
+  notes: No protection but has enough room to add flexposts or concrete with no further disruption. The opposite direction is a shared bus/bike path.
   geometry:
   - [42.427311, -71.073394]
   - [42.427493, -71.073375]
