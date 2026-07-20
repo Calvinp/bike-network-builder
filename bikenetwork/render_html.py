@@ -107,6 +107,18 @@ def render_html(
     folium.LayerControl(collapsed=False).add_to(m)
 
     m.get_root().html.add_child(folium.Element(_legend_html(net, color_mode, paths)))
+    # Chevrons are fixed-size DivIcons; hide them when zoomed out far enough
+    # that they'd dwarf the streets (mirrors the editor's behavior).
+    # overlayadd re-hides ones re-added via the layer control while zoomed out.
+    m.get_root().script.add_child(folium.Element(f"""
+        {m.get_name()}.on('zoomend overlayadd', function () {{
+            var show = {m.get_name()}.getZoom() >= 14;
+            document.querySelectorAll('.dir-arrow').forEach(function (el) {{
+                el.style.display = show ? '' : 'none';
+            }});
+        }});
+        {m.get_name()}.whenReady(function () {{ {m.get_name()}.fire('zoomend'); }});
+    """))
     m.save(str(out_path))
     return out_path
 

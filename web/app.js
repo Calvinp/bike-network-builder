@@ -111,6 +111,14 @@ function updateArrows(f){
   });
   g.addTo(arrowsGroup); f.arrows=g;
 }
+/* Chevron icons are fixed-size DivIcons, so zoomed way out they'd dwarf the
+   streets themselves — below this zoom the whole arrows layer comes off. */
+const ARROW_MIN_ZOOM = 14;
+function syncArrowVisibility(){
+  const show = map.getZoom() >= ARROW_MIN_ZOOM;
+  if(show && !map.hasLayer(arrowsGroup)) map.addLayer(arrowsGroup);
+  else if(!show && map.hasLayer(arrowsGroup)) map.removeLayer(arrowsGroup);
+}
 
 /* ---------- feature management ---------- */
 function defaultProps(over){
@@ -595,6 +603,8 @@ async function init(){
 
   if(networkGroup.getLayers().length) map.fitBounds(networkGroup.getBounds().pad(0.05));
   else if(boundaryGroup.getLayers().length) map.fitBounds(boundaryGroup.getBounds());
+  map.on("zoomend", syncArrowVisibility);
+  syncArrowVisibility();
 
   map.on("pm:create", async e=>{
     const drawn=segsOf(e.layer)[0].map(p=>[p.lat,p.lng]);

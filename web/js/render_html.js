@@ -167,6 +167,17 @@ L.control.layers(null, overlays, {collapsed: false}).addTo(map);
 if (everything.length) {
   map.fitBounds(L.featureGroup(everything).getBounds().pad(0.05));
 }
+// Chevrons are fixed-size icons; hide them when zoomed out far enough that
+// they would dwarf the streets. overlayadd re-hides ones re-added via the
+// layer control while zoomed out.
+function syncDirArrows() {
+  var show = map.getZoom() >= 14;
+  document.querySelectorAll(".dir-arrow").forEach(function (el) {
+    el.style.display = show ? "" : "none";
+  });
+}
+map.on("zoomend overlayadd", syncDirArrows);
+syncDirArrows();
 </script>
 </body>
 </html>

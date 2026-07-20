@@ -97,6 +97,10 @@ def test_html_one_way_arrows_use_plain_markers(tmp_path):
     assert "dir-arrow" in html          # the rotated chevron marker
     assert "setText" not in html        # the plugin that broke rendering
     assert "polyline_text_path" not in html.lower().replace("-", "_")
+    # Fixed-size chevrons dwarf the streets when zoomed way out — the page
+    # must hide them below the minimum zoom (and re-hide on layer re-add).
+    assert "zoomend" in html
+    assert "getZoom() >= 14" in html
 
 
 def test_render_all_rejects_unknown_color_mode(tmp_path):
