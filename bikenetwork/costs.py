@@ -27,4 +27,8 @@ COST_PER_MILE: Dict[str, Tuple[int, int]] = {
     # Traffic-calmed shared street: signs, pavement markings, speed humps,
     # occasional diverters — no separated facility to build.
     "neighborway": (50_000, 250_000),
+    # Car-free / car-light street conversion. Low end: bollards, planters,
+    # signage over existing pavement. High end: full plaza-grade rebuild.
+    # VERIFY against comparable local projects before publishing figures.
+    "pedestrianized": (250_000, 2_000_000),
 }

@@ -53,8 +53,12 @@ def test_state_serves_cost_rates(client, tmp_path):
     (tmp_path / "network.yaml").write_text(VALID_YAML, encoding="utf-8")
     rates = client.get("/api/state").get_json()["options"]["cost_per_mile"]
     assert "quick_build_separated" in rates
-    lo, hi = rates["quick_build_separated"]
-    assert 0 < lo <= hi
+    # Every path type must carry a usable rate — a type missing from
+    # costs.py silently estimates $0 in the totals card.
+    from bikenetwork.network_format import PATH_TYPES
+    for t in PATH_TYPES:
+        lo, hi = rates[t]
+        assert 0 < lo <= hi, t
 
 
 def test_state_roundtrip_via_save(client, tmp_path):

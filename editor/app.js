@@ -6,14 +6,16 @@ const PHASE_COLORS = {1:"#0072B2",2:"#009E73",3:"#D55E00",4:"#E69F00",5:"#56B4E9
 const TYPE_COLORS = {
   quick_build_separated:"#0072B2", concrete_separated:"#D55E00",
   shared_use_path:"#009E73", buffered_painted:"#E69F00",
-  neighborway:"#56B4E9"
+  neighborway:"#56B4E9",
+  pedestrianized:"#CC79A7"  // shared with STATE on purpose (phase mode only)
 };
 const TYPE_LABELS = {
   quick_build_separated:"Quick-build separated lane",
   concrete_separated:"Concrete-protected lane",
   shared_use_path:"Shared-use path",
   buffered_painted:"Buffered painted lane (interim)",
-  neighborway:"Neighborway (calm shared street)"
+  neighborway:"Neighborway (calm shared street)",
+  pedestrianized:"Pedestrianized street"
 };
 const SINGLE="#0072B2", EXISTING="#000000", FUNDED="#E69F00", STATE="#CC79A7", BOUNDARY="#777777";
 

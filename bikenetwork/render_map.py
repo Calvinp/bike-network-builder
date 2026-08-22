@@ -54,6 +54,10 @@ TYPE_COLORS = {
     "shared_use_path": "#009E73",        # bluish green
     "buffered_painted": "#E69F00",       # orange
     "neighborway": "#56B4E9",            # sky blue
+    # Reddish purple deliberately shared with STATE_COLOR: that color only
+    # appears in phase mode, where type colors never draw. Okabe-Ito's last
+    # unused hue (yellow) is illegible on a light basemap.
+    "pedestrianized": "#CC79A7",         # reddish purple
 }
 TYPE_LABELS = {
     "quick_build_separated": "Quick-build separated lane",
@@ -61,6 +65,7 @@ TYPE_LABELS = {
     "shared_use_path": "Shared-use path",
     "buffered_painted": "Buffered painted lane (interim)",
     "neighborway": "Neighborway (calm shared street)",
+    "pedestrianized": "Pedestrianized street",
 }
 SINGLE_COLOR = "#0072B2"    # the whole network, one color
 EXISTING_COLOR = "#000000"  # black (dashed) — existing built facilities

@@ -125,3 +125,9 @@ def test_neighborway_is_a_valid_type():
     net = _net()
     net.paths[0].type = "neighborway"
     assert validate_network(net) == []
+
+
+def test_pedestrianized_is_a_valid_type():
+    net = _net()
+    net.paths[0].type = "pedestrianized"
+    assert validate_network(net) == []

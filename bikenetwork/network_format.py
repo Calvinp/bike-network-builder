@@ -29,6 +29,7 @@ PATH_TYPES = (
     "shared_use_path",        # off-street path (e.g. trail spur)
     "buffered_painted",       # painted + buffer (interim only)
     "neighborway",            # traffic-calmed shared street (signs/humps/diverters)
+    "pedestrianized",         # car-free / car-light street conversion (bikes welcome)
 )
 
 STATUSES = (

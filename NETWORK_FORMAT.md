@@ -67,7 +67,7 @@ Each path:
 | key | required | values / meaning |
 |---|---|---|
 | `name` | yes | human name; duplicates are allowed |
-| `type` | yes | `quick_build_separated` \| `concrete_separated` \| `shared_use_path` \| `buffered_painted` \| `neighborway` |
+| `type` | yes | `quick_build_separated` \| `concrete_separated` \| `shared_use_path` \| `buffered_painted` \| `neighborway` \| `pedestrianized` (car-free / car-light street conversion) |
 | `status` | no (default `proposed`) | `proposed` (the new ask) \| `funded` (approved, unbuilt) \| `existing` (on the ground) |
 | `jurisdiction` | no (default `city`) | `city` \| `state` (a MassDOT route the city must request — excluded from the mandate/cost) |
 | `phase` | required for `proposed` | must appear in the top-level `phases` list; omit for `funded`/`existing` |
