@@ -114,6 +114,45 @@ def test_export_yaml_download(client, tmp_path):
     assert net.paths[0].name == "Main Street"
 
 
+SPOTS_YAML = VALID_YAML + """
+spots:
+  - {kind: speed_hump, status: proposed, phase: 1, location: [42.425, -71.065]}
+  - {name: Square racks, kind: bike_parking, status: existing, location: [42.426, -71.066]}
+"""
+
+
+def test_state_serves_and_saves_spots(client, tmp_path):
+    (tmp_path / "network.yaml").write_text(SPOTS_YAML, encoding="utf-8")
+    state = client.get("/api/state").get_json()
+    assert len(state["spots"]["features"]) == 2
+    assert "spot_kinds" in state["options"]
+    # Edit a spot and save; it persists to network.yaml.
+    state["spots"]["features"][0]["properties"]["kind"] = "raised_crosswalk"
+    payload = {"network": state["network"], "spots": state["spots"],
+               "config": state["config"]}
+    assert client.post("/api/state", json=payload).get_json()["ok"]
+    net = parse_network((tmp_path / "network.yaml").read_text(encoding="utf-8"))
+    assert net.spots[0].kind == "raised_crosswalk"
+
+
+def test_save_without_spots_key_preserves_spots(client, tmp_path):
+    # A stale cached app.js that doesn't know about spots must not wipe them.
+    (tmp_path / "network.yaml").write_text(SPOTS_YAML, encoding="utf-8")
+    state = client.get("/api/state").get_json()
+    payload = {"network": state["network"], "config": state["config"]}
+    assert client.post("/api/state", json=payload).get_json()["ok"]
+    net = parse_network((tmp_path / "network.yaml").read_text(encoding="utf-8"))
+    assert len(net.spots) == 2
+
+
+def test_import_returns_spots(client):
+    r = client.post("/api/import", data=SPOTS_YAML.encode("utf-8"),
+                    content_type="application/octet-stream")
+    body = r.get_json()
+    assert r.status_code == 200 and body["ok"]
+    assert len(body["spots"]["features"]) == 2
+
+
 def test_export_bundle_zips_everything(client, tmp_path):
     (tmp_path / "network.yaml").write_text(VALID_YAML, encoding="utf-8")
     r = client.post("/api/export/bundle.zip?basemap=0&color_mode=phase", json={})

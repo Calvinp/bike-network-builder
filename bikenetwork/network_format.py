@@ -43,6 +43,22 @@ JURISDICTIONS = (
     "state",  # MassDOT-controlled (a numbered state route) — needs state approval
 )
 
+# Point ("spot") improvements — single-location infrastructure that isn't a
+# path: traffic calming, crossings, parking, greening.
+SPOT_KINDS = (
+    "speed_hump",
+    "raised_crosswalk",
+    "raised_intersection",
+    "curb_extension",
+    "bike_parking",
+    "street_trees",
+    "other",
+)
+
+# Spots are either on the ground or proposed — there's no funded pipeline
+# tracking for small interventions.
+SPOT_STATUSES = ("existing", "proposed")
+
 Point = Tuple[float, float]  # (lat, lon) degrees
 
 
@@ -87,12 +103,25 @@ class BikePath:
 
 
 @dataclass
+class Spot:
+    name: str = ""
+    kind: str = "other"
+    status: str = "proposed"
+    # Optional even for proposed spots — small interventions often aren't
+    # tied to a network phase.
+    phase: Optional[int] = None
+    location: Optional[Point] = None   # (lat, lon); None = malformed/missing
+    notes: str = ""
+
+
+@dataclass
 class Network:
     city: str = "Malden"
     state: str = "Massachusetts"
     ordinance_chapter: str = ""
     phases: List[PhaseDef] = field(default_factory=list)
     paths: List[BikePath] = field(default_factory=list)
+    spots: List[Spot] = field(default_factory=list)
     format_id: str = FORMAT_ID
     format_version: int = FORMAT_VERSION
 
@@ -192,12 +221,33 @@ def network_from_dict(raw: dict) -> Network:
             segments=_parse_segments(item.get("geometry")),
         ))
 
+    spots = []
+    for item in raw.get("spots") or []:
+        if not isinstance(item, dict):
+            continue
+        loc = item.get("location")
+        if (isinstance(loc, (list, tuple)) and len(loc) == 2
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                        for v in loc)):
+            location = (float(loc[0]), float(loc[1]))
+        else:
+            location = None
+        spots.append(Spot(
+            name=str(item.get("name", "") or "").strip(),
+            kind=str(item.get("kind", "other") or "other").strip(),
+            status=str(item.get("status", "proposed") or "proposed").strip(),
+            phase=_to_int(item.get("phase"), default=None),
+            location=location,
+            notes=str(item.get("notes", "") or "").strip(),
+        ))
+
     return Network(
         city=str(raw.get("city", "Malden") or "Malden"),
         state=str(raw.get("state", "Massachusetts") or "Massachusetts"),
         ordinance_chapter=str(raw.get("ordinance_chapter", "") or ""),
         phases=phases,
         paths=paths,
+        spots=spots,
         format_id=str(raw.get("format", FORMAT_ID) or FORMAT_ID),
         format_version=_to_int(raw.get("format_version"), default=FORMAT_VERSION),
     )
@@ -290,6 +340,27 @@ def validate_network(net: Network) -> List[str]:
                     errors.append(f"{label}: geometry {where}point #{j + 1} "
                                   f"({pt[0]}, {pt[1]}) is out of range — points "
                                   f"are [lat, lon], in degrees.")
+
+    for i, spot in enumerate(net.spots):
+        label = f"spot #{i + 1}" + (f" ({spot.name})" if spot.name else "")
+        if spot.kind not in SPOT_KINDS:
+            errors.append(f"{label}: unknown kind {spot.kind!r}; "
+                          f"must be one of {', '.join(SPOT_KINDS)}.")
+        if spot.status not in SPOT_STATUSES:
+            errors.append(f"{label}: unknown status {spot.status!r}; "
+                          f"must be one of {', '.join(SPOT_STATUSES)}.")
+        if spot.location is None:
+            errors.append(f"{label}: needs a 'location' — one [lat, lon] "
+                          f"pair of numbers.")
+        elif not (-90 <= spot.location[0] <= 90
+                  and -180 <= spot.location[1] <= 180):
+            errors.append(f"{label}: location ({spot.location[0]}, "
+                          f"{spot.location[1]}) is out of range — it is "
+                          f"[lat, lon], in degrees.")
+        if (spot.phase is not None and phase_numbers
+                and spot.phase not in phase_numbers):
+            errors.append(f"{label}: phase {spot.phase} is not declared in "
+                          f"the top-level 'phases' list.")
     return errors
 
 
@@ -320,6 +391,21 @@ def _path_dict(p: BikePath) -> dict:
     return out
 
 
+def _spot_dict(s: Spot) -> dict:
+    out: dict = {}
+    if s.name:
+        out["name"] = s.name
+    out["kind"] = s.kind
+    out["status"] = s.status
+    if s.phase is not None:
+        out["phase"] = s.phase
+    if s.location is not None:
+        out["location"] = [round(s.location[0], 6), round(s.location[1], 6)]
+    if s.notes:
+        out["notes"] = s.notes
+    return out
+
+
 def serialize_network(net: Network) -> str:
     """Serialize a Network to YAML text (stable key order; geometry points in
     compact [lat, lon] flow style)."""
@@ -334,6 +420,10 @@ def serialize_network(net: Network) -> str:
     doc["phases"] = [{"phase": p.number, "label": p.label, "deadline": p.deadline}
                      for p in sorted(net.phases, key=lambda p: p.number)]
     doc["paths"] = [_path_dict(p) for p in net.paths]
+    # Spot improvements are optional; files that don't use them keep
+    # serializing exactly as they did before the key existed.
+    if net.spots:
+        doc["spots"] = [_spot_dict(s) for s in net.spots]
     header = ("# Bike network — written by bike-network-builder; re-importable there and\n"
               "# readable by any YAML tool. Geometry points are [latitude, longitude]\n"
               "# in degrees. See NETWORK_FORMAT.md.\n")

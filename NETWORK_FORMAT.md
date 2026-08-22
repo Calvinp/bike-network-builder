@@ -61,6 +61,7 @@ Top level:
 | `ordinance_chapter` | no | optional municipal-code chapter reference; preserved on round-trip, never shown in the editor UI |
 | `phases` | yes if any path is `proposed` | list of `{phase, label, deadline}`; `phase` is a positive integer, `deadline` free text |
 | `paths` | yes | the network itself |
+| `spots` | no | point ("spot") improvements — see below |
 
 Each path:
 
@@ -77,6 +78,28 @@ Each path:
 | `on_street`, `from`, `to` | no | street + endpoint intersections, for generated documents |
 | `notes` | no | free text |
 | `geometry` | yes | either **one segment** — a flat list of ≥ 2 `[lat, lon]` points — or **several segments** (a list of such lists), for one facility whose line is interrupted (e.g. a trail crossing streets). Degrees, rounded to 6 decimals (~10 cm) |
+
+## Spot improvements (`spots`)
+
+Optional single-point infrastructure that isn't a path — traffic calming,
+crossings, parking, greening. Files without a `spots` key are unaffected.
+
+```yaml
+spots:
+  - kind: speed_hump              # speed_hump | raised_crosswalk |
+    status: proposed              #   raised_intersection | curb_extension |
+    phase: 1                      #   bike_parking | street_trees | other
+    location: [42.4251, -71.0662] # one [lat, lon] point
+  - name: Malden Square racks     # name and notes are optional
+    kind: bike_parking
+    status: existing              # spots are existing or proposed (no funded)
+    location: [42.4262, -71.0664]
+```
+
+`phase` is optional even for proposed spots — small interventions often aren't
+tied to a network phase; a proposed spot with no phase shows in every phased
+view. Spots carry no mileage, so they never affect corridor or lane-mile
+totals; a consumer that only cares about paths can ignore the key entirely.
 
 ## Semantics every consumer agrees on
 

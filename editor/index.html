@@ -13,6 +13,8 @@
     <div class="brand">Bike Network <span>Builder</span></div>
     <button id="btn-add" class="ghost">+ Add path</button>
     <button id="btn-add-existing" class="ghost">+ Add existing path</button>
+    <button id="btn-add-spot" class="ghost"
+      title="A single-point improvement: speed hump, raised crosswalk, bike parking, street trees…">+ Add spot</button>
     <button id="btn-edit" class="ghost">Edit shapes</button>
     <label class="checkbox" title="Clicks near a street follow it and end at the city limit; clicks away from streets (parks, trails) stay exactly where you put them">
       <input type="checkbox" id="snap" checked /> Snap to roads</label>
@@ -68,6 +70,7 @@
           <div class="costrow"><span>Est. cost — city builds</span><b id="c-city">–</b></div>
           <div class="costrow"><span>Est. cost — state builds</span><b id="c-state">–</b></div>
           <div class="costrow ctotal"><span>Est. cost — total</span><b id="c-total">–</b></div>
+          <div class="costrow" id="t-spots-row" style="display:none"><span>Spot improvements</span><b id="t-spots">–</b></div>
         </div>
         <button id="unnamed-warn" class="warnchip" style="display:none"
           title="Click to jump to the next path that still has a default name"></button>
@@ -76,6 +79,21 @@
       <div class="card">
         <h2>Selected <span id="sel-pill"></span></h2>
         <div id="prop-empty" class="empty">Click a line on the map to edit it, or use “Add path”.</div>
+        <div id="spot-form" style="display:none">
+          <div class="field"><label>Kind</label><select id="s-kind"></select></div>
+          <div class="field"><label>Name (optional)</label><input id="s-name" /></div>
+          <div class="row2">
+            <div class="field"><label>Status</label><select id="s-status">
+              <option value="proposed">proposed</option><option value="existing">existing</option>
+            </select></div>
+            <div class="field"><label>Phase</label><select id="s-phase"></select></div>
+          </div>
+          <div class="field"><label>Notes</label><textarea id="s-notes" rows="2"></textarea></div>
+          <p class="hint">Drag the marker on the map to move it.</p>
+          <div class="btnrow">
+            <button id="btn-spot-delete" class="danger">Delete spot</button>
+          </div>
+        </div>
         <div id="prop-form" style="display:none">
           <div class="field"><label>Name</label><input id="f-name" /></div>
           <div class="row2">

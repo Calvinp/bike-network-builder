@@ -76,6 +76,30 @@ BOUNDARY_COLOR = "#777777"  # grey (thin dashed) — city boundary
 EXISTING_DASH = (0, (3.2, 2.6))
 FUNDED_DASH = (0, (4.2, 2.6))
 
+# Spot (point) improvements: text glyphs, mirrored in the editor JS and the
+# HTML export. All chosen from DejaVu Sans coverage so matplotlib can draw
+# the very same characters.
+SPOT_GLYPHS = {
+    "speed_hump": "∩",
+    "raised_crosswalk": "▬",
+    "raised_intersection": "◆",
+    "curb_extension": "◖",
+    "bike_parking": "P",
+    "street_trees": "T",
+    "other": "●",
+}
+SPOT_LABELS = {
+    "speed_hump": "Speed hump",
+    "raised_crosswalk": "Raised crosswalk",
+    "raised_intersection": "Raised intersection",
+    "curb_extension": "Curb extension",
+    "bike_parking": "Bike parking",
+    "street_trees": "Street trees",
+    "other": "Spot improvement",
+}
+SPOT_PROPOSED_COLOR = "#1a1a1a"  # near-black glyph (white halo)
+SPOT_EXISTING_COLOR = "#707070"  # grey — already on the ground
+
 # Names the editor assigns to freshly-drawn paths — never worth labeling.
 DEFAULT_NAMES = {"new path", "existing path", "new corridor"}
 
@@ -131,6 +155,7 @@ def render_map(
     title: str | None = None,
     dpi: int = 250,
     figsize: float = 16,
+    spots=None,
 ) -> Path:
     """Draw proposed + existing paths over a basemap. Returns the output path.
     16in @ 250dpi gives a ~4000px print-quality export with breathing room for
@@ -208,8 +233,12 @@ def render_map(
     ax.set_aspect("equal")
     ax.autoscale()
 
+    # Spot (point) improvements: small glyphs over the lines. Text with a
+    # white stroke — the same idiom as the one-way chevrons.
+    spot_pts = _draw_spots(ax, spots or [])
+
     # Route-name labels (drawn after autoscale so positions are stable).
-    _place_route_labels(ax, label_pick, paths, avoid_pts=arrow_pts)
+    _place_route_labels(ax, label_pick, paths, avoid_pts=arrow_pts + spot_pts)
 
     # Tiled street basemap (network); silently fall back to a plain background.
     if basemap:
@@ -228,6 +257,7 @@ def render_map(
 
     handles = _legend_handles(net, color_mode, phases_seen, types_seen,
                               has_state, has_funded, has_existing, bool(boundary))
+    handles += _spot_legend_handles(spots or [])
     if handles:
         ax.legend(handles=handles, loc="upper left", fontsize=9, framealpha=0.93)
 
@@ -289,6 +319,36 @@ def _legend_handles(net: Network, color_mode: str, phases_seen, types_seen,
     if has_boundary:
         handles.append(Line2D([0], [0], color=BOUNDARY_COLOR, lw=1.4,
                               linestyle=(0, (6, 3)), label=f"{net.city} city boundary"))
+    return handles
+
+
+def _draw_spots(ax, spots) -> list:
+    """Draw spot glyphs (text + white stroke, the chevron idiom — NEVER
+    marker patches). Returns the (x, y) positions so labels avoid them."""
+    pts = []
+    for s in spots:
+        if s.location is None:
+            continue
+        x, y = lonlat_to_mercator(*s.location)
+        color = SPOT_EXISTING_COLOR if s.status == "existing" else SPOT_PROPOSED_COLOR
+        ax.text(x, y, SPOT_GLYPHS.get(s.kind, SPOT_GLYPHS["other"]),
+                fontsize=9, color=color, ha="center", va="center", zorder=7,
+                fontweight="bold",
+                path_effects=[patheffects.withStroke(linewidth=2.5,
+                                                     foreground="white")])
+        pts.append((x, y))
+    return pts
+
+
+def _spot_legend_handles(spots) -> list:
+    """One legend row per spot kind present. The glyph lives in the label text
+    (legend markers can't render arbitrary Unicode reliably)."""
+    kinds = {s.kind for s in spots}
+    handles = []
+    for kind in [k for k in SPOT_GLYPHS if k in kinds]:
+        handles.append(Line2D([], [], linestyle="none",
+                              label=f"{SPOT_GLYPHS[kind]}  "
+                                    f"{SPOT_LABELS.get(kind, kind)}"))
     return handles
 
 

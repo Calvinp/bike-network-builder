@@ -19,9 +19,24 @@ const TYPE_LABELS = {
 };
 const SINGLE="#0072B2", EXISTING="#000000", FUNDED="#E69F00", STATE="#CC79A7", BOUNDARY="#777777";
 
-let map, networkGroup, boundaryGroup, arrowsGroup;
+/* Spot (point) improvements — glyphs/labels mirror bikenetwork/render_map.py. */
+const SPOT_GLYPHS = {
+  speed_hump:"∩", raised_crosswalk:"▬", raised_intersection:"◆",
+  curb_extension:"◖", bike_parking:"P", street_trees:"T", other:"●"
+};
+const SPOT_LABELS = {
+  speed_hump:"Speed hump", raised_crosswalk:"Raised crosswalk",
+  raised_intersection:"Raised intersection", curb_extension:"Curb extension",
+  bike_parking:"Bike parking", street_trees:"Street trees", other:"Other spot improvement"
+};
+const SPOT_PROPOSED="#1a1a1a", SPOT_EXISTING="#707070";
+
+let map, networkGroup, boundaryGroup, arrowsGroup, spotsGroup;
 let features = [];          // [{props, layer}]
+let spots = [];             // [{props, marker}] — point improvements
 let selected = null;
+let selectedSpot = null;
+let placingSpot = false;    // "+ Add spot" waits for the next map click
 let config = {city:"Malden", phases:[]};
 let options = {types:[], statuses:[], jurisdictions:[], color_modes:["phase","type","single"]};
 let colorMode = "type";      // path type excites people; phases are for nerds
@@ -160,6 +175,109 @@ function clearFeatures(){
   features=[];
 }
 
+/* ---------- spot improvements (point features) ---------- */
+function spotIcon(p){
+  const color = p.status==="existing" ? SPOT_EXISTING : SPOT_PROPOSED;
+  const glyph = SPOT_GLYPHS[p.kind] || SPOT_GLYPHS.other;
+  return L.divIcon({className:"spot-glyph", iconSize:[18,18], iconAnchor:[9,9],
+    html:`<div style="color:${color}">${glyph}</div>`});
+}
+function addSpot(props, latlng){
+  const marker=L.marker(latlng, {icon:spotIcon(props), draggable:true,
+                                 pmIgnore:true, keyboard:false});
+  const s={props, marker};
+  marker.on("click", ()=>{ if(!editMode) selectSpot(s); });
+  marker.on("dragend", ()=>{ markDirty(); });
+  marker.addTo(spotsGroup);   // own group — never networkGroup (getBounds)
+  spots.push(s);
+  return s;
+}
+function removeSpot(s){
+  spotsGroup.removeLayer(s.marker);
+  spots=spots.filter(x=>x!==s);
+  if(selectedSpot===s) deselect();
+  markDirty(); recomputeTotals();
+}
+function clearSpots(){
+  spots.forEach(s=>spotsGroup.removeLayer(s.marker));
+  spots=[]; selectedSpot=null;
+}
+function defaultSpotProps(){
+  return {name:"", kind:"speed_hump", status:"proposed", phase:null, notes:""};
+}
+function selectSpot(s){
+  if(selected){ const prev=selected; selected=null; restyle(prev); }
+  selectedSpot=s;
+  document.getElementById("prop-empty").style.display="none";
+  document.getElementById("prop-form").style.display="none";
+  document.getElementById("spot-form").style.display="";
+  fillSpotForm(s);
+  if(isMobile() && !document.querySelector(".sidebar").classList.contains("open")){
+    document.getElementById("peek-name").textContent =
+      s.props.name || SPOT_LABELS[s.props.kind] || "Spot";
+    document.getElementById("peek").classList.add("show");
+  }
+}
+function fillSpotForm(s){
+  const p=s.props;
+  document.getElementById("sel-pill").textContent =
+    p.name || SPOT_LABELS[p.kind] || "";
+  opt(document.getElementById("s-kind"), options.spot_kinds||Object.keys(SPOT_GLYPHS),
+      p.kind, v=>SPOT_LABELS[v]||v.replace(/_/g," "));
+  document.getElementById("s-name").value=p.name||"";
+  document.getElementById("s-status").value=p.status||"proposed";
+  document.getElementById("s-notes").value=p.notes||"";
+  fillSpotPhaseSelect(s);
+}
+function fillSpotPhaseSelect(s){
+  const sel=document.getElementById("s-phase");
+  if(s.props.status==="proposed"){
+    sel.disabled=false;
+    sel.innerHTML="";
+    const any=document.createElement("option");
+    any.value=""; any.textContent="— any time —";
+    sel.appendChild(any);
+    config.phases.forEach(ph=>{
+      const o=document.createElement("option");
+      o.value=String(ph.phase); o.textContent=`Phase ${ph.phase}`;
+      sel.appendChild(o);
+    });
+    sel.value = s.props.phase==null ? "" : String(s.props.phase);
+  } else {
+    sel.innerHTML="<option>— n/a —</option>"; sel.disabled=true;
+  }
+}
+function bindSpotForm(){
+  const set=(id,key,cast)=>{
+    document.getElementById(id).addEventListener("input", e=>{
+      if(!selectedSpot) return;
+      selectedSpot.props[key]= cast?cast(e.target.value):e.target.value;
+      if(key==="status"){
+        if(selectedSpot.props.status!=="proposed") selectedSpot.props.phase=null;
+        fillSpotPhaseSelect(selectedSpot);
+      }
+      if(key==="kind"||key==="status")
+        selectedSpot.marker.setIcon(spotIcon(selectedSpot.props));
+      if(key==="name"||key==="kind")
+        document.getElementById("sel-pill").textContent =
+          selectedSpot.props.name || SPOT_LABELS[selectedSpot.props.kind] || "";
+      markDirty(); recomputeTotals();
+    });
+  };
+  set("s-name","name"); set("s-notes","notes"); set("s-status","status");
+  set("s-kind","kind");
+  set("s-phase","phase", v=> v==="" ? null : parseInt(v,10));
+  document.getElementById("btn-spot-delete").addEventListener("click", ()=>{
+    if(selectedSpot && confirm("Delete this spot?")) removeSpot(selectedSpot);
+  });
+}
+function startPlaceSpot(){
+  if(phaseView!=="all") setPhaseView("all");
+  deselect();
+  placingSpot=true;
+  setStatus("Click the map where the improvement goes — Esc cancels.");
+}
+
 /* ---------- upgrades (quick-build now, better build later) ---------- */
 function ensureId(f){
   // Ids exist only where an upgrade link needs one, so plain files stay clean.
@@ -216,6 +334,8 @@ function combineInto(target, other){
 /* ---------- selection + property form ---------- */
 function isMobile(){ return window.matchMedia("(max-width: 760px)").matches; }
 function selectFeature(f){
+  selectedSpot=null;
+  document.getElementById("spot-form").style.display="none";
   const prev=selected; selected=f;
   if(prev && prev!==f) restyle(prev);
   restyle(f);
@@ -226,9 +346,10 @@ function selectFeature(f){
   }
 }
 function deselect(){
-  const prev=selected; selected=null;
+  const prev=selected; selected=null; selectedSpot=null;
   if(prev) restyle(prev);
   document.getElementById("prop-form").style.display="none";
+  document.getElementById("spot-form").style.display="none";
   document.getElementById("prop-empty").style.display="";
   document.getElementById("sel-pill").textContent="";
   document.getElementById("peek").classList.remove("show");
@@ -370,6 +491,12 @@ function recomputeTotals(){
   document.getElementById("c-city").textContent=range(cLow,cHigh);
   document.getElementById("c-state").textContent=range(sLow,sHigh);
   document.getElementById("c-total").textContent=range(cLow+sLow,cHigh+sHigh);
+  const built=spots.filter(s=>s.props.status==="existing").length;
+  const planned=spots.length-built;
+  document.getElementById("t-spots-row").style.display = spots.length ? "" : "none";
+  document.getElementById("t-spots").textContent =
+    [built?`${built} existing`:"", planned?`${planned} planned`:""]
+      .filter(Boolean).join(" · ");
   const warn=document.getElementById("unnamed-warn");
   warn.style.display = unnamed ? "" : "none";
   if(unnamed) warn.textContent =
@@ -457,6 +584,20 @@ function applyPhaseView(){
       if(f.arrows && arrowsGroup.hasLayer(f.arrows)) arrowsGroup.removeLayer(f.arrows);
     }
   });
+  // Spots follow the same clock: existing always; proposed once their phase
+  // arrives (no phase = any time, so any phased view shows them).
+  spots.forEach(s=>{
+    let show=true;
+    if(phaseView!=="all" && s.props.status==="proposed"){
+      const n=parseInt(phaseView,10);
+      show = n>0 && (s.props.phase==null || s.props.phase<=n);
+    }
+    if(show){ if(!spotsGroup.hasLayer(s.marker)) spotsGroup.addLayer(s.marker); }
+    else {
+      if(selectedSpot===s) deselect();
+      if(spotsGroup.hasLayer(s.marker)) spotsGroup.removeLayer(s.marker);
+    }
+  });
 }
 
 /* ---------- legend ---------- */
@@ -513,8 +654,16 @@ function toGeoJSON(){
     };
   })};
 }
+function spotsToGeoJSON(){
+  return {type:"FeatureCollection", features: spots.map(s=>{
+    const ll=s.marker.getLatLng();
+    return {type:"Feature", properties:Object.assign({}, s.props),
+            geometry:{type:"Point", coordinates:[ll.lng, ll.lat]}};
+  })};
+}
 function statePayload(){
-  return JSON.stringify({network:toGeoJSON(), config:{city:config.city, phases:config.phases}});
+  return JSON.stringify({network:toGeoJSON(), spots:spotsToGeoJSON(),
+                         config:{city:config.city, phases:config.phases}});
 }
 async function autosave(){
   if(saving){ saveTimer=setTimeout(autosave, 500); return; }  // one save at a time
@@ -598,11 +747,16 @@ async function importYamlFile(file){
   if(features.length && !confirm(
     "Replace the current network with the imported one? (Tip: Export your "
     + "current network first if you might want it back.)")) { setStatus(); return; }
-  clearFeatures();
+  clearFeatures(); clearSpots();
   config={city:j.config.city, phases:j.config.phases};
   (j.network.features||[]).forEach(ft=>{
     const ll=latlngsFromGeometry(ft.geometry);
     if(ll) addFeature(ft.properties||defaultProps(), ll);
+  });
+  ((j.spots||{}).features||[]).forEach(ft=>{
+    const c=(ft.geometry||{}).coordinates||[];
+    if(c.length===2) addSpot(Object.assign(defaultSpotProps(), ft.properties),
+                             L.latLng(c[1], c[0]));
   });
   renderPhases(); renderLegend(); recomputeTotals();
   if(networkGroup.getLayers().length) map.fitBounds(networkGroup.getBounds().pad(0.05));
@@ -681,6 +835,7 @@ async function init(){
   networkGroup=L.featureGroup().addTo(map);
   boundaryGroup=L.featureGroup().addTo(map);
   arrowsGroup=L.layerGroup().addTo(map);
+  spotsGroup=L.layerGroup().addTo(map);
   map.pm.setGlobalOptions({pmIgnore:false});
 
   const res=await fetch("/api/state"); const data=await res.json();
@@ -695,6 +850,11 @@ async function init(){
   (data.network.features||[]).forEach(ft=>{
     const ll=latlngsFromGeometry(ft.geometry);
     if(ll) addFeature(ft.properties||defaultProps(), ll);
+  });
+  ((data.spots||{}).features||[]).forEach(ft=>{
+    const c=(ft.geometry||{}).coordinates||[];
+    if(c.length===2) addSpot(Object.assign(defaultSpotProps(), ft.properties),
+                             L.latLng(c[1], c[0]));
   });
 
   if(networkGroup.getLayers().length) map.fitBounds(networkGroup.getBounds().pad(0.05));
@@ -714,10 +874,17 @@ async function init(){
     selectFeature(f); markDirty(); recomputeTotals(); setStatus();
   });
 
-  bindForm(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
+  bindForm(); bindSpotForm(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
   document.getElementById("btn-add").onclick=()=>startDraw({status:"proposed"});
   document.getElementById("btn-add-existing").onclick=()=>startDraw(
     {status:"existing", name:"Existing path", type:"shared_use_path", phase:null});
+  document.getElementById("btn-add-spot").onclick=startPlaceSpot;
+  map.on("click", e=>{
+    if(!placingSpot) return;
+    placingSpot=false;
+    const s=addSpot(defaultSpotProps(), e.latlng);
+    selectSpot(s); markDirty(); recomputeTotals(); setStatus();
+  });
   document.getElementById("btn-edit").onclick=toggleEdit;
   document.getElementById("btn-add-phase").onclick=addPhase;
   document.getElementById("btn-snap-sel").onclick=snapSelected;
@@ -726,6 +893,7 @@ async function init(){
   document.getElementById("unnamed-warn").onclick=selectNextUnnamed;
   document.addEventListener("keydown", e=>{
     if(e.key==="Escape" && combineFrom){ combineFrom=null; setStatus(); }
+    if(e.key==="Escape" && placingSpot){ placingSpot=false; setStatus(); }
     const typing=/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
     if(!typing && (e.key==="Backspace" || e.key==="Delete"
                    || (e.ctrlKey && e.key.toLowerCase()==="z"))){

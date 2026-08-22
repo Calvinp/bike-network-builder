@@ -10,10 +10,10 @@ import json
 from pathlib import Path
 from typing import List
 
-from .boundary import build_polygon, clip_segments_latlon
-from .geojson import paths_to_geojson
+from .boundary import build_polygon, clip_segments_latlon, point_in_polygon_latlon
+from .geojson import paths_to_geojson, spots_to_geojson
 from .geometry import segments_miles
-from .network_format import BikePath, Network, superseded_ids
+from .network_format import BikePath, Network, Spot, superseded_ids
 from .render_html import render_html
 from .render_map import COLOR_MODES, render_map
 
@@ -76,6 +76,21 @@ def summarize(paths: List[BikePath], net: Network) -> dict:
     }
 
 
+def clip_spots(spots: List[Spot], polygon) -> List[Spot]:
+    """Spots inside the city polygon (out-of-city ones silently drop)."""
+    return [s for s in spots
+            if s.location is not None and point_in_polygon_latlon(s.location, polygon)]
+
+
+def spots_as_of_phase(spots: List[Spot], n: int) -> List[Spot]:
+    """Spots visible as of phase `n` (0 = today): existing always; proposed
+    once their phase arrives — a proposed spot with no phase shows in every
+    phased view (it's part of the plan, just not scheduled)."""
+    return [s for s in spots
+            if s.status != "proposed"
+            or (n > 0 and (s.phase is None or s.phase <= n))]
+
+
 def paths_as_of_phase(paths: List[BikePath], n: int) -> List[BikePath]:
     """The cumulative network as of phase `n` (0 = today): existing + funded
     plus proposed paths with phase <= n, minus any path superseded by an
@@ -98,6 +113,11 @@ def _prepare_paths(net: Network, boundary, warnings, notices) -> List[BikePath]:
     return paths
 
 
+def _prepare_spots(net: Network, boundary) -> List[Spot]:
+    polygon = build_polygon(boundary) if boundary else None
+    return clip_spots(net.spots, polygon) if polygon is not None else list(net.spots)
+
+
 def render_phase_exports(net: Network, boundary, output_dir, basemap=True,
                          color_mode="type", dpi=250, gif_dpi=90) -> List[Path]:
     """Write one cumulative PNG per declared phase (map-phase-N.png) plus an
@@ -107,6 +127,7 @@ def render_phase_exports(net: Network, boundary, output_dir, basemap=True,
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = _prepare_paths(net, boundary, [], [])
+    spots = _prepare_spots(net, boundary)
     phase_numbers = sorted(
         n.number for n in net.phases
         if any(p.status == "proposed" and p.phase == n.number for p in paths))
@@ -118,6 +139,7 @@ def render_phase_exports(net: Network, boundary, output_dir, basemap=True,
         out = output_dir / f"map-phase-{n}.png"
         render_map(paths_as_of_phase(paths, n), net, out, boundary=boundary,
                    basemap=basemap, color_mode=color_mode, dpi=dpi,
+                   spots=spots_as_of_phase(spots, n),
                    title=f"{net.city} Bike Network — Phase {n}")
         written.append(out)
 
@@ -141,7 +163,8 @@ def render_phase_exports(net: Network, boundary, output_dir, basemap=True,
         tmp = output_dir / f"_gif_frame_{i}.png"
         render_map(paths_as_of_phase(paths, n), net, tmp, boundary=boundary,
                    basemap=basemap, color_mode=color_mode, dpi=gif_dpi,
-                   figsize=7, title=f"{net.city} Bike Network — {caption}")
+                   figsize=7, spots=spots_as_of_phase(spots, n),
+                   title=f"{net.city} Bike Network — {caption}")
         with Image.open(tmp) as im:
             frames.append(im.convert("RGB"))
         tmp.unlink()
@@ -175,15 +198,19 @@ def render_all(net: Network, boundary, output_dir, basemap=True,
     output_dir.mkdir(parents=True, exist_ok=True)
 
     paths = _prepare_paths(net, boundary, warnings, notices)
+    spots = _prepare_spots(net, boundary)
 
     fc = paths_to_geojson(paths)
+    # Point features ride along in the export; polyline-only readers (incl.
+    # our own paths_from_geojson) skip them harmlessly.
+    fc["features"] += spots_to_geojson(spots)["features"]
     (output_dir / "network.geojson").write_text(json.dumps(fc, indent=2),
                                                 encoding="utf-8")
 
     render_map(paths, net, output_dir / "map.png", boundary=boundary,
-               basemap=basemap, color_mode=color_mode)
+               basemap=basemap, color_mode=color_mode, spots=spots)
     render_html(paths, net, output_dir / "map.html", boundary=boundary,
-                color_mode=color_mode)
+                color_mode=color_mode, spots=spots)
 
     summary = summarize(paths, net)
     summary["warnings"] = warnings

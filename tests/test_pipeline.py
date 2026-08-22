@@ -4,9 +4,10 @@ import json
 
 import pytest
 from bikenetwork.boundary import build_polygon
-from bikenetwork.network_format import BikePath, Network, PhaseDef
-from bikenetwork.pipeline import (clip_paths, paths_as_of_phase,
-                                  render_all, render_phase_exports, summarize)
+from bikenetwork.network_format import BikePath, Network, PhaseDef, Spot
+from bikenetwork.pipeline import (clip_paths, paths_as_of_phase, render_all,
+                                  render_phase_exports, spots_as_of_phase,
+                                  summarize)
 
 BOUNDARY = [[(42.40, -71.09), (42.45, -71.09), (42.45, -71.02),
              (42.40, -71.02), (42.40, -71.09)]]
@@ -143,6 +144,36 @@ def test_render_phase_exports_writes_pngs_and_gif(tmp_path):
         assert im.n_frames == 3  # Today + two phases
     # Intermediate frame files are cleaned up.
     assert not list(tmp_path.glob("*frame*"))
+
+
+def test_spots_as_of_phase():
+    built = Spot(kind="bike_parking", status="existing", location=(42.42, -71.06))
+    later = Spot(kind="speed_hump", status="proposed", phase=2,
+                 location=(42.42, -71.06))
+    anytime = Spot(kind="raised_crosswalk", status="proposed",
+                   location=(42.42, -71.06))  # proposed, no phase
+    spots = [built, later, anytime]
+    assert spots_as_of_phase(spots, 0) == [built]
+    assert spots_as_of_phase(spots, 1) == [built, anytime]
+    assert spots_as_of_phase(spots, 2) == spots
+
+
+def test_render_all_draws_and_clips_spots(tmp_path):
+    net = _net([_p("A", 1)])
+    net.spots = [
+        Spot(name="Square hump", kind="speed_hump", status="proposed", phase=1,
+             location=(42.42, -71.06)),
+        Spot(kind="bike_parking", status="existing",
+             location=(42.60, -71.06)),  # far outside the boundary
+    ]
+    render_all(net, BOUNDARY, tmp_path, basemap=False)
+    html = (tmp_path / "map.html").read_text(encoding="utf-8")
+    assert "spot-glyph" in html and "Spot improvements" in html
+    fc = json.loads((tmp_path / "network.geojson").read_text(encoding="utf-8"))
+    points = [f for f in fc["features"] if f["geometry"]["type"] == "Point"]
+    assert [f["properties"]["kind"] for f in points] == ["speed_hump"]
+    assert net.spots[0].name == "Square hump"  # source net not mutated
+    assert (tmp_path / "map.png").exists()
 
 
 def test_html_has_phase_slider_when_phased(tmp_path):

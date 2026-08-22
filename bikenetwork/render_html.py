@@ -14,8 +14,10 @@ import math
 import folium
 
 from .network_format import BikePath, Network
-from .render_map import (EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR, STATE_COLOR,
-                         TYPE_COLORS, TYPE_LABELS, _phase_color, path_color)
+from .render_map import (EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR,
+                         SPOT_EXISTING_COLOR, SPOT_GLYPHS, SPOT_LABELS,
+                         SPOT_PROPOSED_COLOR, STATE_COLOR, TYPE_COLORS,
+                         TYPE_LABELS, _phase_color, path_color)
 
 Point = Tuple[float, float]
 
@@ -26,6 +28,7 @@ def render_html(
     out_path: str | Path,
     boundary: List[List[Point]] | None = None,
     color_mode: str = "type",
+    spots=None,
 ) -> Path:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +128,22 @@ def render_html(
                 if p.id:
                     layers_by_id.setdefault(p.id, []).append((marker, group))
 
+    # Spot (point) improvements: one toggleable group of glyph markers.
+    spot_entries = []  # (marker, group, phase-for-the-slider) for proposed spots
+    spots_group = None
+    if spots:
+        spots_group = folium.FeatureGroup(name="Spot improvements", show=True)
+        first_phase = min((n for n in phase_map), default=1)
+        for s in spots:
+            if s.location is None:
+                continue
+            marker = _spot_marker(s)
+            marker.add_to(spots_group)
+            if phased and s.status == "proposed":
+                spot_entries.append((marker, spots_group,
+                                     s.phase if s.phase is not None else first_phase))
+        spots_group.add_to(m)
+
     for g in groups.values():
         g.add_to(m)
     folium.LayerControl(collapsed=False).add_to(m)
@@ -143,14 +162,37 @@ def render_html(
         {m.get_name()}.whenReady(function () {{ {m.get_name()}.fire('zoomend'); }});
     """))
     if phased:
-        _add_phase_slider(m, net, paths, phase_groups, layers_by_id)
+        _add_phase_slider(m, net, paths, phase_groups, layers_by_id, spot_entries)
     m.save(str(out_path))
     return out_path
 
 
+def _spot_marker(s) -> folium.Marker:
+    """A spot-kind glyph as a DivIcon marker — dark glyph, white halo (same
+    trick as the direction chevrons; no plugins)."""
+    color = SPOT_EXISTING_COLOR if s.status == "existing" else SPOT_PROPOSED_COLOR
+    glyph = SPOT_GLYPHS.get(s.kind, SPOT_GLYPHS["other"])
+    label = SPOT_LABELS.get(s.kind, s.kind.replace("_", " "))
+    html = (f'<div style="font-size:14px;font-weight:bold;color:{color};'
+            f'line-height:16px;text-align:center;'
+            f'text-shadow:0 0 2px #fff,0 0 3px #fff,0 0 4px #fff;">{glyph}</div>')
+    detail = label if s.status == "existing" else f"Proposed {label.lower()}"
+    if s.status == "proposed" and s.phase is not None:
+        detail += f" &middot; Phase {s.phase}"
+    popup = folium.Popup(
+        f"<b>{s.name or label}</b><br>{detail}"
+        + (f"<br><i>{s.notes}</i>" if s.notes else ""), max_width=250)
+    return folium.Marker(location=list(s.location), popup=popup,
+                         tooltip=s.name or label,
+                         icon=folium.DivIcon(html=html, icon_size=(16, 16),
+                                             icon_anchor=(8, 8),
+                                             class_name="spot-glyph"))
+
+
 def _add_phase_slider(m, net: Network, paths: List[BikePath],
                       phase_groups: Dict[int, "folium.FeatureGroup"],
-                      layers_by_id: Dict[str, list]) -> None:
+                      layers_by_id: Dict[str, list],
+                      spot_entries=()) -> None:
     """Inject a bottom-center slider that steps Today -> Phase 1 -> ... -> full
     network, cumulatively showing phase groups and hiding paths that a shown
     later phase upgrades. Hand-written folium Elements only — folium's time
@@ -177,6 +219,11 @@ def _add_phase_slider(m, net: Network, paths: List[BikePath],
                     f'{{layer: {layer.get_name()}, group: {group.get_name()}, '
                     f'phase: {p.phase}}}')
 
+    # Proposed spots appear once the slider reaches their phase.
+    appear_entries = [
+        f'{{layer: {marker.get_name()}, group: {group.get_name()}, phase: {phase}}}'
+        for marker, group, phase in spot_entries]
+
     slider_html = f"""
     <div id="phase-slider-box" style="position:fixed;bottom:24px;left:50%;
          transform:translateX(-50%);z-index:9999;background:white;
@@ -197,6 +244,7 @@ def _add_phase_slider(m, net: Network, paths: List[BikePath],
       var labels = {json.dumps([c for _, c in stops])};
       var phaseGroups = [{group_pairs}];
       var hidden = [{", ".join(hidden_entries)}];
+      var appearing = [{", ".join(appear_entries)}];
       var slider = document.getElementById("phase-slider");
       var label = document.getElementById("phase-slider-label");
       function apply() {{
@@ -209,6 +257,11 @@ def _add_phase_slider(m, net: Network, paths: List[BikePath],
         hidden.forEach(function(h) {{
           if (h.phase <= cur) {{ h.group.removeLayer(h.layer); }}
           else if (!h.group.hasLayer(h.layer)) {{ h.group.addLayer(h.layer); }}
+        }});
+        appearing.forEach(function(a) {{
+          if (a.phase <= cur) {{
+            if (!a.group.hasLayer(a.layer)) {{ a.group.addLayer(a.layer); }}
+          }} else {{ a.group.removeLayer(a.layer); }}
         }});
       }}
       slider.addEventListener("input", apply);

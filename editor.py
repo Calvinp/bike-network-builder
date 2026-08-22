@@ -25,10 +25,12 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 from bikenetwork.boundary import build_polygon, clip_polyline_latlon
 from bikenetwork.costs import COST_PER_MILE
-from bikenetwork.geojson import paths_from_geojson, paths_to_geojson
-from bikenetwork.network_format import (JURISDICTIONS, PATH_TYPES, STATUSES,
-                                        Network, PhaseDef, parse_network,
-                                        serialize_network, validate_network)
+from bikenetwork.geojson import (paths_from_geojson, paths_to_geojson,
+                                 spots_from_geojson, spots_to_geojson)
+from bikenetwork.network_format import (JURISDICTIONS, PATH_TYPES, SPOT_KINDS,
+                                        STATUSES, Network, PhaseDef,
+                                        parse_network, serialize_network,
+                                        validate_network)
 from bikenetwork.osm import OverpassClient
 from bikenetwork.pipeline import render_all, render_phase_exports
 from bikenetwork.render_map import COLOR_MODES
@@ -98,6 +100,10 @@ def network_from_browser(data: dict, existing: Network) -> Network:
         ordinance_chapter=existing.ordinance_chapter,
         phases=phases or existing.phases,
         paths=paths_from_geojson(data.get("network") or {}),
+        # A payload without a "spots" key (e.g. a cached pre-spots app.js)
+        # must not wipe the file's spots — absent means "unchanged".
+        spots=(spots_from_geojson(data["spots"]) if "spots" in data
+               else existing.spots),
     )
 
 
@@ -133,12 +139,14 @@ def api_state():
     net = load_network()
     return jsonify({
         "network": paths_to_geojson(net.paths),
+        "spots": spots_to_geojson(net.spots),
         "config": config_for_browser(net),
         "boundary": load_boundary_latlon(),
         "options": {
             "types": list(PATH_TYPES),
             "statuses": list(STATUSES),
             "jurisdictions": list(JURISDICTIONS),
+            "spot_kinds": list(SPOT_KINDS),
             "color_modes": list(COLOR_MODES),
             # Live cost estimation happens client-side from these rates
             # (adjust them in bikenetwork/costs.py).
@@ -184,6 +192,7 @@ def api_import():
     if errors:
         return jsonify({"ok": False, "errors": errors}), 400
     return jsonify({"ok": True, "network": paths_to_geojson(net.paths),
+                    "spots": spots_to_geojson(net.spots),
                     "config": config_for_browser(net)})
 
 

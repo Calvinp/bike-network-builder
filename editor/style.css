@@ -131,6 +131,14 @@ input.warn-field { border-color: #f59e0b; background: #fffbeb; }
   text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff;
 }
 
+/* Spot improvements: glyph markers (same halo trick as the chevrons). */
+.spot-glyph { background: none; border: none; cursor: pointer; }
+.spot-glyph div {
+  font-size: 14px; font-weight: bold;
+  line-height: 18px; text-align: center;
+  text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff;
+}
+
 /* Phases */
 .phase { border: 1px solid var(--line); border-radius: 8px; padding: 9px; margin-bottom: 8px; }
 .phase .ph-top { display:flex; align-items:center; gap:8px; margin-bottom: 6px; }

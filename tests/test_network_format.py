@@ -1,7 +1,7 @@
 """Tests for the network.yaml format: parse/serialize round-trip and
 validation messages (pure, no network access)."""
 import pytest
-from bikenetwork.network_format import (BikePath, Network, PhaseDef,
+from bikenetwork.network_format import (BikePath, Network, PhaseDef, Spot,
                                         parse_network, serialize_network,
                                         superseded_ids, validate_network)
 
@@ -170,3 +170,39 @@ def test_superseded_ids():
     assert superseded_ids(net.paths) == {"main-1"}
     net.paths[2].upgrades = ""
     assert superseded_ids(net.paths) == set()
+
+
+def test_spots_roundtrip():
+    net = _net()
+    net.spots = [
+        Spot(name="Oak Grove racks", kind="bike_parking", status="existing",
+             location=(42.43, -71.06), notes="12 spaces"),
+        Spot(kind="speed_hump", phase=1, location=(42.421234567, -71.07)),
+    ]
+    out = parse_network(serialize_network(net))
+    assert len(out.spots) == 2
+    a, b = out.spots
+    assert a.name == "Oak Grove racks" and a.kind == "bike_parking"
+    assert a.status == "existing" and a.notes == "12 spaces"
+    assert b.status == "proposed" and b.phase == 1     # status defaults
+    assert b.location == (42.421235, -71.07)           # 6-decimal rounding
+    assert validate_network(out) == []
+
+
+def test_no_spots_serializes_without_spots_key():
+    # Old files (and files that never use spots) must round-trip unchanged.
+    assert "spots" not in serialize_network(_net())
+
+
+@pytest.mark.parametrize("spot,needle", [
+    (Spot(kind="teleporter", location=(42.42, -71.07)), "kind"),
+    (Spot(kind="speed_hump"), "location"),
+    (Spot(kind="speed_hump", location=(442.0, -71.07)), "out of range"),
+    (Spot(kind="speed_hump", status="dreamed", location=(42.42, -71.07)), "status"),
+    (Spot(kind="speed_hump", phase=9, location=(42.42, -71.07)), "not declared"),
+])
+def test_spot_validation(spot, needle):
+    net = _net()
+    net.spots = [spot]
+    errors = validate_network(net)
+    assert any(needle in e for e in errors), errors
