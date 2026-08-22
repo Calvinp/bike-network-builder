@@ -3,7 +3,7 @@ validation messages (pure, no network access)."""
 import pytest
 from bikenetwork.network_format import (BikePath, Network, PhaseDef,
                                         parse_network, serialize_network,
-                                        validate_network)
+                                        superseded_ids, validate_network)
 
 
 def _net():
@@ -86,6 +86,18 @@ def test_non_mapping_yaml_is_rejected():
     (lambda n: setattr(n.paths[0], "name", ""), "name"),
     (lambda n: setattr(n, "format_id", "spreadsheet"), "format"),
     (lambda n: setattr(n, "format_version", 99), "newer"),
+    # Upgrade links: duplicate ids, dangling/self/cyclic references, and
+    # upgrades on a path that isn't proposed are all rejected.
+    (lambda n: [setattr(n.paths[0], "id", "x"), setattr(n.paths[2], "id", "x")],
+     "duplicate path id"),
+    (lambda n: setattr(n.paths[0], "upgrades", "ghost"), "unknown path id"),
+    (lambda n: [setattr(n.paths[0], "id", "a"),
+                setattr(n.paths[0], "upgrades", "a")], "itself"),
+    (lambda n: [setattr(n.paths[0], "id", "a"), setattr(n.paths[2], "id", "b"),
+                setattr(n.paths[0], "upgrades", "b"),
+                setattr(n.paths[2], "upgrades", "a")], "loop"),
+    (lambda n: [setattr(n.paths[0], "id", "a"),
+                setattr(n.paths[1], "upgrades", "a")], "proposed"),
 ])
 def test_validation_catches_bad_fields(mutate, needle):
     net = _net()
@@ -131,3 +143,30 @@ def test_pedestrianized_is_a_valid_type():
     net = _net()
     net.paths[0].type = "pedestrianized"
     assert validate_network(net) == []
+
+
+def test_upgrade_link_roundtrip():
+    # A phase-2 path can declare it upgrades a phase-1 (or existing) one.
+    net = _net()
+    net.paths[0].id = "main-1"
+    net.paths[2].upgrades = "main-1"
+    out = parse_network(serialize_network(net))
+    assert out.paths[0].id == "main-1"
+    assert out.paths[2].upgrades == "main-1"
+    assert validate_network(out) == []
+
+
+def test_ids_are_omitted_when_unset():
+    # Paths without ids/upgrades serialize exactly as before the fields
+    # existed — old files keep round-tripping without spurious diffs.
+    text = serialize_network(_net())
+    assert "id:" not in text and "upgrades" not in text
+
+
+def test_superseded_ids():
+    net = _net()
+    net.paths[0].id = "main-1"
+    net.paths[2].upgrades = "main-1"
+    assert superseded_ids(net.paths) == {"main-1"}
+    net.paths[2].upgrades = ""
+    assert superseded_ids(net.paths) == set()

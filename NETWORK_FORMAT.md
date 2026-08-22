@@ -72,6 +72,8 @@ Each path:
 | `jurisdiction` | no (default `city`) | `city` \| `state` (a MassDOT route the city must request — excluded from the mandate/cost) |
 | `phase` | required for `proposed` | must appear in the top-level `phases` list; omit for `funded`/`existing` |
 | `directions` | no (default `2`) | `2` = a facility each way, `1` = one-way. Drives *bicycle lane miles* (= corridor-miles × directions, the Cambridge/Somerville convention). For a one-way path, the **point order of the geometry is the travel direction** (maps draw an arrow) |
+| `id` | no | a stable identifier (any short string, unique across paths). Only needed when another path `upgrades` this one; the editor assigns one automatically |
+| `upgrades` | no | the `id` of a path this one **replaces in a later phase** (e.g. a quick-build lane rebuilt in concrete in 2040, or an upgrade of existing infrastructure). Only valid on a `proposed` path; no self/circular references |
 | `on_street`, `from`, `to` | no | street + endpoint intersections, for generated documents |
 | `notes` | no | free text |
 | `geometry` | yes | either **one segment** — a flat list of ≥ 2 `[lat, lon]` points — or **several segments** (a list of such lists), for one facility whose line is interrupted (e.g. a trail crossing streets). Degrees, rounded to 6 decimals (~10 cm) |
@@ -84,6 +86,12 @@ Each path:
 - **Only `proposed` + `jurisdiction: city` paths** count toward the build
   mandate and cost. `state` paths become requests to MassDOT; `funded` and
   `existing` are context.
+- **Upgrades count the corridor once, but every phase's work costs money.**
+  When path B `upgrades` path A, full-buildout mileage totals count only B
+  (the final facility) — A is *superseded*. Per-phase mileage and the cost
+  estimate still include both: building in 2028 and rebuilding in 2040 is
+  two projects. Phase-by-phase views (the editor's "Show" menu, the HTML
+  slider, per-phase maps) hide A once B's phase arrives.
 - Parsers are lenient (unknown keys ignored, `treatment` accepted as a legacy
   alias for `type`); **validators are strict** and return human-readable
   errors — the builder shows them verbatim when you import a file.

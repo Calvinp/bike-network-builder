@@ -28,6 +28,7 @@ let colorMode = "type";      // path type excites people; phases are for nerds
 let dirty = false;
 let editMode = false;
 let combineFrom = null;      // set while "Combine…" waits for a second path
+let phaseView = "all";       // "all" | "0" (today) | a phase number as string
 
 /* ---------- geometry helpers ---------- */
 function haversineMiles(a, b){
@@ -144,6 +145,11 @@ function removeFeature(f){
   networkGroup.removeLayer(f.layer);
   if(f.arrows) arrowsGroup.removeLayer(f.arrows);
   features=features.filter(x=>x!==f);
+  // Don't leave upgrade links pointing at a deleted path (the file would
+  // fail validation on the next import).
+  if(f.props.id) features.forEach(x=>{
+    if(x.props.upgrades===f.props.id) x.props.upgrades="";
+  });
   if(selected===f) deselect();
   markDirty(); recomputeTotals();
 }
@@ -152,6 +158,41 @@ function clearFeatures(){
   features.forEach(f=>{ networkGroup.removeLayer(f.layer);
     if(f.arrows) arrowsGroup.removeLayer(f.arrows); });
   features=[];
+}
+
+/* ---------- upgrades (quick-build now, better build later) ---------- */
+function ensureId(f){
+  // Ids exist only where an upgrade link needs one, so plain files stay clean.
+  while(!f.props.id || features.some(x=>x!==f && x.props.id===f.props.id))
+    f.props.id="p-"+Math.random().toString(36).slice(2,8);
+  return f.props.id;
+}
+function supersededIdSet(list){
+  const ids=new Set(list.map(f=>f.props.id).filter(Boolean));
+  const out=new Set();
+  list.forEach(f=>{
+    if(f.props.upgrades && ids.has(f.props.upgrades)) out.add(f.props.upgrades);
+  });
+  return out;
+}
+function planUpgrade(){
+  if(!selected) return;
+  const target=selected, tid=ensureId(target);
+  const segs=segsOf(target.layer).map(seg=>seg.map(p=>L.latLng(p.lat,p.lng)));
+  const nums=config.phases.map(x=>x.phase).sort((a,b)=>a-b);
+  const after=target.props.phase;
+  let next=nums.find(n=>after==null || n>after);
+  if(next==null) next=nums.length?nums[nums.length-1]:1;
+  const f=addFeature(defaultProps({
+    name:(target.props.name||"Path")+" (upgrade)",
+    status:"proposed", type:target.props.type,
+    jurisdiction:target.props.jurisdiction, directions:target.props.directions,
+    on_street:target.props.on_street, from:target.props.from, to:target.props.to,
+    upgrades:tid, phase:next
+  }), segs.length===1?segs[0]:segs);
+  setPhaseView("all");
+  markDirty(); recomputeTotals(); selectFeature(f);
+  setStatus(`Added an upgrade of “${target.props.name}” — pick its phase and type.`);
 }
 
 /* ---------- combining paths ---------- */
@@ -220,7 +261,17 @@ function fillForm(f){
   document.getElementById("f-dir").value=String(p.directions||2);
   document.getElementById("btn-reverse").style.display =
     p.directions===1 ? "" : "none";
+  updateUpgradeRow(f);
   updateLenField(f);
+}
+function updateUpgradeRow(f){
+  const row=document.getElementById("upgrade-row");
+  if(f.props.upgrades){
+    const target=features.find(x=>x.props.id===f.props.upgrades);
+    document.getElementById("upgrade-target").textContent =
+      target ? `Replaces “${target.props.name||"(unnamed)"}”` : "Replaces a removed path";
+    row.style.display="";
+  } else row.style.display="none";
 }
 function fillPhaseSelect(f){
   // Phase only applies to proposed paths; existing/funded have phase = null.
@@ -246,6 +297,11 @@ function bindForm(){
       if(key==="status"){
         selected.props.phase = selected.props.status==="proposed"
           ? ((config.phases[0]||{}).phase||1) : null;
+        // Only a proposed path can be an upgrade of another.
+        if(selected.props.status!=="proposed" && selected.props.upgrades){
+          selected.props.upgrades="";
+          updateUpgradeRow(selected);
+        }
         fillPhaseSelect(selected);
       }
       if(["status","jurisdiction","phase","type"].includes(key)) restyle(selected);
@@ -270,6 +326,12 @@ function bindForm(){
   document.getElementById("btn-delete").addEventListener("click", ()=>{
     if(selected && confirm("Delete this path?")) removeFeature(selected);
   });
+  document.getElementById("btn-upgrade").addEventListener("click", planUpgrade);
+  document.getElementById("btn-unlink").addEventListener("click", ()=>{
+    if(!selected) return;
+    selected.props.upgrades="";
+    updateUpgradeRow(selected); markDirty(); recomputeTotals();
+  });
 }
 
 /* ---------- totals ---------- */
@@ -284,14 +346,21 @@ function recomputeTotals(){
   let city=0, lane=0, state=0, count=0;
   let cLow=0,cHigh=0,sLow=0,sHigh=0, unnamed=0;
   const rates=options.cost_per_mile||{};
+  // A corridor that a later phase upgrades counts ONCE in the mileage (the
+  // final facility) — but every phase's work still costs money.
+  const superseded=supersededIdSet(features);
   for(const f of features){
     const p=f.props;
     if(isDefaultName(p.name)) unnamed++;
     if(p.status!=="proposed") continue;
     const mi=featureMiles(f);
     const [lo,hi]=rates[p.type]||[0,0];
-    if(p.jurisdiction==="state"){ state+=mi; sLow+=mi*lo; sHigh+=mi*hi; }
-    else { city+=mi; lane+=mi*(p.directions||2); count++; cLow+=mi*lo; cHigh+=mi*hi; }
+    const counted=!(p.id && superseded.has(p.id));
+    if(p.jurisdiction==="state"){ if(counted) state+=mi; sLow+=mi*lo; sHigh+=mi*hi; }
+    else {
+      if(counted){ city+=mi; lane+=mi*(p.directions||2); count++; }
+      cLow+=mi*lo; cHigh+=mi*hi;
+    }
   }
   document.getElementById("t-city").textContent=city.toFixed(1);
   document.getElementById("t-lane").textContent=lane.toFixed(1);
@@ -338,11 +407,56 @@ function renderPhases(){
     });
     box.appendChild(div);
   });
+  renderPhaseView();
 }
 function addPhase(){
   const next=(config.phases.reduce((m,p)=>Math.max(m,p.phase),0))+1;
   config.phases.push({phase:next,label:`Phase ${next}`,deadline:""});
   renderPhases(); if(selected) fillForm(selected); markDirty();
+}
+
+/* ---------- phase view (Show: full network / today / as of phase N) ---------- */
+function renderPhaseView(){
+  const sel=document.getElementById("phase-view");
+  sel.innerHTML="";
+  const add=(v,label)=>{
+    const o=document.createElement("option");
+    o.value=v; o.textContent=label; sel.appendChild(o);
+  };
+  add("all","Full network");
+  add("0","Today (existing + funded)");
+  config.phases.slice().sort((a,b)=>a.phase-b.phase).forEach(ph=>
+    add(String(ph.phase), `As of Phase ${ph.phase}${ph.label?": "+ph.label:""}`));
+  sel.value=[...sel.options].some(o=>o.value===phaseView)?phaseView:"all";
+  phaseView=sel.value;
+}
+function setPhaseView(v){
+  phaseView=v;
+  document.getElementById("phase-view").value=v;
+  applyPhaseView();
+}
+function applyPhaseView(){
+  let shownSet;
+  if(phaseView==="all"){
+    shownSet=new Set(features);
+  } else {
+    const n=parseInt(phaseView,10);  // 0 = today (existing + funded only)
+    let shown=features.filter(f=>f.props.status!=="proposed"
+      || (f.props.phase!=null && f.props.phase<=n));
+    const superseded=supersededIdSet(shown);
+    shown=shown.filter(f=>!(f.props.id && superseded.has(f.props.id)));
+    shownSet=new Set(shown);
+  }
+  features.forEach(f=>{
+    if(shownSet.has(f)){
+      if(!networkGroup.hasLayer(f.layer)) networkGroup.addLayer(f.layer);
+      if(f.arrows && !arrowsGroup.hasLayer(f.arrows)) arrowsGroup.addLayer(f.arrows);
+    } else {
+      if(selected===f) deselect();
+      if(networkGroup.hasLayer(f.layer)) networkGroup.removeLayer(f.layer);
+      if(f.arrows && arrowsGroup.hasLayer(f.arrows)) arrowsGroup.removeLayer(f.arrows);
+    }
+  });
 }
 
 /* ---------- legend ---------- */
@@ -532,6 +646,8 @@ function reverseSelected(){
 /* ---------- drawing / edit mode ---------- */
 let drawDefaults=null;
 function startDraw(over){
+  // Drawing means editing the full plan — leave any phase preview first.
+  if(phaseView!=="all") setPhaseView("all");
   drawDefaults=over; deselect();
   map.pm.enableDraw("Line",{finishOn:"dblclick", continueDrawing:false});
   const snap=document.getElementById("snap").checked;
@@ -628,6 +744,10 @@ async function init(){
     document.getElementById("peek").classList.remove("show");
     document.getElementById("prop-form").scrollIntoView({block:"center"});
   };
+
+  document.getElementById("phase-view").addEventListener("change", e=>{
+    phaseView=e.target.value; applyPhaseView();
+  });
 
   const phasesBox=document.getElementById("phases-box");
   phasesBox.open = (colorMode==="phase");

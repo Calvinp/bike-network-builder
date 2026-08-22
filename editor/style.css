@@ -105,6 +105,8 @@ header select { font: inherit; font-size: 13px; padding: 3px 6px;
   user-select: none; margin-bottom: 6px; }
 .extra-fields summary:hover { color: var(--ink); }
 .extra-fields .hint { margin-bottom: 8px; }
+.upgrade-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.upgrade-line span { flex: 1; }
 
 /* Totals */
 .totals { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }

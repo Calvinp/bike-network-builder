@@ -60,6 +60,17 @@ def test_geojson_features_carry_full_property_set():
     assert fc["features"][0]["geometry"]["coordinates"][0] == [-71.07, 42.42]
 
 
+def test_upgrade_fields_survive_roundtrip():
+    # id/upgrades ride the wire — the editor's autosave round-trips every
+    # path through this module, so a missing property would silently wipe
+    # upgrade links a second after any edit.
+    a = _p("Main", id="main-1")
+    b = _p("Main rebuild", phase=2, upgrades="main-1")
+    out = paths_from_geojson(paths_to_geojson([a, b]))
+    assert out[0].id == "main-1" and out[0].upgrades == ""
+    assert out[1].upgrades == "main-1" and out[1].id == ""
+
+
 def test_from_geojson_skips_degenerate_features():
     fc = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "properties": {"name": "Stub"},

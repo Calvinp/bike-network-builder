@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import json
 import math
 
 import folium
@@ -45,14 +46,26 @@ def render_html(
                             weight=2, dash_array="8,6", opacity=0.8).add_to(b)
         b.add_to(m)
 
-    # One toggleable layer per legend category (depends on the color mode).
+    # One toggleable layer per legend category. In a phased plan, proposed
+    # paths group by PHASE regardless of color mode so the slider below can
+    # step through them cumulatively (coloring still follows the color mode).
+    phased = bool(net.phases) and any(
+        p.status == "proposed" and p.phase is not None for p in paths)
     groups: Dict[str, folium.FeatureGroup] = {}
+    phase_groups: Dict[int, folium.FeatureGroup] = {}
+
+    def _phase_key(n) -> str:
+        cfg = phase_map.get(n)
+        return (f"Phase {n}: {cfg.label}" if cfg and cfg.label
+                else f"Phase {n}").strip()
 
     def group_for(p: BikePath):
         if p.status == "existing":
             key = "Existing infrastructure"
         elif p.status == "funded":
             key = "Approved / funded (not yet built)"
+        elif phased:
+            key = _phase_key(p.phase) if p.phase is not None else "Proposed"
         elif color_mode == "single":
             key = "Bike network (proposed)"
         elif color_mode == "type":
@@ -60,12 +73,16 @@ def render_html(
         elif p.jurisdiction == "state":
             key = "On a state road (MassDOT approval needed)"
         else:
-            cfg = phase_map.get(p.phase)
-            key = (f"Phase {p.phase}: {cfg.label}" if cfg and cfg.label
-                   else f"Phase {p.phase}").strip()
+            key = _phase_key(p.phase)
         if key not in groups:
             groups[key] = folium.FeatureGroup(name=key, show=True)
+        if phased and p.status == "proposed" and p.phase is not None:
+            phase_groups[p.phase] = groups[key]
         return groups[key]
+
+    # Leaflet layers per path id, so the slider can hide a path once a later
+    # phase upgrades (replaces) it: id -> [(layer, group)].
+    layers_by_id: Dict[str, list] = {}
 
     for p in paths:
         segs = [s for s in p.segments if len(s) >= 2]
@@ -93,14 +110,20 @@ def render_html(
             max_width=300,
         )
         group = group_for(p)
-        folium.PolyLine(latlon, color=color, weight=weight, opacity=0.9,
-                        dash_array=dash, popup=popup, tooltip=p.name).add_to(group)
+        line = folium.PolyLine(latlon, color=color, weight=weight, opacity=0.9,
+                               dash_array=dash, popup=popup, tooltip=p.name)
+        line.add_to(group)
+        if p.id:
+            layers_by_id.setdefault(p.id, []).append((line, group))
         if p.directions == 1:
             # One-way: a rotated chevron marker mid-segment, pointing the
             # drawn way. Plain DivIcon markers — no plugin, and the dark glyph
             # with a white halo stays readable on any background.
             for seg in segs:
-                _direction_marker(seg).add_to(group)
+                marker = _direction_marker(seg)
+                marker.add_to(group)
+                if p.id:
+                    layers_by_id.setdefault(p.id, []).append((marker, group))
 
     for g in groups.values():
         g.add_to(m)
@@ -119,8 +142,79 @@ def render_html(
         }});
         {m.get_name()}.whenReady(function () {{ {m.get_name()}.fire('zoomend'); }});
     """))
+    if phased:
+        _add_phase_slider(m, net, paths, phase_groups, layers_by_id)
     m.save(str(out_path))
     return out_path
+
+
+def _add_phase_slider(m, net: Network, paths: List[BikePath],
+                      phase_groups: Dict[int, "folium.FeatureGroup"],
+                      layers_by_id: Dict[str, list]) -> None:
+    """Inject a bottom-center slider that steps Today -> Phase 1 -> ... -> full
+    network, cumulatively showing phase groups and hiding paths that a shown
+    later phase upgrades. Hand-written folium Elements only — folium's time
+    plugins have broken map.html at runtime before (TextPath)."""
+    phase_map = net.phase_map()
+    stops = [(0, "Today")]
+    for n in sorted(phase_groups):
+        cfg = phase_map.get(n)
+        caption = f"Phase {n}"
+        if cfg and cfg.label:
+            caption += f": {cfg.label}"
+        if cfg and cfg.deadline:
+            caption += f" — by {cfg.deadline}"
+        stops.append((n, caption))
+    if len(stops) > 1:
+        stops[-1] = (stops[-1][0], stops[-1][1] + " (full network)")
+
+    # {layer var, group var, phase at which the upgrading path appears}.
+    hidden_entries = []
+    for p in paths:
+        if p.upgrades and p.status == "proposed" and p.phase is not None:
+            for layer, group in layers_by_id.get(p.upgrades, []):
+                hidden_entries.append(
+                    f'{{layer: {layer.get_name()}, group: {group.get_name()}, '
+                    f'phase: {p.phase}}}')
+
+    slider_html = f"""
+    <div id="phase-slider-box" style="position:fixed;bottom:24px;left:50%;
+         transform:translateX(-50%);z-index:9999;background:white;
+         padding:10px 16px;border:1px solid #999;border-radius:6px;
+         font:13px sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.3);
+         text-align:center;min-width:240px;">
+      <div id="phase-slider-label" style="font-weight:bold;margin-bottom:4px;"></div>
+      <input id="phase-slider" type="range" min="0" max="{len(stops) - 1}"
+             value="{len(stops) - 1}" step="1" style="width:100%;">
+    </div>"""
+    m.get_root().html.add_child(folium.Element(slider_html))
+
+    group_pairs = ", ".join(f'[{n}, {g.get_name()}]'
+                            for n, g in sorted(phase_groups.items()))
+    slider_js = f"""
+    document.addEventListener("DOMContentLoaded", function() {{
+      var stops = {json.dumps([n for n, _ in stops])};
+      var labels = {json.dumps([c for _, c in stops])};
+      var phaseGroups = [{group_pairs}];
+      var hidden = [{", ".join(hidden_entries)}];
+      var slider = document.getElementById("phase-slider");
+      var label = document.getElementById("phase-slider-label");
+      function apply() {{
+        var cur = stops[+slider.value];
+        label.textContent = labels[+slider.value];
+        phaseGroups.forEach(function(pg) {{
+          if (pg[0] <= cur) {{ {m.get_name()}.addLayer(pg[1]); }}
+          else {{ {m.get_name()}.removeLayer(pg[1]); }}
+        }});
+        hidden.forEach(function(h) {{
+          if (h.phase <= cur) {{ h.group.removeLayer(h.layer); }}
+          else if (!h.group.hasLayer(h.layer)) {{ h.group.addLayer(h.layer); }}
+        }});
+      }}
+      slider.addEventListener("input", apply);
+      apply();
+    }});"""
+    m.get_root().script.add_child(folium.Element(slider_js))
 
 
 def _direction_marker(seg) -> folium.Marker:

@@ -30,7 +30,7 @@ from bikenetwork.network_format import (JURISDICTIONS, PATH_TYPES, STATUSES,
                                         Network, PhaseDef, parse_network,
                                         serialize_network, validate_network)
 from bikenetwork.osm import OverpassClient
-from bikenetwork.pipeline import render_all
+from bikenetwork.pipeline import render_all, render_phase_exports
 from bikenetwork.render_map import COLOR_MODES
 from bikenetwork.routing import load_street_graph, snap_route
 
@@ -209,11 +209,15 @@ def api_export_bundle():
         color_mode = "type"
     basemap = bool(request.args.get("basemap", "1") != "0")
     render_all(net, boundary, OUTPUT, basemap=basemap, color_mode=color_mode)
+    phase_files = render_phase_exports(net, boundary, OUTPUT, basemap=basemap,
+                                       color_mode=color_mode)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("network.yaml", serialize_network(net))
         for name in ("map.png", "map.html", "network.geojson"):
             z.write(OUTPUT / name, name)
+        for f in phase_files:
+            z.write(f, f.name)
     buf.seek(0)
     return Response(buf.read(), mimetype="application/zip", headers={
         "Content-Disposition": "attachment; filename=bike-network.zip"})

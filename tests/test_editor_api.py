@@ -120,8 +120,10 @@ def test_export_bundle_zips_everything(client, tmp_path):
     assert r.status_code == 200
     assert "attachment" in r.headers["Content-Disposition"]
     with zipfile.ZipFile(io.BytesIO(r.data)) as z:
+        # One declared phase with proposed work -> per-phase PNG + animation.
         assert set(z.namelist()) == {"network.yaml", "map.png", "map.html",
-                                     "network.geojson"}
+                                     "network.geojson", "map-phase-1.png",
+                                     "phases.gif"}
         net = parse_network(z.read("network.yaml").decode("utf-8"))
         assert net.paths[0].name == "Main Street"
 

@@ -130,15 +130,16 @@ def render_map(
     color_mode: str = "type",
     title: str | None = None,
     dpi: int = 250,
+    figsize: float = 16,
 ) -> Path:
     """Draw proposed + existing paths over a basemap. Returns the output path.
     16in @ 250dpi gives a ~4000px print-quality export with breathing room for
     labels (and pulls sharper, more detailed basemap tiles); tests may pass a
-    lower dpi to stay fast."""
+    lower dpi to stay fast, and GIF frames use a smaller figsize."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(16, 16), dpi=dpi)
+    fig, ax = plt.subplots(figsize=(figsize, figsize), dpi=dpi)
 
     all_lats: List[float] = []
     phases_seen = set()

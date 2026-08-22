@@ -59,6 +59,13 @@ class BikePath:
     type: str = "quick_build_separated"
     status: str = "proposed"
     jurisdiction: str = "city"
+    # Optional stable identity ("" = none). Only needed when another path
+    # upgrades this one; editors assign one lazily so plain files stay clean.
+    id: str = ""
+    # Id of the path this one replaces in a later phase (e.g. quick-build now,
+    # concrete rebuild later). The upgraded path's corridor is counted once in
+    # full-buildout mileage, but every phase's work still costs money.
+    upgrades: str = ""
     # Implementation phase. Required for proposed paths; None for existing /
     # funded ones (they aren't part of the phased build).
     phase: Optional[int] = None
@@ -91,6 +98,15 @@ class Network:
 
     def phase_map(self) -> Dict[int, PhaseDef]:
         return {p.number: p for p in self.phases}
+
+
+def superseded_ids(paths: List[BikePath]) -> set:
+    """Ids of paths that some other path upgrades (replaces in a later phase).
+    Both tools use this to count an upgraded corridor once in full-buildout
+    mileage while still costing every phase's work. A dangling reference
+    supersedes nothing (validation reports it separately)."""
+    ids = {p.id for p in paths if p.id}
+    return {p.upgrades for p in paths if p.upgrades and p.upgrades in ids}
 
 
 # --------------------------------------------------------------------------- #
@@ -165,6 +181,8 @@ def network_from_dict(raw: dict) -> Network:
             type=str(item.get("type", item.get("treatment", "")) or "").strip(),
             status=str(item.get("status", "proposed") or "proposed").strip(),
             jurisdiction=str(item.get("jurisdiction", "city") or "city").strip(),
+            id=str(item.get("id", "") or "").strip(),
+            upgrades=str(item.get("upgrades", "") or "").strip(),
             phase=_to_int(item.get("phase"), default=None),
             directions=_to_int(item.get("directions"), default=2) or 2,
             on_street=str(item.get("on_street", "") or "").strip(),
@@ -207,6 +225,11 @@ def validate_network(net: Network) -> List[str]:
     if dupes:
         errors.append(f"duplicate phase number(s): {sorted(dupes)}.")
 
+    path_ids = [p.id for p in net.paths if p.id]
+    dupe_ids = {i for i in path_ids if path_ids.count(i) > 1}
+    if dupe_ids:
+        errors.append(f"duplicate path id(s): {sorted(dupe_ids)}.")
+
     for i, path in enumerate(net.paths):
         label = path.name or f"path #{i + 1}"
         if not path.name:
@@ -223,6 +246,27 @@ def validate_network(net: Network) -> List[str]:
         if path.directions not in (1, 2):
             errors.append(f"{label}: 'directions' must be 1 or 2 "
                           f"(got {path.directions!r}).")
+        if path.upgrades:
+            if path.status != "proposed":
+                errors.append(f"{label}: only a proposed path can have "
+                              f"'upgrades' (status is {path.status!r}).")
+            if path.upgrades == path.id:
+                errors.append(f"{label}: a path cannot upgrade itself.")
+            elif path.upgrades not in path_ids:
+                errors.append(f"{label}: 'upgrades' references unknown path "
+                              f"id {path.upgrades!r}.")
+            else:
+                # Walk the chain to catch loops (a upgrades b upgrades a).
+                by_id = {p.id: p for p in net.paths if p.id}
+                seen, cur = {path.id or object()}, path.upgrades
+                while cur:
+                    if cur in seen:
+                        errors.append(f"{label}: 'upgrades' chain forms a loop.")
+                        break
+                    seen.add(cur)
+                    nxt = by_id.get(cur)
+                    cur = nxt.upgrades if nxt else ""
+
         if path.status == "proposed":
             if path.phase is None or path.phase < 1:
                 errors.append(f"{label}: a proposed path needs a positive integer "
@@ -255,6 +299,12 @@ def validate_network(net: Network) -> List[str]:
 def _path_dict(p: BikePath) -> dict:
     out: dict = {"name": p.name, "type": p.type, "status": p.status,
                  "jurisdiction": p.jurisdiction}
+    # Optional identity/upgrade fields are omitted when unset so files that
+    # never use them serialize exactly as they did before the fields existed.
+    if p.id:
+        out["id"] = p.id
+    if p.upgrades:
+        out["upgrades"] = p.upgrades
     if p.phase is not None:
         out["phase"] = p.phase
     out["directions"] = p.directions

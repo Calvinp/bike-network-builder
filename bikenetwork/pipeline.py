@@ -13,7 +13,7 @@ from typing import List
 from .boundary import build_polygon, clip_segments_latlon
 from .geojson import paths_to_geojson
 from .geometry import segments_miles
-from .network_format import BikePath, Network
+from .network_format import BikePath, Network, superseded_ids
 from .render_html import render_html
 from .render_map import COLOR_MODES, render_map
 
@@ -48,6 +48,11 @@ def summarize(paths: List[BikePath], net: Network) -> dict:
     proposed = [p for p in paths if p.status == "proposed"]
     build = [p for p in proposed if p.jurisdiction != "state"]
     state = [p for p in proposed if p.jurisdiction == "state"]
+    # An upgraded corridor (quick-build now, rebuild later) counts once at
+    # full buildout; the per-phase rows below still show every phase's work.
+    superseded = superseded_ids(paths)
+    final_build = [p for p in build if p.id not in superseded]
+    final_state = [p for p in state if p.id not in superseded]
     phase_map = net.phase_map()
     phases = []
     for num in sorted({p.phase for p in build if p.phase is not None}):
@@ -61,14 +66,100 @@ def summarize(paths: List[BikePath], net: Network) -> dict:
             "lane_miles": sum(p.length_miles * p.directions for p in members),
         })
     return {
-        "total_build_miles": sum(p.length_miles for p in build),
-        "total_lane_miles": sum(p.length_miles * p.directions for p in build),
-        "total_paths": len(build),
-        "state_miles": sum(p.length_miles for p in state),
+        "total_build_miles": sum(p.length_miles for p in final_build),
+        "total_lane_miles": sum(p.length_miles * p.directions for p in final_build),
+        "total_paths": len(final_build),
+        "state_miles": sum(p.length_miles for p in final_state),
         "committed_miles": sum(p.length_miles for p in paths if p.status == "funded"),
         "existing_miles": sum(p.length_miles for p in paths if p.status == "existing"),
         "phases": phases,
     }
+
+
+def paths_as_of_phase(paths: List[BikePath], n: int) -> List[BikePath]:
+    """The cumulative network as of phase `n` (0 = today): existing + funded
+    plus proposed paths with phase <= n, minus any path superseded by an
+    upgrade that is itself in the view."""
+    shown = [p for p in paths
+             if p.status != "proposed" or (p.phase is not None and p.phase <= n)]
+    superseded = superseded_ids(shown)
+    return [p for p in shown if p.id not in superseded]
+
+
+def _prepare_paths(net: Network, boundary, warnings, notices) -> List[BikePath]:
+    """Measure and boundary-clip a network's paths (copies; net not mutated)."""
+    paths = list(net.paths)
+    for p in paths:
+        if not p.length_miles and any(len(s) >= 2 for s in p.segments):
+            p.length_miles = segments_miles(p.segments)
+    polygon = build_polygon(boundary) if boundary else None
+    if polygon is not None:
+        paths = clip_paths(paths, polygon, warnings, notices)
+    return paths
+
+
+def render_phase_exports(net: Network, boundary, output_dir, basemap=True,
+                         color_mode="type", dpi=250, gif_dpi=90) -> List[Path]:
+    """Write one cumulative PNG per declared phase (map-phase-N.png) plus an
+    animated phases.gif stepping Today -> each phase. Returns written paths."""
+    from PIL import Image
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    paths = _prepare_paths(net, boundary, [], [])
+    phase_numbers = sorted(
+        n.number for n in net.phases
+        if any(p.status == "proposed" and p.phase == n.number for p in paths))
+    if not phase_numbers:
+        return []
+
+    written: List[Path] = []
+    for n in phase_numbers:
+        out = output_dir / f"map-phase-{n}.png"
+        render_map(paths_as_of_phase(paths, n), net, out, boundary=boundary,
+                   basemap=basemap, color_mode=color_mode, dpi=dpi,
+                   title=f"{net.city} Bike Network — Phase {n}")
+        written.append(out)
+
+    # GIF frames: small renders, one per stop. The boundary is drawn before
+    # autoscale so every frame shares (nearly) the same extent; frames are
+    # then pasted onto a common canvas because bbox_inches="tight" still
+    # crops each frame slightly differently.
+    phase_map = net.phase_map()
+    stops = [(0, "Today")]
+    for n in phase_numbers:
+        cfg = phase_map.get(n)
+        caption = f"Phase {n}"
+        if cfg and cfg.label:
+            caption += f": {cfg.label}"
+        if cfg and cfg.deadline:
+            caption += f" (by {cfg.deadline})"
+        stops.append((n, caption))
+
+    frames = []
+    for i, (n, caption) in enumerate(stops):
+        tmp = output_dir / f"_gif_frame_{i}.png"
+        render_map(paths_as_of_phase(paths, n), net, tmp, boundary=boundary,
+                   basemap=basemap, color_mode=color_mode, dpi=gif_dpi,
+                   figsize=7, title=f"{net.city} Bike Network — {caption}")
+        with Image.open(tmp) as im:
+            frames.append(im.convert("RGB"))
+        tmp.unlink()
+
+    w = max(f.width for f in frames)
+    h = max(f.height for f in frames)
+    padded = []
+    for f in frames:
+        canvas = Image.new("RGB", (w, h), "white")
+        canvas.paste(f, ((w - f.width) // 2, (h - f.height) // 2))
+        padded.append(canvas.convert("P", palette=Image.ADAPTIVE))
+    gif = output_dir / "phases.gif"
+    # Linger on "Today" and on the finished network so the loop reads clearly.
+    durations = [2000] + [1400] * (len(padded) - 2) + [3000]
+    padded[0].save(gif, save_all=True, append_images=padded[1:],
+                   duration=durations, loop=0)
+    written.append(gif)
+    return written
 
 
 def render_all(net: Network, boundary, output_dir, basemap=True,
@@ -83,13 +174,7 @@ def render_all(net: Network, boundary, output_dir, basemap=True,
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    paths = list(net.paths)
-    for p in paths:
-        if not p.length_miles and any(len(s) >= 2 for s in p.segments):
-            p.length_miles = segments_miles(p.segments)
-    polygon = build_polygon(boundary) if boundary else None
-    if polygon is not None:
-        paths = clip_paths(paths, polygon, warnings, notices)
+    paths = _prepare_paths(net, boundary, warnings, notices)
 
     fc = paths_to_geojson(paths)
     (output_dir / "network.geojson").write_text(json.dumps(fc, indent=2),
