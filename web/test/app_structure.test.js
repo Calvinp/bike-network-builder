@@ -8,6 +8,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { SPOT_GLYPHS, SPOT_LABELS } from "../js/render_common.js";
 
 const FILES = {
   "web/app.js": readFileSync(new URL("../app.js", import.meta.url), "utf8"),
@@ -46,3 +47,19 @@ for (const [name, src] of Object.entries(FILES)) {
     }
   });
 }
+
+test("editor/app.js mirrors the spot glyph and label tables", () => {
+  // web/app.js imports these from render_common.js; the desktop editor is
+  // plain script-tag JS and keeps its own copy, so a type added on one side
+  // only would draw the catch-all dot in exactly one of the two editors.
+  const src = FILES["editor/app.js"].replace(/\/\/.*$/gm, "");
+  const table = (name) => {
+    const start = src.indexOf(`const ${name} = {`);
+    assert.ok(start > 0, `${name} not found in editor/app.js`);
+    const body = src.slice(start, src.indexOf("};", start));
+    return Object.fromEntries(
+      [...body.matchAll(/(\w+)\s*:\s*"([^"]*)"/g)].map((m) => [m[1], m[2]]));
+  };
+  assert.deepEqual(table("SPOT_GLYPHS"), SPOT_GLYPHS);
+  assert.deepEqual(table("SPOT_LABELS"), SPOT_LABELS);
+});

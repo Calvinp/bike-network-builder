@@ -44,7 +44,7 @@ JURISDICTIONS = (
 )
 
 # Point ("spot") improvements — single-location infrastructure that isn't a
-# path: traffic calming, access control, crossings, parking, greening. The
+# path: traffic calming, crossings, access control, parking, greening. The
 # field is `type`, matching what a path calls the same idea; files written
 # before the rename say `kind` and still parse.
 SPOT_TYPES = (
@@ -53,6 +53,9 @@ SPOT_TYPES = (
     "raised_crosswalk",
     "raised_intersection",
     "curb_extension",
+    # Crossings — getting people across a road they'd otherwise wait at
+    "pedestrian_island",      # refuge median: cross one direction at a time
+    "hawk_signal",            # beacon that stops traffic on demand
     # Access control — keeps motor traffic out while bikes pass through
     "modal_filter",
     "bollards",

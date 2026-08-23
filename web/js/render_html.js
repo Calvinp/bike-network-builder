@@ -6,7 +6,7 @@
 import {
   BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR, STATE_COLOR,
   TYPE_COLORS, chevron, escapeHtml, labelText, pathColor, phaseColor,
-  spotColor, spotGlyph, spotLabel, typeLabel,
+  spotColor, spotGlyph, spotLabel, spotLabelMidsentence, typeLabel,
 } from "./render_common.js";
 import { phaseMap } from "./network_format.js";
 
@@ -162,7 +162,7 @@ export function renderHtml(paths, net, {
       tooltip: escapeHtml(s.name || spotLabel(s.type)),
       popup: `<b>${escapeHtml(s.name || spotLabel(s.type))}</b><br>`
         + (s.status === "existing" ? escapeHtml(spotLabel(s.type))
-           : `Proposed ${escapeHtml(spotLabel(s.type).toLowerCase())}`)
+           : `Proposed ${escapeHtml(spotLabelMidsentence(s.type))}`)
         + (s.status === "proposed" && s.phase !== null && s.phase !== undefined
            ? ` &middot; Phase ${s.phase}` : "")
         + (s.notes ? `<br><i>${escapeHtml(s.notes)}</i>` : ""),

@@ -84,6 +84,8 @@ SPOT_GLYPHS = {
     "raised_crosswalk": "▬",
     "raised_intersection": "◆",
     "curb_extension": "◖",
+    "pedestrian_island": "▮",       # a narrow refuge median
+    "hawk_signal": "◉",             # a lit signal lens
     "modal_filter": "⊘",            # no through motor traffic
     "bollards": "‖",                # a line of posts
     "retractable_bollards": "⇕",    # posts that drop and rise
@@ -96,6 +98,8 @@ SPOT_LABELS = {
     "raised_crosswalk": "Raised crosswalk",
     "raised_intersection": "Raised intersection",
     "curb_extension": "Curb extension",
+    "pedestrian_island": "Pedestrian island",
+    "hawk_signal": "HAWK signal",
     "modal_filter": "Modal filter",
     "bollards": "Bollards",
     "retractable_bollards": "Retractable bollards",
@@ -103,6 +107,16 @@ SPOT_LABELS = {
     "street_trees": "Street trees",
     "other": "Spot improvement",
 }
+
+
+def spot_label_midsentence(kind: str) -> str:
+    """A spot label as it reads inside a sentence ("Proposed raised
+    crosswalk"). Lowercased word by word so acronyms keep their capitals —
+    a HAWK signal is not a hawk signal."""
+    label = SPOT_LABELS.get(kind, kind.replace("_", " "))
+    return " ".join(w if w.isupper() else w.lower() for w in label.split())
+
+
 SPOT_PROPOSED_COLOR = "#1a1a1a"  # near-black glyph (white halo)
 SPOT_EXISTING_COLOR = "#707070"  # grey — already on the ground
 

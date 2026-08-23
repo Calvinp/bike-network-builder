@@ -1,10 +1,12 @@
 """Smoke tests: the map renderer writes a non-empty PNG in every color mode
 (offline, Agg backend), and path_color implements the modes correctly."""
 import pytest
-from bikenetwork.network_format import BikePath, Network, PhaseDef
+from bikenetwork.network_format import (SPOT_TYPES, BikePath, Network,
+                                         PhaseDef)
 from bikenetwork.render_map import (COLOR_MODES, PHASE_COLORS, SINGLE_COLOR,
-                                    STATE_COLOR, TYPE_COLORS, path_color,
-                                    render_map)
+                                    SPOT_GLYPHS, SPOT_LABELS, STATE_COLOR,
+                                    TYPE_COLORS, path_color, render_map,
+                                    spot_label_midsentence)
 
 
 def _paths():
@@ -136,3 +138,18 @@ def test_superseded_path_loses_its_one_way_chevron(tmp_path, monkeypatch):
     rm.render_map([old, new], NET, tmp_path / "both.png", boundary=BOUNDARY,
                   basemap=False, dpi=40)
     assert drawn == []
+
+
+def test_every_spot_type_has_a_glyph_and_a_label():
+    """A type the tables don't know draws the catch-all dot and legends itself
+    with a raw slug, so the tables track SPOT_TYPES exactly — order included,
+    since it is the order of both the legend and the editor's dropdown."""
+    assert tuple(SPOT_GLYPHS) == SPOT_TYPES
+    assert tuple(SPOT_LABELS) == SPOT_TYPES
+
+
+def test_acronyms_survive_the_midsentence_spot_label():
+    """The HTML popup says "Proposed <label>" — lowercasing the whole label
+    would turn a HAWK signal into a hawk signal."""
+    assert spot_label_midsentence("raised_crosswalk") == "raised crosswalk"
+    assert spot_label_midsentence("hawk_signal") == "HAWK signal"

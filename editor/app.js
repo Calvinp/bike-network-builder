@@ -22,12 +22,14 @@ const SINGLE="#0072B2", EXISTING="#000000", FUNDED="#E69F00", STATE="#CC79A7", B
 /* Spot (point) improvements — glyphs/labels mirror bikenetwork/render_map.py. */
 const SPOT_GLYPHS = {
   speed_hump:"∩", raised_crosswalk:"▬", raised_intersection:"◆",
-  curb_extension:"◖", modal_filter:"⊘", bollards:"‖", retractable_bollards:"⇕",
+  curb_extension:"◖", pedestrian_island:"▮", hawk_signal:"◉",
+  modal_filter:"⊘", bollards:"‖", retractable_bollards:"⇕",
   bike_parking:"P", street_trees:"T", other:"●"
 };
 const SPOT_LABELS = {
   speed_hump:"Speed hump", raised_crosswalk:"Raised crosswalk",
   raised_intersection:"Raised intersection", curb_extension:"Curb extension",
+  pedestrian_island:"Pedestrian island", hawk_signal:"HAWK signal",
   modal_filter:"Modal filter", bollards:"Bollards",
   retractable_bollards:"Retractable bollards",
   bike_parking:"Bike parking", street_trees:"Street trees", other:"Spot improvement"

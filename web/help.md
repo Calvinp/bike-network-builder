@@ -28,13 +28,7 @@ Properties of a path can be modified by clicking the path. These will show up vi
 - **Name**: The name of the path. This will show up on the exported map if possible.
 - **Status**: Proposed (your idea), funded (approved but not built), or
   existing (already on the ground).
-- **Type**: The kind of path you'd like to build.
-  - **Quick-build separated lane**: A lane that doesn't require construction to build. Usually separated from traffic by repainting the street to move parking between car traffic and the bike lane, and/or by using flex posts.
-  - **Concrete-protected lane**: A lane that is separated from traffic by physical infrastructure. This can be a concrete divider or a sidewalk level bike lane.
-  - **Shared-use path**: A path that is shared between pedestrians and bikes. Rail trails are usually built this way, but they can be on street and separated by flex posts or concrete too. 
-  - **Buffered painted lane (interim)**: A bike lane that is only separated from traffic with paint. Advocates often consider these to be low quality. They're used because they're cheap and can still help where other higher quality infrastructure is nearby. Useful as a temporary measure.
-  - **Neighborway (calm shared street)**: A street that is shared between bikes and cars, but measures are taken to make it more comfortable for bikes. Often these are used on narrow neighborhood streets that were already designed for low car speeds. These measures can include (but are not limited to): making it one way for cars but two ways for bikes; making small intersections into tiny roundabouts; modal filters; curb extensions; navigational signage; bright paint; street trees.
-  - **Pedestrianized street**: A city street that cars are entirely or almost entirely banned from using. This differs from a shared-use path because the entire street is pedestrian/bike only, and usually there are buildings facing the street. Generally provisions (such as retractable bollards) are made to allow emergency vehicles to still access the street. Sometimes the same provisions allow vehicles such as delivery trucks and personal vehicles of people who require handicap access to also use the street. Even in the cases where limited vehicle access is required, the design of the street keeps vehicle speeds low. An exception is that a street can count as pedestrianized and still have active streetcar tracks.
+- **Type**: The kind of path you'd like to build. See infrastructure types below.
 - **Phase**: If you want to make an implementation plan, this represents the phase this path gets built in (see Phases & Dates below to edit the options here).
 - **Directions**: Choose whether this is a one way or two way path.
 - **Jurisdiction**: Choose whether the city or the state is expected to build this path. The cost estimate for this path will be added to the selected entity.
@@ -50,17 +44,7 @@ You can also add details such as the street the path is on and the from and to i
 ## Spot infrastructure properties
 
 Properties of a piece of spot infrastructure can be modified by clicking it. These will show up visually as an icon in the exported map.
-- **Type**: The kind of infrastructure proposed.
-  - **Speed hump**: A small raised section of the street. This forces cars to slow down.
-  - **Raised crosswalk**: A crosswalk that is raised to sidewalk level. This feels like a speed bump to occupants of cars, so it forces them to slow down, but it simultaneously provides an inviting and accessible place for pedestrians to cross the street.
-  - **Raised intersection**: Similar to a raised crosswalk, but this time the entire intersection is raised rather than just the crosswalks. This forces cars to take the whole intersection slowly, massively improving safety.
-  - **Crub extension**: A place where the curb extends into the street. This is used to force cars to slow down, improving safety.
-  - **Bike parking**: A secure place to park bicycles. There are many types of bike parking. If you would like to specify which type or how much, use the notes field.
-  - **Street trees**: A tree planted in the street to provide shade.
-  - **Modal filter**: A treatment, often (but not always) applied at intersections, that prevents certain types of traffic from going through while allowing others. Generally this is used to allow pedestrians, bikes, and sometimes streetcars to go through while blocking personal vehicles. This massively reduces vehicle traffic on the street while preserving access for vehicles whose destination is nearby. It is therefore popular in places where a street that is meant to be quiet is being used as a cut-through. Depending on implementation, emergency vehicles may or may not be able to drive over the modal filter if needed.
-  - **Bollard**: A pole that is securely fixed to the ground (often via concrete). This is often used to protect sidewalks around high speed traffic. A well implemented bollard can block even a fully loaded speeding semitruck. Note that poorly implemented bollards are fairly common. Those offer the illusion of protection while folding to the slightest crash. Care needs to be taken to ensure that it is implemented well.
-  - **Retractable bollard**: A bollard that can automatically retract when needed. This is a subclass of modal filter that can let some personal vehicles through but not others. This is often used to block through traffic from using a neighborhood street as a cut-throguh, while still allowing residents, deliveries, and emergency vehicles through. Often permited vehicles are issued a transponder that causes the bollard to retract for easy entry.
-  - **Spot improvement**: A custom spot improvement. Use the Notes field to describe what the improvement is.
+- **Type**: The kind of infrastructure proposed. See infrastructure types below.
 - **Name**: The name of this piece of infrastructure. Unlike for paths, naming spot infrastructure is optional.
 - **Status**: Proposed (your idea) or existing (already on the ground).
 - **Phase**: If you want to make an implementation plan, this represents the phase this path gets built in (see Phases & Dates below to edit the options here).
@@ -97,6 +81,34 @@ Exporting allows you to share your work with others. Import allows you to load y
   - **Interactive map (.html)**: Exports the network as a webpage that can be interacted with, including with a slider showing each phase.
   - **GeoJSON (.geojson)**: Exports the network as a .geojson file that other tools can import.
 - **Import**: Import a previously generated map to build on it. **Importing deletes all existing work**, so make sure you export your work if you have any. You can import either a .yaml file or a .zip file that contains the .yaml file.
+
+## Infrastructure types
+
+### Path infrastructure
+
+This is infrastructure that people travel on directly.
+- **Quick-build separated lane**: A lane that doesn't require construction to build. Usually separated from traffic by repainting the street to move parking between car traffic and the bike lane, and/or by using flex posts.
+- **Concrete-protected lane**: A lane that is separated from traffic by physical infrastructure. This can be a concrete divider or a sidewalk level bike lane.
+- **Shared-use path**: A path that is shared between pedestrians and bikes. Rail trails are usually built this way, but they can be on street and separated by flex posts or concrete too. 
+- **Buffered painted lane (interim)**: A bike lane that is only separated from traffic with paint. Advocates often consider these to be low quality. They're used because they're cheap and can still help where other higher quality infrastructure is nearby. Useful as a temporary measure.
+- **Neighborway (calm shared street)**: A street that is shared between bikes and cars, but measures are taken to make it more comfortable for bikes. Often these are used on narrow neighborhood streets that were already designed for low car speeds. These measures can include (but are not limited to): making it one way for cars but two ways for bikes; making small intersections into tiny roundabouts; modal filters; curb extensions; navigational signage; bright paint; street trees.
+- **Pedestrianized street**: A city street that cars are entirely or almost entirely banned from using. This differs from a shared-use path because the entire street is pedestrian/bike only, and usually there are buildings facing the street. Generally provisions (such as retractable bollards) are made to allow emergency vehicles to still access the street. Sometimes the same provisions allow vehicles such as delivery trucks and personal vehicles of people who require handicap access to also use the street. Even in the cases where limited vehicle access is required, the design of the street keeps vehicle speeds low. An exception is that a street can count as pedestrianized and still have active streetcar tracks.
+
+### Point infrastructure
+
+This is infrastructure that exists in one specific place or at one intersection. These are improvements that enhance the experience of using nearby paths.
+- **Speed hump**: A small raised section of the street. This forces cars to slow down.
+- **Raised crosswalk**: A crosswalk that is raised to sidewalk level. This feels like a speed bump to occupants of cars, so it forces them to slow down, but it simultaneously provides an inviting and accessible place for pedestrians to cross the street.
+- **Raised intersection**: Similar to a raised crosswalk, but this time the entire intersection is raised rather than just the crosswalks. This forces cars to take the whole intersection slowly, massively improving safety.
+- **Crub extension**: A place where the curb extends into the street. This is used to force cars to slow down, improving safety.
+- **Bike parking**: A secure place to park bicycles. There are many types of bike parking. If you would like to specify which type or how much, use the notes field.
+- **Street trees**: A tree planted in the street to provide shade.
+- **Modal filter**: A treatment, often (but not always) applied at intersections, that prevents certain types of traffic from going through while allowing others. Generally this is used to allow pedestrians, bikes, and sometimes streetcars to go through while blocking personal vehicles. This massively reduces vehicle traffic on the street while preserving access for vehicles whose destination is nearby. It is therefore popular in places where a street that is meant to be quiet is being used as a cut-through. Depending on implementation, emergency vehicles may or may not be able to drive over the modal filter if needed.
+- **Bollard**: A pole that is securely fixed to the ground (often via concrete). This is often used to protect sidewalks around high speed traffic. A well implemented bollard can block even a fully loaded speeding semitruck. Note that poorly implemented bollards are fairly common. Those offer the illusion of protection while folding to the slightest crash. Care needs to be taken to ensure that it is implemented well.
+- **Retractable bollard**: A bollard that can automatically retract when needed. This is a subclass of modal filter that can let some personal vehicles through but not others. This is often used to block through traffic from using a neighborhood street as a cut-throguh, while still allowing residents, deliveries, and emergency vehicles through. Often permited vehicles are issued a transponder that causes the bollard to retract for easy entry.
+- **Pedestrian island**: A place in the middle of a roadway (usually between directions of traffic) where pedestrians can safely wait.
+- **HAWK signal**: A special kind of traffic light that is generally off until a pedestrian presses a button to turn it on. These are used at crossing points that aren't at intersections.
+- **Spot improvement**: A custom spot improvement. Use the Notes field to describe what the improvement is.
 
 ## Phases & Dates
 This is for the nerdy planners out there. You can add as many phases as you would like if you intend for a phased implementation.

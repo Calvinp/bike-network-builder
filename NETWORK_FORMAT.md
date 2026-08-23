@@ -88,9 +88,10 @@ crossings, parking, greening. Files without a `spots` key are unaffected.
 spots:
   - type: speed_hump              # speed_hump | raised_crosswalk |
     status: proposed              #   raised_intersection | curb_extension |
-    jurisdiction: city            #   modal_filter | bollards |
-    phase: 1                      #   retractable_bollards | bike_parking |
-    location: [42.4251, -71.0662] #   street_trees | other
+    jurisdiction: city            #   pedestrian_island | hawk_signal |
+    phase: 1                      #   modal_filter | bollards |
+    location: [42.4251, -71.0662] #   retractable_bollards | bike_parking |
+                                  #   street_trees | other
   - name: Malden Square racks     # name and notes are optional
     type: bike_parking
     status: existing              # spots are existing or proposed (no funded)

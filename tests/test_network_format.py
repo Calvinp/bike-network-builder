@@ -261,6 +261,13 @@ def test_new_spot_types_are_valid():
         assert validate_network(net) == [], t
 
 
+def test_crossing_spot_types_are_valid():
+    net = _net()
+    for t in ("pedestrian_island", "hawk_signal"):
+        net.spots = [Spot(type=t, location=(42.42, -71.06))]
+        assert validate_network(net) == [], t
+
+
 def test_spots_carry_a_jurisdiction():
     net = _net()
     net.spots = [Spot(type="speed_hump", location=(42.42, -71.06))]

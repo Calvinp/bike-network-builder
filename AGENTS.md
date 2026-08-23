@@ -166,7 +166,16 @@ against the checked-in base network):
    recorded so a future cost model can bill the right body. The wire format is a SEPARATE
    `spots` FeatureCollection so every polyline-only path stays polyline-only. Drawn as
    glyph markers (`SPOT_GLYPHS`, mirrored across render_map.py / render_html.py / editor
-   JS / render_common.js) using the white-halo text idiom.
+   JS / render_common.js) using the white-halo text idiom. Adding a type means touching
+   both format modules AND all the glyph/label tables — tests now pin that the tables
+   cover `SPOT_TYPES` exactly (order included: it orders legend and dropdown) and that
+   editor/app.js's private copy matches render_common.js.
+   **Picking a glyph:** it is drawn BOLD, so check DejaVu Sans *Bold*, and render it
+   before believing it — `◫` is present in the font and still reads as two tofu boxes
+   at 9pt. Labels with acronyms go through `spot_label_midsentence` /
+   `spotLabelMidsentence` for the map popup's "Proposed …" line, which is why a HAWK
+   signal isn't a hawk signal there.
+   Crossing types (2026-08): `pedestrian_island` `▮`, `hawk_signal` `◉`.
 4. **Context layers.** Reference data — NOT part of network.yaml — in
    `data/layers/<id>.geojson` + a `layers.json` manifest, served by `/api/layers` and read
    as a static asset by the web app. The "Map layers" card lazy-fetches on first toggle and

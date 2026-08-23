@@ -38,6 +38,8 @@ export const SPOT_GLYPHS = {
   raised_crosswalk: "▬",
   raised_intersection: "◆",
   curb_extension: "◖",
+  pedestrian_island: "▮",        // a narrow refuge median
+  hawk_signal: "◉",              // a lit signal lens
   modal_filter: "⊘",             // no through motor traffic
   bollards: "‖",                 // a line of posts
   retractable_bollards: "⇕",     // posts that drop and rise
@@ -50,6 +52,8 @@ export const SPOT_LABELS = {
   raised_crosswalk: "Raised crosswalk",
   raised_intersection: "Raised intersection",
   curb_extension: "Curb extension",
+  pedestrian_island: "Pedestrian island",
+  hawk_signal: "HAWK signal",
   modal_filter: "Modal filter",
   bollards: "Bollards",
   retractable_bollards: "Retractable bollards",
@@ -62,6 +66,11 @@ export const SPOT_EXISTING_COLOR = "#707070";
 
 export const spotGlyph = (type) => SPOT_GLYPHS[type] || SPOT_GLYPHS.other;
 export const spotLabel = (type) => SPOT_LABELS[type] || String(type).replace(/_/g, " ");
+// A label as it reads inside a sentence ("Proposed raised crosswalk"),
+// lowercased word by word so acronyms keep their capitals — a HAWK signal is
+// not a hawk signal.
+export const spotLabelMidsentence = (type) => spotLabel(type).split(" ")
+  .map((w) => (w === w.toUpperCase() ? w : w.toLowerCase())).join(" ");
 export const spotColor = (s) => (s.status === "existing"
   ? SPOT_EXISTING_COLOR : SPOT_PROPOSED_COLOR);
 export const SINGLE_COLOR = "#0072B2";

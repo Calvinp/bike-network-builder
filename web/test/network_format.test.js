@@ -2,9 +2,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  makeNetwork, makePath, makePhase, makeSpot, parseNetwork, serializeNetwork,
-  supersededIds, validateNetwork,
+  SPOT_TYPES, makeNetwork, makePath, makePhase, makeSpot, parseNetwork,
+  serializeNetwork, supersededIds, validateNetwork,
 } from "../js/network_format.js";
+import {
+  SPOT_GLYPHS, SPOT_LABELS, spotLabelMidsentence,
+} from "../js/render_common.js";
 
 function net() {
   return makeNetwork({
@@ -239,6 +242,21 @@ test("the access-control spot types are valid", () => {
   }
 });
 
+test("the crossing spot types are valid", () => {
+  const n = net();
+  for (const type of ["pedestrian_island", "hawk_signal"]) {
+    n.spots = [makeSpot({ type, location: [42.42, -71.06] })];
+    assert.deepEqual(validateNetwork(n), [], type);
+  }
+});
+
+test("every spot type has a glyph and a label", () => {
+  // A type the tables don't know draws the catch-all dot and legends itself
+  // with a raw slug. Order is pinned too: it orders the legend rows.
+  assert.deepEqual(Object.keys(SPOT_GLYPHS), SPOT_TYPES);
+  assert.deepEqual(Object.keys(SPOT_LABELS), SPOT_TYPES);
+});
+
 test("spots carry a jurisdiction, defaulting to city", () => {
   const n = net();
   n.spots = [makeSpot({ type: "speed_hump", location: [42.42, -71.06] })];
@@ -258,4 +276,11 @@ test("spots written before jurisdiction existed default to city", () => {
   const n = parseNetwork(
     "spots:\n  - {kind: bike_parking, status: existing, location: [42.43, -71.06]}\n");
   assert.equal(n.spots[0].jurisdiction, "city");
+});
+
+test("acronyms survive the midsentence spot label", () => {
+  // The map popup says "Proposed <label>" — lowercasing the whole label
+  // would turn a HAWK signal into a hawk signal.
+  assert.equal(spotLabelMidsentence("raised_crosswalk"), "raised crosswalk");
+  assert.equal(spotLabelMidsentence("hawk_signal"), "HAWK signal");
 });

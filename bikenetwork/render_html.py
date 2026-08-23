@@ -17,7 +17,8 @@ from .network_format import BikePath, Network
 from .render_map import (EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR,
                          SPOT_EXISTING_COLOR, SPOT_GLYPHS, SPOT_LABELS,
                          SPOT_PROPOSED_COLOR, STATE_COLOR, TYPE_COLORS,
-                         TYPE_LABELS, _phase_color, path_color)
+                         TYPE_LABELS, _phase_color, path_color,
+                         spot_label_midsentence)
 
 Point = Tuple[float, float]
 
@@ -212,7 +213,8 @@ def _spot_marker(s) -> folium.Marker:
     html = (f'<div style="font-size:14px;font-weight:bold;color:{color};'
             f'line-height:16px;text-align:center;'
             f'text-shadow:0 0 2px #fff,0 0 3px #fff,0 0 4px #fff;">{glyph}</div>')
-    detail = label if s.status == "existing" else f"Proposed {label.lower()}"
+    detail = (label if s.status == "existing"
+              else f"Proposed {spot_label_midsentence(s.type)}")
     if s.status == "proposed" and s.phase is not None:
         detail += f" &middot; Phase {s.phase}"
     popup = folium.Popup(
