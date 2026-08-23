@@ -119,7 +119,8 @@ def spots_to_geojson(spots: List[Spot]) -> dict:
             "type": "Feature",
             "geometry": {"type": "Point",
                          "coordinates": [s.location[1], s.location[0]]},
-            "properties": {"name": s.name, "kind": s.kind, "status": s.status,
+            "properties": {"name": s.name, "type": s.type, "status": s.status,
+                           "jurisdiction": s.jurisdiction,
                            "phase": s.phase, "notes": s.notes},
         })
     return {"type": "FeatureCollection", "features": features}
@@ -143,7 +144,9 @@ def spots_from_geojson(fc: dict) -> List[Spot]:
             phase = None
         out.append(Spot(
             name=str(props.get("name", "") or ""),
-            kind=str(props.get("kind", "other") or "other"),
+            # `kind` is the pre-rename property name; accept it on read.
+            type=str(props.get("type", props.get("kind", "other")) or "other"),
+            jurisdiction=str(props.get("jurisdiction", "city") or "city"),
             status=str(props.get("status", "proposed") or "proposed"),
             phase=phase,
             location=(float(coords[1]), float(coords[0])),

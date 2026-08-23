@@ -74,7 +74,8 @@ fetch_layers.py             CLI (networked, untested): refresh data/layers/ refe
 network.yaml                EDITABLE SOURCE OF TRUTH for the editor
 corridors.yaml              seed network (street names, no geometry)
 NETWORK_FORMAT.md           the shared format spec (canonical copy)
-editor/                     index.html, app.js, style.css, help.md (Leaflet + Geoman)
+editor/                     index.html, app.js, style.css, help.html (Leaflet + Geoman)
+                            — the manual itself is web/help.md, served at /help.md
 data/                       malden_boundary / existing_infra / committed_infra .geojson,
                             osm_cache.json, base_network.yaml (fresh-user start),
                             street_graph.json (TRACKED here: the snap-to-road asset the
@@ -131,9 +132,11 @@ tests/                      incl. test_network_format, test_editor_api (Flask cl
   free-drawn while street clicks snap.
 - GOTCHA: never add decorator/plain LayerGroups to `networkGroup` — FeatureGroup.getBounds()
   throws on layers without getBounds and kills editor init; arrows live in `arrowsGroup`.
-- Help page at /help renders `editor/help.md`. **`help.md` is human-authored (Calvin writes
-  it) — do NOT edit it.** When you add a user-facing feature, list what needs covering in
-  your summary instead. The 2026-08 features below are not documented there yet.
+- **`web/help.md` is the ONE copy of the manual, and it is human-authored (Calvin writes
+  it) — do NOT edit it.** It has to live inside `web/` because that folder is vendored into
+  the MSS site as a self-contained app; the Flask editor serves that same file at `/help.md`
+  rather than keeping a second copy in step. When you add a user-facing feature, list what
+  needs covering in your summary instead of writing it yourself.
 
 ## Current state (2026-08)
 
@@ -156,11 +159,14 @@ against the checked-in base network):
    a view dropdown read as a bug to non-technical users.
    Exports gain cumulative `map-phase-N.png` per phase, `phases.gif`, and a slider in
    `map.html` (hand-injected; no folium time plugins — see the TextPath history above).
-3. **Spot infrastructure.** Optional top-level `spots:` (kinds in `SPOT_KINDS`, status
-   existing|proposed, optional phase, `location: [lat, lon]`). The wire format is a
-   SEPARATE `spots` FeatureCollection so every polyline-only path stays polyline-only.
-   Drawn as glyph markers (`SPOT_GLYPHS`, mirrored across render_map.py / render_html.py /
-   editor JS / render_common.js) using the white-halo text idiom.
+3. **Spot infrastructure.** Optional top-level `spots:` (`type` from `SPOT_TYPES`, status
+   existing|proposed, `jurisdiction` city|state, optional phase, `location: [lat, lon]`).
+   The field is `type` to match paths; `kind` is accepted on read for files written before
+   the rename, as `treatment` is for paths. Spots carry no cost today — `jurisdiction` is
+   recorded so a future cost model can bill the right body. The wire format is a SEPARATE
+   `spots` FeatureCollection so every polyline-only path stays polyline-only. Drawn as
+   glyph markers (`SPOT_GLYPHS`, mirrored across render_map.py / render_html.py / editor
+   JS / render_common.js) using the white-halo text idiom.
 4. **Context layers.** Reference data — NOT part of network.yaml — in
    `data/layers/<id>.geojson` + a `layers.json` manifest, served by `/api/layers` and read
    as a static asset by the web app. The "Map layers" card lazy-fetches on first toggle and
@@ -208,7 +214,7 @@ against the checked-in base network):
 
 ## Current state (2026-07)
 
-**Done:** everything above; 136 offline pytest tests green; the Overpass User-Agent uses
+**Done:** everything above; 141 offline pytest tests green; the Overpass User-Agent uses
 the MSS contact address (keep it that way — Overpass etiquette wants a reachable contact).
 
 **Done (2026-07): the static client-side port** — `web/` is a complete, framework-free
@@ -235,7 +241,7 @@ maldensafestreets.org; also servable from any static host). Key facts:
   graph — so after an edit the page can keep running the previous `app.js` and look
   like it ignored the change. If you serve `web/` some other way, disable caching
   there too or you will chase ghosts.
-- **Tests:** `cd web && node --test` — 117 offline tests mirroring the pytest suite.
+- **Tests:** `cd web && node --test` — 121 offline tests mirroring the pytest suite.
   Serialization parity is real: Python parses JS-written YAML with zero errors and
   identical fields/geometry; clip/summarize totals match Python to 4 decimals on the
   full network.

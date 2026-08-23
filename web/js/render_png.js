@@ -235,7 +235,7 @@ export async function renderPng(paths, net, {
   // ---- the network ------------------------------------------------------ //
   const seen = { phases: new Set(), types: new Set(),
                  existing: false, funded: false, state: false,
-                 spots: new Set((spots || []).map((s) => s.kind)),
+                 spots: new Set((spots || []).map((s) => s.type)),
                  boundary: Boolean(boundaryMerc.length) };
   // A path drawn together with the upgrade that replaces it is completely
   // covered by it, so only its chevron would still show — an arrow claiming
@@ -331,9 +331,9 @@ export async function renderPng(paths, net, {
     ctx.lineWidth = pt(2.5);
     ctx.lineJoin = "round";
     ctx.strokeStyle = "#ffffff";
-    ctx.strokeText(spotGlyph(s.kind), x, y);
+    ctx.strokeText(spotGlyph(s.type), x, y);
     ctx.fillStyle = spotColor(s);
-    ctx.fillText(spotGlyph(s.kind), x, y);
+    ctx.fillText(spotGlyph(s.type), x, y);
     ctx.restore();
     spotPts.push({ mx, my });
   }

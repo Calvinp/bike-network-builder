@@ -178,14 +178,14 @@ def test_superseded_ids():
 def test_spots_roundtrip():
     net = _net()
     net.spots = [
-        Spot(name="Oak Grove racks", kind="bike_parking", status="existing",
+        Spot(name="Oak Grove racks", type="bike_parking", status="existing",
              location=(42.43, -71.06), notes="12 spaces"),
-        Spot(kind="speed_hump", phase=1, location=(42.421234567, -71.07)),
+        Spot(type="speed_hump", phase=1, location=(42.421234567, -71.07)),
     ]
     out = parse_network(serialize_network(net))
     assert len(out.spots) == 2
     a, b = out.spots
-    assert a.name == "Oak Grove racks" and a.kind == "bike_parking"
+    assert a.name == "Oak Grove racks" and a.type == "bike_parking"
     assert a.status == "existing" and a.notes == "12 spaces"
     assert b.status == "proposed" and b.phase == 1     # status defaults
     assert b.location == (42.421235, -71.07)           # 6-decimal rounding
@@ -198,11 +198,11 @@ def test_no_spots_serializes_without_spots_key():
 
 
 @pytest.mark.parametrize("spot,needle", [
-    (Spot(kind="teleporter", location=(42.42, -71.07)), "kind"),
-    (Spot(kind="speed_hump"), "location"),
-    (Spot(kind="speed_hump", location=(442.0, -71.07)), "out of range"),
-    (Spot(kind="speed_hump", status="dreamed", location=(42.42, -71.07)), "status"),
-    (Spot(kind="speed_hump", phase=9, location=(42.42, -71.07)), "not declared"),
+    (Spot(type="teleporter", location=(42.42, -71.07)), "type"),
+    (Spot(type="speed_hump"), "location"),
+    (Spot(type="speed_hump", location=(442.0, -71.07)), "out of range"),
+    (Spot(type="speed_hump", status="dreamed", location=(42.42, -71.07)), "status"),
+    (Spot(type="speed_hump", phase=9, location=(42.42, -71.07)), "not declared"),
 ])
 def test_spot_validation(spot, needle):
     net = _net()
@@ -234,3 +234,52 @@ def test_checked_in_network_survives_a_resave_unchanged():
     doc = yaml.safe_load(resaved)
     assert "spots" not in doc
     assert all("id" not in p and "upgrades" not in p for p in doc["paths"])
+
+
+def test_spot_type_replaces_kind_and_kind_still_parses():
+    """`type` matches what paths call the same idea. Files written before the
+    rename say `kind:`, so it stays readable — the same courtesy the format
+    already extends to `treatment` on paths."""
+    net = _net()
+    net.spots = [Spot(name="Racks", type="bike_parking", status="existing",
+                      location=(42.43, -71.06))]
+    text = serialize_network(net)
+    assert "type: bike_parking" in text
+    assert "kind:" not in text
+
+    legacy = parse_network("""
+spots:
+  - {type: speed_hump, status: proposed, location: [42.42, -71.06]}
+""")
+    assert legacy.spots[0].type == "speed_hump"
+
+
+def test_new_spot_types_are_valid():
+    net = _net()
+    for t in ("modal_filter", "bollards", "retractable_bollards"):
+        net.spots = [Spot(type=t, location=(42.42, -71.06))]
+        assert validate_network(net) == [], t
+
+
+def test_spots_carry_a_jurisdiction():
+    net = _net()
+    net.spots = [Spot(type="speed_hump", location=(42.42, -71.06))]
+    assert net.spots[0].jurisdiction == "city"          # sensible default
+    out = parse_network(serialize_network(net))
+    assert out.spots[0].jurisdiction == "city"
+
+    net.spots[0].jurisdiction = "state"
+    out = parse_network(serialize_network(net))
+    assert out.spots[0].jurisdiction == "state"
+    assert validate_network(out) == []
+
+    net.spots[0].jurisdiction = "county"
+    assert any("jurisdiction" in e for e in validate_network(net))
+
+
+def test_spots_written_before_jurisdiction_existed_default_to_city():
+    net = parse_network("""
+spots:
+  - {type: bike_parking, status: existing, location: [42.43, -71.06]}
+""")
+    assert net.spots[0].jurisdiction == "city"

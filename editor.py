@@ -27,7 +27,7 @@ from bikenetwork.boundary import build_polygon, clip_polyline_latlon
 from bikenetwork.costs import COST_PER_MILE
 from bikenetwork.geojson import (paths_from_geojson, paths_to_geojson,
                                  spots_from_geojson, spots_to_geojson)
-from bikenetwork.network_format import (JURISDICTIONS, PATH_TYPES, SPOT_KINDS,
+from bikenetwork.network_format import (JURISDICTIONS, PATH_TYPES, SPOT_TYPES,
                                         STATUSES, Network, PhaseDef,
                                         parse_network, serialize_network,
                                         validate_network)
@@ -131,8 +131,19 @@ def index():
 
 @app.route("/help")
 def help_page():
-    """Renders editor/help.md — the user-facing manual — as a web page."""
+    """Renders the user-facing manual as a web page (see /help.md)."""
     return send_from_directory(app.static_folder, "help.html")
+
+
+@app.route("/help.md")
+def help_markdown():
+    """The manual lives in ONE place: web/help.md.
+
+    It has to sit inside web/ because that folder is vendored into the MSS
+    website as a self-contained app, so the static editor can only fetch a
+    file it ships. Rather than keep a second copy here in step by hand, the
+    desktop editor reads that same file."""
+    return send_from_directory(ROOT / "web", "help.md", mimetype="text/markdown")
 
 
 @app.route("/api/state")
@@ -147,7 +158,7 @@ def api_state():
             "types": list(PATH_TYPES),
             "statuses": list(STATUSES),
             "jurisdictions": list(JURISDICTIONS),
-            "spot_kinds": list(SPOT_KINDS),
+            "spot_types": list(SPOT_TYPES),
             "color_modes": list(COLOR_MODES),
             # Live cost estimation happens client-side from these rates
             # (adjust them in bikenetwork/costs.py).

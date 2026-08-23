@@ -22,12 +22,20 @@ export const STATUSES = ["proposed", "funded", "existing"];
 export const JURISDICTIONS = ["city", "state"];
 
 // Point ("spot") improvements — single-location infrastructure that isn't a
-// path: traffic calming, crossings, parking, greening.
-export const SPOT_KINDS = [
+// path: traffic calming, access control, crossings, parking, greening. The
+// field is `type`, matching what a path calls the same idea; files written
+// before the rename say `kind` and still parse.
+export const SPOT_TYPES = [
+  // Traffic calming
   "speed_hump",
   "raised_crosswalk",
   "raised_intersection",
   "curb_extension",
+  // Access control — keeps motor traffic out while bikes pass through
+  "modal_filter",
+  "bollards",
+  "retractable_bollards",   // drop for deliveries / emergency access
+  // Amenities
   "bike_parking",
   "street_trees",
   "other",
@@ -69,8 +77,11 @@ export function makePath(over = {}) {
 export function makeSpot(over = {}) {
   return {
     name: "",
-    kind: "other",
+    type: "other",
     status: "proposed",
+    // Who would build it — the City, or MassDOT on a state road. Mirrors a
+    // path so the cost of a spot can be attributed to the right body.
+    jurisdiction: "city",
     // Optional even for proposed spots — small interventions often aren't
     // tied to a network phase.
     phase: null,
@@ -192,8 +203,10 @@ export function networkFromDict(raw) {
       && loc.every((v) => typeof v === "number" && Number.isFinite(v));
     spots.push(makeSpot({
       name: str(item.name).trim(),
-      kind: str(item.kind, "other").trim() || "other",
+      // `kind` is the pre-rename name for `type`; accept it on read.
+      type: str(item.type ?? item.kind, "other").trim() || "other",
       status: str(item.status, "proposed").trim() || "proposed",
+      jurisdiction: str(item.jurisdiction, "city").trim() || "city",
       phase: toInt(item.phase, null),
       location: ok ? [Number(loc[0]), Number(loc[1])] : null,
       notes: str(item.notes).trim(),
@@ -327,9 +340,13 @@ export function validateNetwork(net) {
 
   (net.spots || []).forEach((spot, i) => {
     const label = `spot #${i + 1}` + (spot.name ? ` (${spot.name})` : "");
-    if (!SPOT_KINDS.includes(spot.kind)) {
-      errors.push(`${label}: unknown kind ${repr(spot.kind)}; `
-        + `must be one of ${SPOT_KINDS.join(", ")}.`);
+    if (!SPOT_TYPES.includes(spot.type)) {
+      errors.push(`${label}: unknown type ${repr(spot.type)}; `
+        + `must be one of ${SPOT_TYPES.join(", ")}.`);
+    }
+    if (!JURISDICTIONS.includes(spot.jurisdiction)) {
+      errors.push(`${label}: unknown jurisdiction ${repr(spot.jurisdiction)}; `
+        + `must be one of ${JURISDICTIONS.join(", ")}.`);
     }
     if (!SPOT_STATUSES.includes(spot.status)) {
       errors.push(`${label}: unknown status ${repr(spot.status)}; `
@@ -408,8 +425,9 @@ function pathDict(p, token) {
 function spotDict(s, token) {
   const out = {};
   if (s.name) out.name = s.name;
-  out.kind = s.kind;
+  out.type = s.type;
   out.status = s.status;
+  out.jurisdiction = s.jurisdiction;
   if (s.phase !== null && s.phase !== undefined) out.phase = s.phase;
   if (s.location !== null && s.location !== undefined) out.location = token;
   if (s.notes) out.notes = s.notes;

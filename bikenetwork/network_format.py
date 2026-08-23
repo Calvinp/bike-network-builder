@@ -44,12 +44,20 @@ JURISDICTIONS = (
 )
 
 # Point ("spot") improvements — single-location infrastructure that isn't a
-# path: traffic calming, crossings, parking, greening.
-SPOT_KINDS = (
+# path: traffic calming, access control, crossings, parking, greening. The
+# field is `type`, matching what a path calls the same idea; files written
+# before the rename say `kind` and still parse.
+SPOT_TYPES = (
+    # Traffic calming
     "speed_hump",
     "raised_crosswalk",
     "raised_intersection",
     "curb_extension",
+    # Access control — keeps motor traffic out while bikes pass through
+    "modal_filter",
+    "bollards",
+    "retractable_bollards",   # drop for deliveries / emergency access
+    # Amenities
     "bike_parking",
     "street_trees",
     "other",
@@ -105,8 +113,11 @@ class BikePath:
 @dataclass
 class Spot:
     name: str = ""
-    kind: str = "other"
+    type: str = "other"
     status: str = "proposed"
+    # Who would build it — the City, or MassDOT on a state road. Mirrors
+    # BikePath so the cost of a spot can be attributed to the right body.
+    jurisdiction: str = "city"
     # Optional even for proposed spots — small interventions often aren't
     # tied to a network phase.
     phase: Optional[int] = None
@@ -234,8 +245,10 @@ def network_from_dict(raw: dict) -> Network:
             location = None
         spots.append(Spot(
             name=str(item.get("name", "") or "").strip(),
-            kind=str(item.get("kind", "other") or "other").strip(),
+            # `kind` is the pre-rename name for `type`; accept it on read.
+            type=str(item.get("type", item.get("kind", "other")) or "other").strip(),
             status=str(item.get("status", "proposed") or "proposed").strip(),
+            jurisdiction=str(item.get("jurisdiction", "city") or "city").strip(),
             phase=_to_int(item.get("phase"), default=None),
             location=location,
             notes=str(item.get("notes", "") or "").strip(),
@@ -343,9 +356,12 @@ def validate_network(net: Network) -> List[str]:
 
     for i, spot in enumerate(net.spots):
         label = f"spot #{i + 1}" + (f" ({spot.name})" if spot.name else "")
-        if spot.kind not in SPOT_KINDS:
-            errors.append(f"{label}: unknown kind {spot.kind!r}; "
-                          f"must be one of {', '.join(SPOT_KINDS)}.")
+        if spot.type not in SPOT_TYPES:
+            errors.append(f"{label}: unknown type {spot.type!r}; "
+                          f"must be one of {', '.join(SPOT_TYPES)}.")
+        if spot.jurisdiction not in JURISDICTIONS:
+            errors.append(f"{label}: unknown jurisdiction {spot.jurisdiction!r}; "
+                          f"must be one of {', '.join(JURISDICTIONS)}.")
         if spot.status not in SPOT_STATUSES:
             errors.append(f"{label}: unknown status {spot.status!r}; "
                           f"must be one of {', '.join(SPOT_STATUSES)}.")
@@ -395,8 +411,9 @@ def _spot_dict(s: Spot) -> dict:
     out: dict = {}
     if s.name:
         out["name"] = s.name
-    out["kind"] = s.kind
+    out["type"] = s.type
     out["status"] = s.status
+    out["jurisdiction"] = s.jurisdiction
     if s.phase is not None:
         out["phase"] = s.phase
     if s.location is not None:

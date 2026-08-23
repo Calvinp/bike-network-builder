@@ -117,7 +117,7 @@ def test_export_yaml_download(client, tmp_path):
 
 SPOTS_YAML = VALID_YAML + """
 spots:
-  - {kind: speed_hump, status: proposed, phase: 1, location: [42.425, -71.065]}
+  - {type: speed_hump, status: proposed, phase: 1, location: [42.425, -71.065]}
   - {name: Square racks, kind: bike_parking, status: existing, location: [42.426, -71.066]}
 """
 
@@ -126,14 +126,14 @@ def test_state_serves_and_saves_spots(client, tmp_path):
     (tmp_path / "network.yaml").write_text(SPOTS_YAML, encoding="utf-8")
     state = client.get("/api/state").get_json()
     assert len(state["spots"]["features"]) == 2
-    assert "spot_kinds" in state["options"]
+    assert "spot_types" in state["options"]
     # Edit a spot and save; it persists to network.yaml.
-    state["spots"]["features"][0]["properties"]["kind"] = "raised_crosswalk"
+    state["spots"]["features"][0]["properties"]["type"] = "raised_crosswalk"
     payload = {"network": state["network"], "spots": state["spots"],
                "config": state["config"]}
     assert client.post("/api/state", json=payload).get_json()["ok"]
     net = parse_network((tmp_path / "network.yaml").read_text(encoding="utf-8"))
-    assert net.spots[0].kind == "raised_crosswalk"
+    assert net.spots[0].type == "raised_crosswalk"
 
 
 def test_save_without_spots_key_preserves_spots(client, tmp_path):
@@ -233,3 +233,22 @@ def test_regenerate_renders_outputs(client, tmp_path):
     assert body["summary"]["total_build_miles"] > 0
     for name in ("map.png", "map.html", "network.geojson"):
         assert (tmp_path / "output" / name).exists(), name
+
+
+def test_help_is_served_from_a_single_copy(client):
+    """The manual lives only in web/help.md — it must ship inside web/ for the
+    vendored static app, and a second copy under editor/ would drift."""
+    import os
+    root = os.path.dirname(os.path.abspath(editor.__file__))
+    assert not os.path.exists(os.path.join(root, "editor", "help.md")), (
+        "a second help.md reappeared under editor/ — the desktop editor reads "
+        "web/help.md via /help.md, so there is nothing to keep in step")
+
+    r = client.get("/help.md")
+    assert r.status_code == 200
+    with open(os.path.join(root, "web", "help.md"), encoding="utf-8") as f:
+        assert r.get_data(as_text=True) == f.read()
+
+    # The help page itself must fetch that route, not a path under editor/.
+    page = client.get("/help").get_data(as_text=True)
+    assert 'fetch("/help.md")' in page

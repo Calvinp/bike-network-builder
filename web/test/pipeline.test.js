@@ -106,11 +106,11 @@ test("pathsAsOfPhase is cumulative and hides superseded paths", () => {
 });
 
 test("spotsAsOfPhase shows existing always and proposed on schedule", () => {
-  const built = makeSpot({ kind: "bike_parking", status: "existing",
+  const built = makeSpot({ type: "bike_parking", status: "existing",
                            location: [42.42, -71.06] });
-  const later = makeSpot({ kind: "speed_hump", status: "proposed", phase: 2,
+  const later = makeSpot({ type: "speed_hump", status: "proposed", phase: 2,
                            location: [42.42, -71.06] });
-  const anytime = makeSpot({ kind: "raised_crosswalk", status: "proposed",
+  const anytime = makeSpot({ type: "raised_crosswalk", status: "proposed",
                              location: [42.42, -71.06] });
   const spots = [built, later, anytime];
   assert.deepEqual(spotsAsOfPhase(spots, 0), [built]);
@@ -119,7 +119,7 @@ test("spotsAsOfPhase shows existing always and proposed on schedule", () => {
 });
 
 test("clipSpots drops spots outside the city", () => {
-  const inside = makeSpot({ kind: "speed_hump", location: [42.42, -71.06] });
-  const outside = makeSpot({ kind: "speed_hump", location: [42.60, -71.06] });
+  const inside = makeSpot({ type: "speed_hump", location: [42.42, -71.06] });
+  const outside = makeSpot({ type: "speed_hump", location: [42.60, -71.06] });
   assert.deepEqual(clipSpots([inside, outside], BOUNDARY_RING), [inside]);
 });

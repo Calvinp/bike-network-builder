@@ -148,10 +148,10 @@ def test_render_phase_exports_writes_pngs_and_gif(tmp_path):
 
 
 def test_spots_as_of_phase():
-    built = Spot(kind="bike_parking", status="existing", location=(42.42, -71.06))
-    later = Spot(kind="speed_hump", status="proposed", phase=2,
+    built = Spot(type="bike_parking", status="existing", location=(42.42, -71.06))
+    later = Spot(type="speed_hump", status="proposed", phase=2,
                  location=(42.42, -71.06))
-    anytime = Spot(kind="raised_crosswalk", status="proposed",
+    anytime = Spot(type="raised_crosswalk", status="proposed",
                    location=(42.42, -71.06))  # proposed, no phase
     spots = [built, later, anytime]
     assert spots_as_of_phase(spots, 0) == [built]
@@ -162,9 +162,9 @@ def test_spots_as_of_phase():
 def test_render_all_draws_and_clips_spots(tmp_path):
     net = _net([_p("A", 1)])
     net.spots = [
-        Spot(name="Square hump", kind="speed_hump", status="proposed", phase=1,
+        Spot(name="Square hump", type="speed_hump", status="proposed", phase=1,
              location=(42.42, -71.06)),
-        Spot(kind="bike_parking", status="existing",
+        Spot(type="bike_parking", status="existing",
              location=(42.60, -71.06)),  # far outside the boundary
     ]
     render_all(net, BOUNDARY, tmp_path, basemap=False)
@@ -172,7 +172,7 @@ def test_render_all_draws_and_clips_spots(tmp_path):
     assert "spot-glyph" in html and "Spot improvements" in html
     fc = json.loads((tmp_path / "network.geojson").read_text(encoding="utf-8"))
     points = [f for f in fc["features"] if f["geometry"]["type"] == "Point"]
-    assert [f["properties"]["kind"] for f in points] == ["speed_hump"]
+    assert [f["properties"]["type"] for f in points] == ["speed_hump"]
     assert net.spots[0].name == "Square hump"  # source net not mutated
     assert (tmp_path / "map.png").exists()
 

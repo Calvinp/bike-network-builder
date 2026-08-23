@@ -202,7 +202,7 @@ function clearFeatures(){
 /* ---------- spot improvements (point features) ---------- */
 function spotIcon(p){
   const color = p.status==="existing" ? SPOT_EXISTING : SPOT_PROPOSED;
-  const glyph = SPOT_GLYPHS[p.kind] || SPOT_GLYPHS.other;
+  const glyph = SPOT_GLYPHS[p.type] || SPOT_GLYPHS.other;
   return L.divIcon({className:"spot-glyph", iconSize:[18,18], iconAnchor:[9,9],
     html:`<div style="color:${color}">${glyph}</div>`});
 }
@@ -227,7 +227,8 @@ function clearSpots(){
   spots=[]; selectedSpot=null;
 }
 function defaultSpotProps(){
-  return {name:"", kind:"speed_hump", status:"proposed", phase:null, notes:""};
+  return {name:"", type:"speed_hump", status:"proposed", jurisdiction:"city",
+          phase:null, notes:""};
 }
 function selectSpot(s){
   if(selected){ const prev=selected; selected=null; restyle(prev); }
@@ -238,16 +239,17 @@ function selectSpot(s){
   fillSpotForm(s);
   if(isMobile() && !document.querySelector(".sidebar").classList.contains("open")){
     document.getElementById("peek-name").textContent =
-      s.props.name || SPOT_LABELS[s.props.kind] || "Spot";
+      s.props.name || SPOT_LABELS[s.props.type] || "Spot";
     document.getElementById("peek").classList.add("show");
   }
 }
 function fillSpotForm(s){
   const p=s.props;
   document.getElementById("sel-pill").textContent =
-    p.name || SPOT_LABELS[p.kind] || "";
-  opt(document.getElementById("s-kind"), options.spot_kinds||Object.keys(SPOT_GLYPHS),
-      p.kind, v=>SPOT_LABELS[v]||v.replace(/_/g," "));
+    p.name || SPOT_LABELS[p.type] || "";
+  opt(document.getElementById("s-type"), options.spot_types||Object.keys(SPOT_GLYPHS),
+      p.type, v=>SPOT_LABELS[v]||v.replace(/_/g," "));
+  opt(document.getElementById("s-juris"), options.jurisdictions, p.jurisdiction);
   document.getElementById("s-name").value=p.name||"";
   document.getElementById("s-status").value=p.status||"proposed";
   document.getElementById("s-notes").value=p.notes||"";
@@ -280,16 +282,16 @@ function bindSpotForm(){
         if(selectedSpot.props.status!=="proposed") selectedSpot.props.phase=null;
         fillSpotPhaseSelect(selectedSpot);
       }
-      if(key==="kind"||key==="status")
+      if(key==="type"||key==="status")
         selectedSpot.marker.setIcon(spotIcon(selectedSpot.props));
-      if(key==="name"||key==="kind")
+      if(key==="name"||key==="type")
         document.getElementById("sel-pill").textContent =
-          selectedSpot.props.name || SPOT_LABELS[selectedSpot.props.kind] || "";
+          selectedSpot.props.name || SPOT_LABELS[selectedSpot.props.type] || "";
       markDirty(); recomputeTotals();
     });
   };
   set("s-name","name"); set("s-notes","notes"); set("s-status","status");
-  set("s-kind","kind");
+  set("s-type","type"); set("s-juris","jurisdiction");
   set("s-phase","phase", v=> v==="" ? null : parseInt(v,10));
   document.getElementById("btn-spot-delete").addEventListener("click", ()=>{
     if(selectedSpot && confirm("Delete this spot?")) removeSpot(selectedSpot);

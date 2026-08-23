@@ -84,6 +84,9 @@ SPOT_GLYPHS = {
     "raised_crosswalk": "▬",
     "raised_intersection": "◆",
     "curb_extension": "◖",
+    "modal_filter": "⊘",            # no through motor traffic
+    "bollards": "‖",                # a line of posts
+    "retractable_bollards": "⇕",    # posts that drop and rise
     "bike_parking": "P",
     "street_trees": "T",
     "other": "●",
@@ -93,6 +96,9 @@ SPOT_LABELS = {
     "raised_crosswalk": "Raised crosswalk",
     "raised_intersection": "Raised intersection",
     "curb_extension": "Curb extension",
+    "modal_filter": "Modal filter",
+    "bollards": "Bollards",
+    "retractable_bollards": "Retractable bollards",
     "bike_parking": "Bike parking",
     "street_trees": "Street trees",
     "other": "Spot improvement",
@@ -351,7 +357,7 @@ def _draw_spots(ax, spots) -> list:
             continue
         x, y = lonlat_to_mercator(*s.location)
         color = SPOT_EXISTING_COLOR if s.status == "existing" else SPOT_PROPOSED_COLOR
-        ax.text(x, y, SPOT_GLYPHS.get(s.kind, SPOT_GLYPHS["other"]),
+        ax.text(x, y, SPOT_GLYPHS.get(s.type, SPOT_GLYPHS["other"]),
                 fontsize=9, color=color, ha="center", va="center", zorder=7,
                 fontweight="bold",
                 path_effects=[patheffects.withStroke(linewidth=2.5,
@@ -363,7 +369,7 @@ def _draw_spots(ax, spots) -> list:
 def _spot_legend_handles(spots) -> list:
     """One legend row per spot kind present. The glyph lives in the label text
     (legend markers can't render arbitrary Unicode reliably)."""
-    kinds = {s.kind for s in spots}
+    kinds = {s.type for s in spots}
     handles = []
     for kind in [k for k in SPOT_GLYPHS if k in kinds]:
         handles.append(Line2D([], [], linestyle="none",

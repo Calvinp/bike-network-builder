@@ -61,14 +61,14 @@ test("buildArtifacts rejects unknown color mode", async () => {
 test("spots are clipped and ride along in the exported geojson", async () => {
   const n = net([p("A", [[42.41, -71.07], [42.42, -71.06]])]);
   n.spots = [
-    makeSpot({ name: "In town", kind: "speed_hump", phase: 1,
+    makeSpot({ name: "In town", type: "speed_hump", phase: 1,
                location: [42.42, -71.06] }),
-    makeSpot({ kind: "bike_parking", status: "existing",
+    makeSpot({ type: "bike_parking", status: "existing",
                location: [42.60, -71.06] }),   // far outside the boundary
   ];
   const { geojson, html } = await buildArtifacts(n, BOUNDARY_RINGS, CLIP_RING);
   const points = geojson.features.filter((f) => f.geometry.type === "Point");
-  assert.deepEqual(points.map((f) => f.properties.kind), ["speed_hump"]);
+  assert.deepEqual(points.map((f) => f.properties.type), ["speed_hump"]);
   assert.match(html, /Spot improvements/);
   assert.match(html, /spot-glyph/);
 });

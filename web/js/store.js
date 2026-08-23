@@ -7,7 +7,7 @@ import {
   pathsFromGeojson, pathsToGeojson, spotsFromGeojson, spotsToGeojson,
 } from "./geojson.js";
 import {
-  JURISDICTIONS, PATH_TYPES, SPOT_KINDS, STATUSES, makeNetwork, makePhase,
+  JURISDICTIONS, PATH_TYPES, SPOT_TYPES, STATUSES, makeNetwork, makePhase,
   parseNetwork, serializeNetwork, validateNetwork,
 } from "./network_format.js";
 import { COLOR_MODES } from "./render_common.js";
@@ -119,7 +119,7 @@ export class Store {
         types: [...PATH_TYPES],
         statuses: [...STATUSES],
         jurisdictions: [...JURISDICTIONS],
-        spot_kinds: [...SPOT_KINDS],
+        spot_types: [...SPOT_TYPES],
         color_modes: [...COLOR_MODES],
         cost_per_mile: Object.fromEntries(
           Object.entries(COST_PER_MILE).map(([k, v]) => [k, [...v]])),

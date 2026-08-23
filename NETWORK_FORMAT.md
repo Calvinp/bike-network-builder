@@ -86,15 +86,24 @@ crossings, parking, greening. Files without a `spots` key are unaffected.
 
 ```yaml
 spots:
-  - kind: speed_hump              # speed_hump | raised_crosswalk |
+  - type: speed_hump              # speed_hump | raised_crosswalk |
     status: proposed              #   raised_intersection | curb_extension |
-    phase: 1                      #   bike_parking | street_trees | other
-    location: [42.4251, -71.0662] # one [lat, lon] point
+    jurisdiction: city            #   modal_filter | bollards |
+    phase: 1                      #   retractable_bollards | bike_parking |
+    location: [42.4251, -71.0662] #   street_trees | other
   - name: Malden Square racks     # name and notes are optional
-    kind: bike_parking
+    type: bike_parking
     status: existing              # spots are existing or proposed (no funded)
-    location: [42.4262, -71.0664]
+    jurisdiction: city            # city | state — who would build it
+    location: [42.4262, -71.0664] # one [lat, lon] point
 ```
+
+`type` is what a path calls the same idea. Files written before that rename
+use `kind`, which still parses — the same courtesy `treatment` gets on paths.
+
+`jurisdiction` says who would build the spot, so its cost can be attributed to
+the City or to MassDOT; it defaults to `city`, and spots written before the
+field existed read as `city`.
 
 `phase` is optional even for proposed spots — small interventions often aren't
 tied to a network phase; a proposed spot with no phase shows in every phased

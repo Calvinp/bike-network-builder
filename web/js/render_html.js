@@ -63,7 +63,7 @@ function legendHtml(net, colorMode, paths, spots, bottomPx) {
                 "Existing infrastructure", true);
   }
   // One row per spot kind present; the glyph lives in the label text.
-  const kinds = [...new Set((spots || []).map((s) => s.kind))];
+  const kinds = [...new Set((spots || []).map((s) => s.type))];
   for (const kind of kinds) {
     rows += `<div><span style="width:14px;display:inline-block;margin-right:6px;`
       + `text-align:center;font-weight:bold;">${spotGlyph(kind)}</span>`
@@ -157,12 +157,12 @@ export function renderHtml(paths, net, {
     spots: (spots || []).filter((s) => s.location).map((s) => ({
       lat: s.location[0],
       lon: s.location[1],
-      glyph: spotGlyph(s.kind),
+      glyph: spotGlyph(s.type),
       color: spotColor(s),
-      tooltip: escapeHtml(s.name || spotLabel(s.kind)),
-      popup: `<b>${escapeHtml(s.name || spotLabel(s.kind))}</b><br>`
-        + (s.status === "existing" ? escapeHtml(spotLabel(s.kind))
-           : `Proposed ${escapeHtml(spotLabel(s.kind).toLowerCase())}`)
+      tooltip: escapeHtml(s.name || spotLabel(s.type)),
+      popup: `<b>${escapeHtml(s.name || spotLabel(s.type))}</b><br>`
+        + (s.status === "existing" ? escapeHtml(spotLabel(s.type))
+           : `Proposed ${escapeHtml(spotLabel(s.type).toLowerCase())}`)
         + (s.status === "proposed" && s.phase !== null && s.phase !== undefined
            ? ` &middot; Phase ${s.phase}` : "")
         + (s.notes ? `<br><i>${escapeHtml(s.notes)}</i>` : ""),

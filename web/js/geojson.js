@@ -103,7 +103,8 @@ export function spotsToGeojson(spots) {
     features.push({
       type: "Feature",
       geometry: { type: "Point", coordinates: [s.location[1], s.location[0]] },
-      properties: { name: s.name, kind: s.kind, status: s.status,
+      properties: { name: s.name, type: s.type, status: s.status,
+                    jurisdiction: s.jurisdiction,
                     phase: s.phase, notes: s.notes },
     });
   }
@@ -129,7 +130,9 @@ export function spotsFromGeojson(fc) {
     }
     out.push(makeSpot({
       name: String(props.name || ""),
-      kind: String(props.kind || "other"),
+      // `kind` is the pre-rename property name; accept it on read.
+      type: String(props.type || props.kind || "other"),
+      jurisdiction: String(props.jurisdiction || "city"),
       status: String(props.status || "proposed"),
       phase,
       location: [Number(coords[1]), Number(coords[0])],

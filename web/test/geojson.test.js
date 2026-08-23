@@ -94,16 +94,16 @@ test("upgrade fields survive the wire round-trip", () => {
 
 test("spots round-trip as Point features", () => {
   const spots = [
-    makeSpot({ name: "Square racks", kind: "bike_parking", status: "existing",
+    makeSpot({ name: "Square racks", type: "bike_parking", status: "existing",
                location: [42.43, -71.06], notes: "12 spaces" }),
-    makeSpot({ kind: "speed_hump", phase: 2, location: [42.42, -71.07] }),
+    makeSpot({ type: "speed_hump", phase: 2, location: [42.42, -71.07] }),
   ];
   const fc = spotsToGeojson(spots);
   // GeoJSON coordinate order is [lon, lat].
   assert.deepEqual(fc.features[0].geometry,
                    { type: "Point", coordinates: [-71.06, 42.43] });
   const out = spotsFromGeojson(fc);
-  assert.deepEqual(out.map((s) => s.kind), ["bike_parking", "speed_hump"]);
+  assert.deepEqual(out.map((s) => s.type), ["bike_parking", "speed_hump"]);
   assert.equal(out[0].status, "existing");
   assert.equal(out[1].phase, 2);
   assert.deepEqual(out[1].location, [42.42, -71.07]);
@@ -111,9 +111,9 @@ test("spots round-trip as Point features", () => {
 
 test("spotsFromGeojson skips non-point and degenerate features", () => {
   const fc = { type: "FeatureCollection", features: [
-    { type: "Feature", properties: { kind: "speed_hump" },
+    { type: "Feature", properties: { type: "speed_hump" },
       geometry: { type: "LineString", coordinates: [[-71, 42.4], [-71.1, 42.5]] } },
-    { type: "Feature", properties: { kind: "speed_hump" },
+    { type: "Feature", properties: { type: "speed_hump" },
       geometry: { type: "Point", coordinates: [] } },
   ] };
   assert.deepEqual(spotsFromGeojson(fc), []);

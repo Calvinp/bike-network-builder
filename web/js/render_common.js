@@ -38,6 +38,9 @@ export const SPOT_GLYPHS = {
   raised_crosswalk: "▬",
   raised_intersection: "◆",
   curb_extension: "◖",
+  modal_filter: "⊘",             // no through motor traffic
+  bollards: "‖",                 // a line of posts
+  retractable_bollards: "⇕",     // posts that drop and rise
   bike_parking: "P",
   street_trees: "T",
   other: "●",
@@ -47,6 +50,9 @@ export const SPOT_LABELS = {
   raised_crosswalk: "Raised crosswalk",
   raised_intersection: "Raised intersection",
   curb_extension: "Curb extension",
+  modal_filter: "Modal filter",
+  bollards: "Bollards",
+  retractable_bollards: "Retractable bollards",
   bike_parking: "Bike parking",
   street_trees: "Street trees",
   other: "Spot improvement",
@@ -54,8 +60,8 @@ export const SPOT_LABELS = {
 export const SPOT_PROPOSED_COLOR = "#1a1a1a";
 export const SPOT_EXISTING_COLOR = "#707070";
 
-export const spotGlyph = (kind) => SPOT_GLYPHS[kind] || SPOT_GLYPHS.other;
-export const spotLabel = (kind) => SPOT_LABELS[kind] || String(kind).replace(/_/g, " ");
+export const spotGlyph = (type) => SPOT_GLYPHS[type] || SPOT_GLYPHS.other;
+export const spotLabel = (type) => SPOT_LABELS[type] || String(type).replace(/_/g, " ");
 export const spotColor = (s) => (s.status === "existing"
   ? SPOT_EXISTING_COLOR : SPOT_PROPOSED_COLOR);
 export const SINGLE_COLOR = "#0072B2";

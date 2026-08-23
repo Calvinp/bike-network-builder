@@ -207,8 +207,8 @@ def _spot_marker(s) -> folium.Marker:
     """A spot-kind glyph as a DivIcon marker — dark glyph, white halo (same
     trick as the direction chevrons; no plugins)."""
     color = SPOT_EXISTING_COLOR if s.status == "existing" else SPOT_PROPOSED_COLOR
-    glyph = SPOT_GLYPHS.get(s.kind, SPOT_GLYPHS["other"])
-    label = SPOT_LABELS.get(s.kind, s.kind.replace("_", " "))
+    glyph = SPOT_GLYPHS.get(s.type, SPOT_GLYPHS["other"])
+    label = SPOT_LABELS.get(s.type, s.type.replace("_", " "))
     html = (f'<div style="font-size:14px;font-weight:bold;color:{color};'
             f'line-height:16px;text-align:center;'
             f'text-shadow:0 0 2px #fff,0 0 3px #fff,0 0 4px #fff;">{glyph}</div>')

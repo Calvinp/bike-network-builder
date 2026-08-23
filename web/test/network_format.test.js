@@ -181,13 +181,13 @@ for (const [name, mutate, needle] of [
 test("spots round-trip, default their status and round to 6 decimals", () => {
   const n = net();
   n.spots = [
-    makeSpot({ name: "Oak Grove racks", kind: "bike_parking", status: "existing",
+    makeSpot({ name: "Oak Grove racks", type: "bike_parking", status: "existing",
                location: [42.43, -71.06], notes: "12 spaces" }),
-    makeSpot({ kind: "speed_hump", phase: 1, location: [42.421234567, -71.07] }),
+    makeSpot({ type: "speed_hump", phase: 1, location: [42.421234567, -71.07] }),
   ];
   const out = parseNetwork(serializeNetwork(n));
   assert.equal(out.spots.length, 2);
-  assert.equal(out.spots[0].kind, "bike_parking");
+  assert.equal(out.spots[0].type, "bike_parking");
   assert.equal(out.spots[0].notes, "12 spaces");
   assert.equal(out.spots[1].status, "proposed");
   assert.deepEqual(out.spots[1].location, [42.421235, -71.07]);
@@ -199,13 +199,13 @@ test("a network with no spots serializes without a spots key", () => {
 });
 
 for (const [name, spot, needle] of [
-  ["unknown kind", { kind: "teleporter", location: [42.42, -71.07] }, "kind"],
-  ["missing location", { kind: "speed_hump" }, "location"],
-  ["out-of-range location", { kind: "speed_hump", location: [442, -71.07] },
+  ["unknown type", { type: "teleporter", location: [42.42, -71.07] }, "type"],
+  ["missing location", { type: "speed_hump" }, "location"],
+  ["out-of-range location", { type: "speed_hump", location: [442, -71.07] },
    "out of range"],
-  ["bad status", { kind: "speed_hump", status: "dreamed", location: [42.42, -71.07] },
+  ["bad status", { type: "speed_hump", status: "dreamed", location: [42.42, -71.07] },
    "status"],
-  ["undeclared phase", { kind: "speed_hump", phase: 9, location: [42.42, -71.07] },
+  ["undeclared phase", { type: "speed_hump", phase: 9, location: [42.42, -71.07] },
    "not declared"],
 ]) {
   test(`spot validation rejects ${name}`, () => {
@@ -215,3 +215,47 @@ for (const [name, spot, needle] of [
     assert.ok(errors.some((e) => e.includes(needle)), JSON.stringify(errors));
   });
 }
+
+test("spot `type` replaces `kind`, and `kind` still parses", () => {
+  // Matches what paths call the same idea; files written before the rename
+  // stay readable, as `treatment` does for paths.
+  const n = net();
+  n.spots = [makeSpot({ name: "Racks", type: "bike_parking", status: "existing",
+                        location: [42.43, -71.06] })];
+  const text = serializeNetwork(n);
+  assert.match(text, /type: bike_parking/);
+  assert.ok(!text.includes("kind:"));
+
+  const legacy = parseNetwork(
+    "spots:\n  - {kind: speed_hump, status: proposed, location: [42.42, -71.06]}\n");
+  assert.equal(legacy.spots[0].type, "speed_hump");
+});
+
+test("the access-control spot types are valid", () => {
+  const n = net();
+  for (const type of ["modal_filter", "bollards", "retractable_bollards"]) {
+    n.spots = [makeSpot({ type, location: [42.42, -71.06] })];
+    assert.deepEqual(validateNetwork(n), [], type);
+  }
+});
+
+test("spots carry a jurisdiction, defaulting to city", () => {
+  const n = net();
+  n.spots = [makeSpot({ type: "speed_hump", location: [42.42, -71.06] })];
+  assert.equal(n.spots[0].jurisdiction, "city");
+  assert.equal(parseNetwork(serializeNetwork(n)).spots[0].jurisdiction, "city");
+
+  n.spots[0].jurisdiction = "state";
+  const out = parseNetwork(serializeNetwork(n));
+  assert.equal(out.spots[0].jurisdiction, "state");
+  assert.deepEqual(validateNetwork(out), []);
+
+  n.spots[0].jurisdiction = "county";
+  assert.ok(validateNetwork(n).some((e) => e.includes("jurisdiction")));
+});
+
+test("spots written before jurisdiction existed default to city", () => {
+  const n = parseNetwork(
+    "spots:\n  - {kind: bike_parking, status: existing, location: [42.43, -71.06]}\n");
+  assert.equal(n.spots[0].jurisdiction, "city");
+});
