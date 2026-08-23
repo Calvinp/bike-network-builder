@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import List
 
 from .geometry import segments_miles
-from .network_format import BikePath
+from .network_format import BikePath, Spot
 
 
 def _geojson_geometry(segments) -> dict:
@@ -53,6 +53,8 @@ def paths_to_geojson(paths: List[BikePath]) -> dict:
                 "type": p.type,
                 "status": p.status,
                 "jurisdiction": p.jurisdiction,
+                "id": p.id,
+                "upgrades": p.upgrades,
                 "phase": p.phase,
                 "directions": p.directions,
                 "on_street": p.on_street,
@@ -90,6 +92,8 @@ def paths_from_geojson(fc: dict) -> List[BikePath]:
                      or "quick_build_separated"),
             status=str(props.get("status", "proposed") or "proposed"),
             jurisdiction=str(props.get("jurisdiction", "city") or "city"),
+            id=str(props.get("id", "") or "").strip(),
+            upgrades=str(props.get("upgrades", "") or "").strip(),
             phase=phase,
             directions=directions,
             on_street=str(props.get("on_street", "") or ""),
@@ -101,3 +105,51 @@ def paths_from_geojson(fc: dict) -> List[BikePath]:
         p.length_miles = segments_miles(segments)
         paths.append(p)
     return paths
+
+
+def spots_to_geojson(spots: List[Spot]) -> dict:
+    """Spot (point) improvements as a separate FeatureCollection — keeping
+    them out of the paths collection means every polyline-only consumer can
+    stay polyline-only."""
+    features = []
+    for s in spots:
+        if s.location is None:
+            continue
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point",
+                         "coordinates": [s.location[1], s.location[0]]},
+            "properties": {"name": s.name, "type": s.type, "status": s.status,
+                           "jurisdiction": s.jurisdiction,
+                           "phase": s.phase, "notes": s.notes},
+        })
+    return {"type": "FeatureCollection", "features": features}
+
+
+def spots_from_geojson(fc: dict) -> List[Spot]:
+    """Build Spot objects from a FeatureCollection; non-Point or malformed
+    features are skipped."""
+    out: List[Spot] = []
+    for feat in fc.get("features", []):
+        geom = feat.get("geometry") or {}
+        coords = geom.get("coordinates") or []
+        if (geom.get("type") != "Point" or len(coords) != 2
+                or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                           for v in coords)):
+            continue
+        props = feat.get("properties") or {}
+        try:
+            phase = int(props.get("phase")) if props.get("phase") is not None else None
+        except (TypeError, ValueError):
+            phase = None
+        out.append(Spot(
+            name=str(props.get("name", "") or ""),
+            # `kind` is the pre-rename property name; accept it on read.
+            type=str(props.get("type", props.get("kind", "other")) or "other"),
+            jurisdiction=str(props.get("jurisdiction", "city") or "city"),
+            status=str(props.get("status", "proposed") or "proposed"),
+            phase=phase,
+            location=(float(coords[1]), float(coords[0])),
+            notes=str(props.get("notes", "") or ""),
+        ))
+    return out

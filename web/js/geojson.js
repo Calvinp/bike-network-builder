@@ -3,7 +3,7 @@
 // is keyed by name, so duplicate names are harmless. Single-segment paths are
 // LineStrings; combined paths are MultiLineStrings.
 import { segmentsMiles } from "./geometry.js";
-import { makePath } from "./network_format.js";
+import { makePath, makeSpot } from "./network_format.js";
 
 function geojsonGeometry(segments) {
   const coords = segments.map((seg) => seg.map(([lat, lon]) => [lon, lat]));
@@ -40,6 +40,8 @@ export function pathsToGeojson(paths) {
         type: p.type,
         status: p.status,
         jurisdiction: p.jurisdiction,
+        id: p.id,
+        upgrades: p.upgrades,
         phase: p.phase,
         directions: p.directions,
         on_street: p.on_street,
@@ -75,6 +77,8 @@ export function pathsFromGeojson(fc) {
       type: String(props.type || props.treatment || "quick_build_separated"),
       status: String(props.status || "proposed"),
       jurisdiction: String(props.jurisdiction || "city"),
+      id: String(props.id || "").trim(),
+      upgrades: String(props.upgrades || "").trim(),
       phase,
       directions,
       on_street: String(props.on_street || ""),
@@ -87,4 +91,53 @@ export function pathsFromGeojson(fc) {
     paths.push(p);
   });
   return paths;
+}
+
+// Spot (point) improvements as a separate FeatureCollection — keeping them
+// out of the paths collection means every polyline-only consumer can stay
+// polyline-only.
+export function spotsToGeojson(spots) {
+  const features = [];
+  for (const s of spots || []) {
+    if (!s.location) continue;
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [s.location[1], s.location[0]] },
+      properties: { name: s.name, type: s.type, status: s.status,
+                    jurisdiction: s.jurisdiction,
+                    phase: s.phase, notes: s.notes },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+// Build spot objects from a FeatureCollection; non-Point or malformed
+// features are skipped.
+export function spotsFromGeojson(fc) {
+  const out = [];
+  for (const feat of (fc || {}).features || []) {
+    const geom = feat.geometry || {};
+    const coords = geom.coordinates || [];
+    if (geom.type !== "Point" || coords.length !== 2
+        || !coords.every((v) => typeof v === "number" && Number.isFinite(v))) {
+      continue;
+    }
+    const props = feat.properties || {};
+    let phase = null;
+    if (props.phase !== null && props.phase !== undefined) {
+      const n = parseInt(props.phase, 10);
+      phase = Number.isNaN(n) ? null : n;
+    }
+    out.push(makeSpot({
+      name: String(props.name || ""),
+      // `kind` is the pre-rename property name; accept it on read.
+      type: String(props.type || props.kind || "other"),
+      jurisdiction: String(props.jurisdiction || "city"),
+      status: String(props.status || "proposed"),
+      phase,
+      location: [Number(coords[1]), Number(coords[0])],
+      notes: String(props.notes || ""),
+    }));
+  }
+  return out;
 }

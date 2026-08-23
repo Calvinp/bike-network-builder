@@ -29,6 +29,7 @@ PATH_TYPES = (
     "shared_use_path",        # off-street path (e.g. trail spur)
     "buffered_painted",       # painted + buffer (interim only)
     "neighborway",            # traffic-calmed shared street (signs/humps/diverters)
+    "pedestrianized",         # car-free / car-light street conversion (bikes welcome)
 )
 
 STATUSES = (
@@ -41,6 +42,30 @@ JURISDICTIONS = (
     "city",   # Malden controls the street — the City can build it directly
     "state",  # MassDOT-controlled (a numbered state route) — needs state approval
 )
+
+# Point ("spot") improvements — single-location infrastructure that isn't a
+# path: traffic calming, access control, crossings, parking, greening. The
+# field is `type`, matching what a path calls the same idea; files written
+# before the rename say `kind` and still parse.
+SPOT_TYPES = (
+    # Traffic calming
+    "speed_hump",
+    "raised_crosswalk",
+    "raised_intersection",
+    "curb_extension",
+    # Access control — keeps motor traffic out while bikes pass through
+    "modal_filter",
+    "bollards",
+    "retractable_bollards",   # drop for deliveries / emergency access
+    # Amenities
+    "bike_parking",
+    "street_trees",
+    "other",
+)
+
+# Spots are either on the ground or proposed — there's no funded pipeline
+# tracking for small interventions.
+SPOT_STATUSES = ("existing", "proposed")
 
 Point = Tuple[float, float]  # (lat, lon) degrees
 
@@ -58,6 +83,13 @@ class BikePath:
     type: str = "quick_build_separated"
     status: str = "proposed"
     jurisdiction: str = "city"
+    # Optional stable identity ("" = none). Only needed when another path
+    # upgrades this one; editors assign one lazily so plain files stay clean.
+    id: str = ""
+    # Id of the path this one replaces in a later phase (e.g. quick-build now,
+    # concrete rebuild later). The upgraded path's corridor is counted once in
+    # full-buildout mileage, but every phase's work still costs money.
+    upgrades: str = ""
     # Implementation phase. Required for proposed paths; None for existing /
     # funded ones (they aren't part of the phased build).
     phase: Optional[int] = None
@@ -79,17 +111,42 @@ class BikePath:
 
 
 @dataclass
+class Spot:
+    name: str = ""
+    type: str = "other"
+    status: str = "proposed"
+    # Who would build it — the City, or MassDOT on a state road. Mirrors
+    # BikePath so the cost of a spot can be attributed to the right body.
+    jurisdiction: str = "city"
+    # Optional even for proposed spots — small interventions often aren't
+    # tied to a network phase.
+    phase: Optional[int] = None
+    location: Optional[Point] = None   # (lat, lon); None = malformed/missing
+    notes: str = ""
+
+
+@dataclass
 class Network:
     city: str = "Malden"
     state: str = "Massachusetts"
     ordinance_chapter: str = ""
     phases: List[PhaseDef] = field(default_factory=list)
     paths: List[BikePath] = field(default_factory=list)
+    spots: List[Spot] = field(default_factory=list)
     format_id: str = FORMAT_ID
     format_version: int = FORMAT_VERSION
 
     def phase_map(self) -> Dict[int, PhaseDef]:
         return {p.number: p for p in self.phases}
+
+
+def superseded_ids(paths: List[BikePath]) -> set:
+    """Ids of paths that some other path upgrades (replaces in a later phase).
+    Both tools use this to count an upgraded corridor once in full-buildout
+    mileage while still costing every phase's work. A dangling reference
+    supersedes nothing (validation reports it separately)."""
+    ids = {p.id for p in paths if p.id}
+    return {p.upgrades for p in paths if p.upgrades and p.upgrades in ids}
 
 
 # --------------------------------------------------------------------------- #
@@ -164,6 +221,8 @@ def network_from_dict(raw: dict) -> Network:
             type=str(item.get("type", item.get("treatment", "")) or "").strip(),
             status=str(item.get("status", "proposed") or "proposed").strip(),
             jurisdiction=str(item.get("jurisdiction", "city") or "city").strip(),
+            id=str(item.get("id", "") or "").strip(),
+            upgrades=str(item.get("upgrades", "") or "").strip(),
             phase=_to_int(item.get("phase"), default=None),
             directions=_to_int(item.get("directions"), default=2) or 2,
             on_street=str(item.get("on_street", "") or "").strip(),
@@ -173,12 +232,35 @@ def network_from_dict(raw: dict) -> Network:
             segments=_parse_segments(item.get("geometry")),
         ))
 
+    spots = []
+    for item in raw.get("spots") or []:
+        if not isinstance(item, dict):
+            continue
+        loc = item.get("location")
+        if (isinstance(loc, (list, tuple)) and len(loc) == 2
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                        for v in loc)):
+            location = (float(loc[0]), float(loc[1]))
+        else:
+            location = None
+        spots.append(Spot(
+            name=str(item.get("name", "") or "").strip(),
+            # `kind` is the pre-rename name for `type`; accept it on read.
+            type=str(item.get("type", item.get("kind", "other")) or "other").strip(),
+            status=str(item.get("status", "proposed") or "proposed").strip(),
+            jurisdiction=str(item.get("jurisdiction", "city") or "city").strip(),
+            phase=_to_int(item.get("phase"), default=None),
+            location=location,
+            notes=str(item.get("notes", "") or "").strip(),
+        ))
+
     return Network(
         city=str(raw.get("city", "Malden") or "Malden"),
         state=str(raw.get("state", "Massachusetts") or "Massachusetts"),
         ordinance_chapter=str(raw.get("ordinance_chapter", "") or ""),
         phases=phases,
         paths=paths,
+        spots=spots,
         format_id=str(raw.get("format", FORMAT_ID) or FORMAT_ID),
         format_version=_to_int(raw.get("format_version"), default=FORMAT_VERSION),
     )
@@ -206,6 +288,11 @@ def validate_network(net: Network) -> List[str]:
     if dupes:
         errors.append(f"duplicate phase number(s): {sorted(dupes)}.")
 
+    path_ids = [p.id for p in net.paths if p.id]
+    dupe_ids = {i for i in path_ids if path_ids.count(i) > 1}
+    if dupe_ids:
+        errors.append(f"duplicate path id(s): {sorted(dupe_ids)}.")
+
     for i, path in enumerate(net.paths):
         label = path.name or f"path #{i + 1}"
         if not path.name:
@@ -222,6 +309,27 @@ def validate_network(net: Network) -> List[str]:
         if path.directions not in (1, 2):
             errors.append(f"{label}: 'directions' must be 1 or 2 "
                           f"(got {path.directions!r}).")
+        if path.upgrades:
+            if path.status != "proposed":
+                errors.append(f"{label}: only a proposed path can have "
+                              f"'upgrades' (status is {path.status!r}).")
+            if path.upgrades == path.id:
+                errors.append(f"{label}: a path cannot upgrade itself.")
+            elif path.upgrades not in path_ids:
+                errors.append(f"{label}: 'upgrades' references unknown path "
+                              f"id {path.upgrades!r}.")
+            else:
+                # Walk the chain to catch loops (a upgrades b upgrades a).
+                by_id = {p.id: p for p in net.paths if p.id}
+                seen, cur = {path.id or object()}, path.upgrades
+                while cur:
+                    if cur in seen:
+                        errors.append(f"{label}: 'upgrades' chain forms a loop.")
+                        break
+                    seen.add(cur)
+                    nxt = by_id.get(cur)
+                    cur = nxt.upgrades if nxt else ""
+
         if path.status == "proposed":
             if path.phase is None or path.phase < 1:
                 errors.append(f"{label}: a proposed path needs a positive integer "
@@ -245,6 +353,30 @@ def validate_network(net: Network) -> List[str]:
                     errors.append(f"{label}: geometry {where}point #{j + 1} "
                                   f"({pt[0]}, {pt[1]}) is out of range — points "
                                   f"are [lat, lon], in degrees.")
+
+    for i, spot in enumerate(net.spots):
+        label = f"spot #{i + 1}" + (f" ({spot.name})" if spot.name else "")
+        if spot.type not in SPOT_TYPES:
+            errors.append(f"{label}: unknown type {spot.type!r}; "
+                          f"must be one of {', '.join(SPOT_TYPES)}.")
+        if spot.jurisdiction not in JURISDICTIONS:
+            errors.append(f"{label}: unknown jurisdiction {spot.jurisdiction!r}; "
+                          f"must be one of {', '.join(JURISDICTIONS)}.")
+        if spot.status not in SPOT_STATUSES:
+            errors.append(f"{label}: unknown status {spot.status!r}; "
+                          f"must be one of {', '.join(SPOT_STATUSES)}.")
+        if spot.location is None:
+            errors.append(f"{label}: needs a 'location' — one [lat, lon] "
+                          f"pair of numbers.")
+        elif not (-90 <= spot.location[0] <= 90
+                  and -180 <= spot.location[1] <= 180):
+            errors.append(f"{label}: location ({spot.location[0]}, "
+                          f"{spot.location[1]}) is out of range — it is "
+                          f"[lat, lon], in degrees.")
+        if (spot.phase is not None and phase_numbers
+                and spot.phase not in phase_numbers):
+            errors.append(f"{label}: phase {spot.phase} is not declared in "
+                          f"the top-level 'phases' list.")
     return errors
 
 
@@ -254,6 +386,12 @@ def validate_network(net: Network) -> List[str]:
 def _path_dict(p: BikePath) -> dict:
     out: dict = {"name": p.name, "type": p.type, "status": p.status,
                  "jurisdiction": p.jurisdiction}
+    # Optional identity/upgrade fields are omitted when unset so files that
+    # never use them serialize exactly as they did before the fields existed.
+    if p.id:
+        out["id"] = p.id
+    if p.upgrades:
+        out["upgrades"] = p.upgrades
     if p.phase is not None:
         out["phase"] = p.phase
     out["directions"] = p.directions
@@ -266,6 +404,22 @@ def _path_dict(p: BikePath) -> dict:
     segs = [[[round(lat, 6), round(lon, 6)] for lat, lon in seg]
             for seg in p.segments]
     out["geometry"] = segs[0] if len(segs) == 1 else segs
+    return out
+
+
+def _spot_dict(s: Spot) -> dict:
+    out: dict = {}
+    if s.name:
+        out["name"] = s.name
+    out["type"] = s.type
+    out["status"] = s.status
+    out["jurisdiction"] = s.jurisdiction
+    if s.phase is not None:
+        out["phase"] = s.phase
+    if s.location is not None:
+        out["location"] = [round(s.location[0], 6), round(s.location[1], 6)]
+    if s.notes:
+        out["notes"] = s.notes
     return out
 
 
@@ -283,6 +437,10 @@ def serialize_network(net: Network) -> str:
     doc["phases"] = [{"phase": p.number, "label": p.label, "deadline": p.deadline}
                      for p in sorted(net.phases, key=lambda p: p.number)]
     doc["paths"] = [_path_dict(p) for p in net.paths]
+    # Spot improvements are optional; files that don't use them keep
+    # serializing exactly as they did before the key existed.
+    if net.spots:
+        doc["spots"] = [_spot_dict(s) for s in net.spots]
     header = ("# Bike network — written by bike-network-builder; re-importable there and\n"
               "# readable by any YAML tool. Geometry points are [latitude, longitude]\n"
               "# in degrees. See NETWORK_FORMAT.md.\n")

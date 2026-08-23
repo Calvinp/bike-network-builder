@@ -28,7 +28,10 @@ header .brand span { color: var(--accent); }
 header .spacer { flex: 1; }
 header .status { color: var(--muted); font-size: 13px; }
 header .checkbox { display: flex; align-items: center; gap: 6px; font-size: 13px;
-  color: var(--muted); cursor: pointer; user-select: none; }
+  color: var(--muted); cursor: pointer; user-select: none; min-width: 0; }
+/* Phase labels can be long ("As of Phase 3: Citywide Completion…"); the
+   select must shrink rather than push the header off-screen. */
+header select { max-width: 100%; min-width: 0; }
 header .dirty { color: #b45309; font-weight: 600; }
 
 /* Buttons */
@@ -105,6 +108,8 @@ header select { font: inherit; font-size: 13px; padding: 3px 6px;
   user-select: none; margin-bottom: 6px; }
 .extra-fields summary:hover { color: var(--ink); }
 .extra-fields .hint { margin-bottom: 8px; }
+.upgrade-line { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.upgrade-line span { flex: 1; }
 
 /* Totals */
 .totals { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
@@ -128,6 +133,20 @@ input.warn-field { border-color: #f59e0b; background: #fffbeb; }
   line-height: 16px; text-align: center;
   text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff;
 }
+
+/* Spot improvements: glyph markers (same halo trick as the chevrons). */
+.spot-glyph { background: none; border: none; cursor: pointer; }
+.spot-glyph div {
+  font-size: 14px; font-weight: bold;
+  line-height: 18px; text-align: center;
+  text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff;
+}
+
+/* Context layers */
+.layer-row { display: flex; align-items: center; gap: 8px; padding: 4px 0;
+  font-size: 13px; cursor: pointer; user-select: none; }
+.layer-swatch { width: 11px; height: 11px; border-radius: 50%; flex: none;
+  opacity: 0.75; }
 
 /* Phases */
 .phase { border: 1px solid var(--line); border-radius: 8px; padding: 9px; margin-bottom: 8px; }
@@ -161,6 +180,9 @@ input.warn-field { border-color: #f59e0b; background: #fffbeb; }
   header .brand { width: 100%; font-size: 15px; }
   header .status { font-size: 12px; }
   header button, header .btnlike { padding: 6px 10px; font-size: 13px; }
+  /* Let the two dropdowns share a row and shrink to fit the screen. */
+  header .checkbox { flex: 1 1 auto; }
+  header select { flex: 1 1 auto; }
   .main { position: relative; min-height: 0; }
   .sidebar {
     display: none; position: absolute; inset: 0; width: auto; z-index: 1200;

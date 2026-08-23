@@ -1,8 +1,10 @@
 // Tests for path <-> GeoJSON conversion — mirrors tests/test_geojson.py.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pathsFromGeojson, pathsToGeojson } from "../js/geojson.js";
-import { makePath } from "../js/network_format.js";
+import {
+  pathsFromGeojson, pathsToGeojson, spotsFromGeojson, spotsToGeojson,
+} from "../js/geojson.js";
+import { makePath, makeSpot } from "../js/network_format.js";
 
 function p(name, { phase = 1, status = "proposed", ...kw } = {}) {
   return makePath({
@@ -77,4 +79,42 @@ test("from geojson accepts legacy treatment property", () => {
                   coordinates: [[-71.0, 42.4], [-71.1, 42.5]] } },
   ] };
   assert.equal(pathsFromGeojson(fc)[0].type, "concrete_separated");
+});
+
+test("upgrade fields survive the wire round-trip", () => {
+  // The editor round-trips every path through this module on save, so a
+  // missing property would silently wipe upgrade links.
+  const a = p("Main", { id: "main-1" });
+  const b = p("Main rebuild", { phase: 2, upgrades: "main-1" });
+  const out = pathsFromGeojson(pathsToGeojson([a, b]));
+  assert.equal(out[0].id, "main-1");
+  assert.equal(out[0].upgrades, "");
+  assert.equal(out[1].upgrades, "main-1");
+});
+
+test("spots round-trip as Point features", () => {
+  const spots = [
+    makeSpot({ name: "Square racks", type: "bike_parking", status: "existing",
+               location: [42.43, -71.06], notes: "12 spaces" }),
+    makeSpot({ type: "speed_hump", phase: 2, location: [42.42, -71.07] }),
+  ];
+  const fc = spotsToGeojson(spots);
+  // GeoJSON coordinate order is [lon, lat].
+  assert.deepEqual(fc.features[0].geometry,
+                   { type: "Point", coordinates: [-71.06, 42.43] });
+  const out = spotsFromGeojson(fc);
+  assert.deepEqual(out.map((s) => s.type), ["bike_parking", "speed_hump"]);
+  assert.equal(out[0].status, "existing");
+  assert.equal(out[1].phase, 2);
+  assert.deepEqual(out[1].location, [42.42, -71.07]);
+});
+
+test("spotsFromGeojson skips non-point and degenerate features", () => {
+  const fc = { type: "FeatureCollection", features: [
+    { type: "Feature", properties: { type: "speed_hump" },
+      geometry: { type: "LineString", coordinates: [[-71, 42.4], [-71.1, 42.5]] } },
+    { type: "Feature", properties: { type: "speed_hump" },
+      geometry: { type: "Point", coordinates: [] } },
+  ] };
+  assert.deepEqual(spotsFromGeojson(fc), []);
 });

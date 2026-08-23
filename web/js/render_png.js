@@ -6,10 +6,11 @@
 // rotated dark glyphs with a white outline, scale bar, north arrow, legend.
 // Browser-only (needs a DOM canvas); everything upstream of it is node-tested.
 import { lonlatToMercator } from "./geometry.js";
-import { phaseMap } from "./network_format.js";
+import { phaseMap, supersededIds } from "./network_format.js";
 import {
-  BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR, STATE_COLOR,
-  TYPE_COLORS, labelText, pathColor, phaseColor, typeLabel,
+  BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR, SPOT_GLYPHS,
+  STATE_COLOR, TYPE_COLORS, labelText, pathColor, phaseColor, spotColor,
+  spotGlyph, spotLabel, typeLabel,
 } from "./render_common.js";
 
 const FIG_IN = 16;                   // matplotlib figsize
@@ -82,6 +83,11 @@ function legendRows(net, colorMode, seen) {
   }
   if (seen.boundary) rows.push({ color: BOUNDARY_COLOR, lw: 1.4, dash: BOUNDARY_DASH,
                                  label: `${net.city} city boundary` });
+  // One row per spot kind present; the glyph stands in for the line swatch.
+  for (const kind of Object.keys(SPOT_GLYPHS).filter((k) => seen.spots.has(k))) {
+    rows.push({ glyph: spotGlyph(kind), color: "#1a1a1a", lw: 0, dash: null,
+                label: spotLabel(kind) });
+  }
   return rows;
 }
 
@@ -130,14 +136,16 @@ async function drawBasemap(ctx, view, toPx) {
   return drewAny;
 }
 
-function strokePolyline(ctx, seg, toPx, { color, lwPt, dashPt = null, alpha = 1 }) {
+// `s` scales line weights with the image size, so a small animation frame
+// gets proportionally thin lines instead of the 250-dpi print weights.
+function strokePolyline(ctx, seg, toPx, { color, lwPt, dashPt = null, alpha = 1, s = 1 }) {
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.strokeStyle = color;
-  ctx.lineWidth = pt(lwPt);
+  ctx.lineWidth = pt(lwPt) * s;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  ctx.setLineDash(dashPt ? dashPt.map(pt) : []);
+  ctx.setLineDash(dashPt ? dashPt.map((d) => pt(d) * s) : []);
   ctx.beginPath();
   seg.forEach(([mx, my], i) => {
     const [x, y] = toPx(mx, my);
@@ -162,7 +170,22 @@ export async function renderPng(paths, net, {
   colorMode = "type",
   basemap = true,
   title = null,
+  spots = [],
+  // Long side of the image in pixels. Animation frames pass something small;
+  // the extent comes from the boundary, so every frame lands on the same
+  // canvas and the map does not jump as the GIF plays.
+  figPx = FIG_IN * DPI,
+  asImageData = false,
 } = {}) {
+  // Everything below is expressed in matplotlib points; shadow the module's
+  // helpers with size-aware versions so a smaller image keeps its proportions
+  // (fonts, halos and line weights all shrink together).
+  const S = figPx / (FIG_IN * DPI);
+  const pt = (v) => v * PX_PER_PT * S;
+  const font = (sizePt, weight = "") =>
+    `${weight ? weight + " " : ""}${Math.round(pt(sizePt))}px "Segoe UI", Arial, sans-serif`;
+  const stroke = (c, seg, to, opts) => strokePolyline(c, seg, to, { ...opts, s: S });
+
   // ---- projection & canvas layout -------------------------------------- //
   const mercByPath = new Map(paths.map((p) => [p, mercSegments(p)]));
   const allPts = [...mercByPath.values()].flat(2);
@@ -182,9 +205,13 @@ export async function renderPng(paths, net, {
   minX -= padX; maxX += padX; minY -= padY; maxY += padY;
 
   const spanX = maxX - minX, spanY = maxY - minY;
-  const longSide = FIG_IN * DPI;               // 4000 px
+  const longSide = figPx;                      // 4000 px by default
   const scale = longSide / Math.max(spanX, spanY);
-  const titleH = Math.round(pt(15) * 2.2);
+  // A caption may span several lines ("Phase 2: Connectors\nby ..."); the band
+  // grows to fit, and callers that animate keep the line count constant so the
+  // map below it stays exactly the same size from frame to frame.
+  const titleLines = String(title || `${net.city} Bike Network Vision`).split("\n");
+  const titleH = Math.round(pt(15) * 2.2 * titleLines.length);
   const W = Math.round(spanX * scale);
   const H = Math.round(spanY * scale) + titleH;
 
@@ -208,7 +235,12 @@ export async function renderPng(paths, net, {
   // ---- the network ------------------------------------------------------ //
   const seen = { phases: new Set(), types: new Set(),
                  existing: false, funded: false, state: false,
+                 spots: new Set((spots || []).map((s) => s.type)),
                  boundary: Boolean(boundaryMerc.length) };
+  // A path drawn together with the upgrade that replaces it is completely
+  // covered by it, so only its chevron would still show — an arrow claiming
+  // the new lane is one-way. The replacement owns the direction now.
+  const replaced = supersededIds(paths);
   const arrowPts = [];    // mercator chevron positions (labels avoid them)
   const labelPick = new Map();
 
@@ -234,9 +266,9 @@ export async function renderPng(paths, net, {
     const color = pathColor(p, colorMode);
     for (const seg of mercByPath.get(p)) {
       if (p.status === "existing") {
-        strokePolyline(ctx, seg, toPx, { color, lwPt: 3.2, dashPt: EXISTING_DASH });
+        stroke(ctx, seg, toPx, { color, lwPt: 3.2, dashPt: EXISTING_DASH });
       } else if (p.status !== "funded") {
-        strokePolyline(ctx, seg, toPx, { color: "#ffffff", lwPt: 6.0, alpha: 0.55 });
+        stroke(ctx, seg, toPx, { color: "#ffffff", lwPt: 6.0, alpha: 0.55 });
       }
     }
   }
@@ -245,11 +277,11 @@ export async function renderPng(paths, net, {
     const color = pathColor(p, colorMode);
     for (const seg of mercByPath.get(p)) {
       if (p.status === "funded") {
-        strokePolyline(ctx, seg, toPx, { color, lwPt: 3.6, dashPt: FUNDED_DASH });
+        stroke(ctx, seg, toPx, { color, lwPt: 3.6, dashPt: FUNDED_DASH });
       } else if (p.status !== "existing") {
-        strokePolyline(ctx, seg, toPx, { color, lwPt: 4.0 });
+        stroke(ctx, seg, toPx, { color, lwPt: 4.0 });
       }
-      if (p.directions === 1 && seg.length >= 2) {
+      if (p.directions === 1 && seg.length >= 2 && !replaced.has(p.id)) {
         const k = Math.max(1, Math.floor(seg.length / 2));
         const [x0, y0] = seg[k - 1];
         const [x1, y1] = seg[k];
@@ -263,7 +295,7 @@ export async function renderPng(paths, net, {
 
   // City boundary outline.
   for (const ring of boundaryMerc) {
-    strokePolyline(ctx, ring, toPx,
+    stroke(ctx, ring, toPx,
       { color: BOUNDARY_COLOR, lwPt: 1.4, dashPt: BOUNDARY_DASH, alpha: 0.7 });
   }
 
@@ -286,6 +318,26 @@ export async function renderPng(paths, net, {
     ctx.restore();
   }
 
+  // Spot (point) improvements: the same glyph-with-a-white-outline idiom.
+  const spotPts = [];   // mercator, so route labels can steer around them
+  for (const s of spots || []) {
+    if (!s.location) continue;
+    const [mx, my] = lonlatToMercator(s.location[0], s.location[1]);
+    const [x, y] = toPx(mx, my);
+    ctx.save();
+    ctx.font = font(9, "bold");
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = pt(2.5);
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#ffffff";
+    ctx.strokeText(spotGlyph(s.type), x, y);
+    ctx.fillStyle = spotColor(s);
+    ctx.fillText(spotGlyph(s.type), x, y);
+    ctx.restore();
+    spotPts.push({ mx, my });
+  }
+
   // ---- route labels (greedy declutter, drop rather than overlap) -------- //
   // Same box math as the desktop tool: an 8pt text box in data units.
   const charW = spanX * ((8 * 0.62) / 72) / FIG_IN;
@@ -296,7 +348,7 @@ export async function renderPng(paths, net, {
   };
   const overlaps = (a, b) =>
     !(a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]);
-  const placed = arrowPts.map((a) =>
+  const placed = [...arrowPts, ...spotPts].map((a) =>
     [a.mx - 2 * charW, a.my - boxH, a.mx + 2 * charW, a.my + boxH]);
 
   const ranked = [...labelPick.entries()]
@@ -403,15 +455,24 @@ export async function renderPng(paths, net, {
       ctx.restore();
       rows.forEach((r, i) => {
         const cy = by + padBox + i * rowH + rowH / 2;
-        ctx.strokeStyle = r.color;
-        ctx.lineWidth = pt(r.lw);
-        ctx.lineCap = "round";
-        ctx.setLineDash(r.dash ? r.dash.map(pt) : []);
-        ctx.beginPath();
-        ctx.moveTo(bx + padBox, cy);
-        ctx.lineTo(bx + padBox + sample, cy);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        if (r.glyph) {                       // spot kinds show their glyph
+          ctx.font = font(9, "bold");
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillStyle = r.color;
+          ctx.fillText(r.glyph, bx + padBox + sample / 2, cy);
+          ctx.font = font(9);
+        } else {
+          ctx.strokeStyle = r.color;
+          ctx.lineWidth = pt(r.lw);
+          ctx.lineCap = "round";
+          ctx.setLineDash(r.dash ? r.dash.map(pt) : []);
+          ctx.beginPath();
+          ctx.moveTo(bx + padBox, cy);
+          ctx.lineTo(bx + padBox + sample, cy);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
         ctx.fillStyle = "#000000";
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
@@ -432,8 +493,18 @@ export async function renderPng(paths, net, {
   ctx.font = font(15, "bold");
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(title || `${net.city} Bike Network Vision`, W / 2, titleH / 2);
+  {
+    const lineH = titleH / titleLines.length;
+    titleLines.forEach((line, i) => {
+      ctx.fillText(line, W / 2, lineH * (i + 0.5));
+    });
+  }
 
+  // Animation frames want raw pixels (to hand straight to the GIF encoder)
+  // rather than a compressed PNG blob.
+  if (asImageData) {
+    return { width: W, height: H, data: ctx.getImageData(0, 0, W, H).data };
+  }
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => (blob ? resolve(blob)
       : reject(new Error("PNG export failed (canvas too large for this browser?)"))),

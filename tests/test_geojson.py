@@ -1,7 +1,8 @@
 """Tests for BikePath <-> GeoJSON conversion (pure, no network)."""
 import pytest
-from bikenetwork.geojson import paths_from_geojson, paths_to_geojson
-from bikenetwork.network_format import BikePath
+from bikenetwork.geojson import (paths_from_geojson, paths_to_geojson,
+                                 spots_from_geojson, spots_to_geojson)
+from bikenetwork.network_format import BikePath, Spot
 
 
 def _p(name, phase=1, status="proposed", **kw):
@@ -60,12 +61,48 @@ def test_geojson_features_carry_full_property_set():
     assert fc["features"][0]["geometry"]["coordinates"][0] == [-71.07, 42.42]
 
 
+def test_upgrade_fields_survive_roundtrip():
+    # id/upgrades ride the wire — the editor's autosave round-trips every
+    # path through this module, so a missing property would silently wipe
+    # upgrade links a second after any edit.
+    a = _p("Main", id="main-1")
+    b = _p("Main rebuild", phase=2, upgrades="main-1")
+    out = paths_from_geojson(paths_to_geojson([a, b]))
+    assert out[0].id == "main-1" and out[0].upgrades == ""
+    assert out[1].upgrades == "main-1" and out[1].id == ""
+
+
 def test_from_geojson_skips_degenerate_features():
     fc = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "properties": {"name": "Stub"},
          "geometry": {"type": "LineString", "coordinates": [[-71.0, 42.4]]}},
     ]}
     assert paths_from_geojson(fc) == []
+
+
+def test_spots_roundtrip_as_points():
+    spots = [Spot(name="Square racks", type="bike_parking", status="existing",
+                  location=(42.43, -71.06), notes="12 spaces"),
+             Spot(type="speed_hump", phase=2, location=(42.42, -71.07))]
+    fc = spots_to_geojson(spots)
+    # GeoJSON coordinate order is [lon, lat].
+    assert fc["features"][0]["geometry"] == {"type": "Point",
+                                            "coordinates": [-71.06, 42.43]}
+    out = spots_from_geojson(fc)
+    assert [s.type for s in out] == ["bike_parking", "speed_hump"]
+    assert out[0].status == "existing" and out[0].notes == "12 spaces"
+    assert out[1].phase == 2 and out[1].location == (42.42, -71.07)
+
+
+def test_spots_from_geojson_skips_non_points():
+    fc = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"type": "speed_hump"},
+         "geometry": {"type": "LineString",
+                      "coordinates": [[-71.0, 42.4], [-71.1, 42.5]]}},
+        {"type": "Feature", "properties": {"type": "speed_hump"},
+         "geometry": {"type": "Point", "coordinates": []}},
+    ]}
+    assert spots_from_geojson(fc) == []
 
 
 def test_from_geojson_accepts_legacy_treatment_property():

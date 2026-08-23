@@ -32,6 +32,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(editor, "SEED_FILE", tmp_path / "no-seed.yaml")
     monkeypatch.setattr(editor, "BASE_FILE", tmp_path / "no-base.yaml")
     monkeypatch.setattr(editor, "OUTPUT", tmp_path / "output")
+    monkeypatch.setattr(editor, "LAYERS_DIR", tmp_path / "layers")
     editor.app.config["TESTING"] = True
     return editor.app.test_client()
 
@@ -53,8 +54,12 @@ def test_state_serves_cost_rates(client, tmp_path):
     (tmp_path / "network.yaml").write_text(VALID_YAML, encoding="utf-8")
     rates = client.get("/api/state").get_json()["options"]["cost_per_mile"]
     assert "quick_build_separated" in rates
-    lo, hi = rates["quick_build_separated"]
-    assert 0 < lo <= hi
+    # Every path type must carry a usable rate — a type missing from
+    # costs.py silently estimates $0 in the totals card.
+    from bikenetwork.network_format import PATH_TYPES
+    for t in PATH_TYPES:
+        lo, hi = rates[t]
+        assert 0 < lo <= hi, t
 
 
 def test_state_roundtrip_via_save(client, tmp_path):
@@ -110,16 +115,91 @@ def test_export_yaml_download(client, tmp_path):
     assert net.paths[0].name == "Main Street"
 
 
+SPOTS_YAML = VALID_YAML + """
+spots:
+  - {type: speed_hump, status: proposed, phase: 1, location: [42.425, -71.065]}
+  - {name: Square racks, kind: bike_parking, status: existing, location: [42.426, -71.066]}
+"""
+
+
+def test_state_serves_and_saves_spots(client, tmp_path):
+    (tmp_path / "network.yaml").write_text(SPOTS_YAML, encoding="utf-8")
+    state = client.get("/api/state").get_json()
+    assert len(state["spots"]["features"]) == 2
+    assert "spot_types" in state["options"]
+    # Edit a spot and save; it persists to network.yaml.
+    state["spots"]["features"][0]["properties"]["type"] = "raised_crosswalk"
+    payload = {"network": state["network"], "spots": state["spots"],
+               "config": state["config"]}
+    assert client.post("/api/state", json=payload).get_json()["ok"]
+    net = parse_network((tmp_path / "network.yaml").read_text(encoding="utf-8"))
+    assert net.spots[0].type == "raised_crosswalk"
+
+
+def test_save_without_spots_key_preserves_spots(client, tmp_path):
+    # A stale cached app.js that doesn't know about spots must not wipe them.
+    (tmp_path / "network.yaml").write_text(SPOTS_YAML, encoding="utf-8")
+    state = client.get("/api/state").get_json()
+    payload = {"network": state["network"], "config": state["config"]}
+    assert client.post("/api/state", json=payload).get_json()["ok"]
+    net = parse_network((tmp_path / "network.yaml").read_text(encoding="utf-8"))
+    assert len(net.spots) == 2
+
+
+def test_import_returns_spots(client):
+    r = client.post("/api/import", data=SPOTS_YAML.encode("utf-8"),
+                    content_type="application/octet-stream")
+    body = r.get_json()
+    assert r.status_code == 200 and body["ok"]
+    assert len(body["spots"]["features"]) == 2
+
+
 def test_export_bundle_zips_everything(client, tmp_path):
     (tmp_path / "network.yaml").write_text(VALID_YAML, encoding="utf-8")
     r = client.post("/api/export/bundle.zip?basemap=0&color_mode=phase", json={})
     assert r.status_code == 200
     assert "attachment" in r.headers["Content-Disposition"]
     with zipfile.ZipFile(io.BytesIO(r.data)) as z:
+        # One declared phase with proposed work -> per-phase PNG + animation.
         assert set(z.namelist()) == {"network.yaml", "map.png", "map.html",
-                                     "network.geojson"}
+                                     "network.geojson", "map-phase-1.png",
+                                     "phases.gif"}
         net = parse_network(z.read("network.yaml").decode("utf-8"))
         assert net.paths[0].name == "Main Street"
+
+
+def _write_layers(tmp_path):
+    layers = tmp_path / "layers"
+    layers.mkdir()
+    (layers / "layers.json").write_text(json.dumps({"layers": [
+        {"id": "bike-parking", "label": "Bike parking (existing)",
+         "description": "Racks mapped in OpenStreetMap",
+         "style": {"color": "#0072B2", "radius": 4},
+         "attribution": "© OpenStreetMap contributors",
+         "source": "https://overpass-api.de", "fetched": "2026-08-22"},
+    ]}), encoding="utf-8")
+    (layers / "bike-parking.geojson").write_text(json.dumps(
+        {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"capacity": "8"},
+             "geometry": {"type": "Point", "coordinates": [-71.066, 42.426]}},
+        ]}), encoding="utf-8")
+
+
+def test_layers_list_is_empty_without_data(client):
+    r = client.get("/api/layers")
+    assert r.status_code == 200 and r.get_json() == []
+
+
+def test_layers_manifest_and_data(client, tmp_path):
+    _write_layers(tmp_path)
+    listed = client.get("/api/layers").get_json()
+    assert [l["id"] for l in listed] == ["bike-parking"]
+    assert listed[0]["style"]["color"] == "#0072B2"
+    data = client.get("/api/layers/bike-parking").get_json()
+    assert data["features"][0]["geometry"]["type"] == "Point"
+    # Ids not in the manifest 404 (this also blocks path traversal).
+    assert client.get("/api/layers/nope").status_code == 404
+    assert client.get("/api/layers/..%2Flayers").status_code == 404
 
 
 def test_import_accepts_zip_bundle(client):
@@ -153,3 +233,22 @@ def test_regenerate_renders_outputs(client, tmp_path):
     assert body["summary"]["total_build_miles"] > 0
     for name in ("map.png", "map.html", "network.geojson"):
         assert (tmp_path / "output" / name).exists(), name
+
+
+def test_help_is_served_from_a_single_copy(client):
+    """The manual lives only in web/help.md — it must ship inside web/ for the
+    vendored static app, and a second copy under editor/ would drift."""
+    import os
+    root = os.path.dirname(os.path.abspath(editor.__file__))
+    assert not os.path.exists(os.path.join(root, "editor", "help.md")), (
+        "a second help.md reappeared under editor/ — the desktop editor reads "
+        "web/help.md via /help.md, so there is nothing to keep in step")
+
+    r = client.get("/help.md")
+    assert r.status_code == 200
+    with open(os.path.join(root, "web", "help.md"), encoding="utf-8") as f:
+        assert r.get_data(as_text=True) == f.read()
+
+    # The help page itself must fetch that route, not a path under editor/.
+    page = client.get("/help").get_data(as_text=True)
+    assert 'fetch("/help.md")' in page

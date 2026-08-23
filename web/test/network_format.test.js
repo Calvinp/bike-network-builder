@@ -2,8 +2,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  makeNetwork, makePath, makePhase, parseNetwork, serializeNetwork,
-  validateNetwork,
+  makeNetwork, makePath, makePhase, makeSpot, parseNetwork, serializeNetwork,
+  supersededIds, validateNetwork,
 } from "../js/network_format.js";
 
 function net() {
@@ -127,4 +127,135 @@ test("serialized yaml keeps single-segment geometry flow-style and compact", () 
   // [lat, lon] pairs for one segment (the pre-multi-segment form).
   const text = serializeNetwork(net());
   assert.match(text, /geometry: \[\[42\.42, -71\.07\], \[42\.43, -71\.06\]\]/);
+});
+
+test("pedestrianized is a valid type", () => {
+  const n = net();
+  n.paths[0].type = "pedestrianized";
+  assert.deepEqual(validateNetwork(n), []);
+});
+
+test("upgrade links round-trip and are omitted when unset", () => {
+  const n = net();
+  n.paths[0].id = "main-1";
+  n.paths[2].upgrades = "main-1";
+  const out = parseNetwork(serializeNetwork(n));
+  assert.equal(out.paths[0].id, "main-1");
+  assert.equal(out.paths[2].upgrades, "main-1");
+  assert.deepEqual(validateNetwork(out), []);
+  // A network with no ids serializes exactly as it did before the fields
+  // existed — old files keep round-tripping without spurious diffs.
+  const plain = serializeNetwork(net());
+  assert.ok(!plain.includes("id:") && !plain.includes("upgrades"));
+});
+
+test("supersededIds reports paths another path replaces", () => {
+  const n = net();
+  n.paths[0].id = "main-1";
+  n.paths[2].upgrades = "main-1";
+  assert.deepEqual([...supersededIds(n.paths)], ["main-1"]);
+  n.paths[2].upgrades = "";
+  assert.deepEqual([...supersededIds(n.paths)], []);
+});
+
+for (const [name, mutate, needle] of [
+  ["duplicate ids", (n) => { n.paths[0].id = "x"; n.paths[2].id = "x"; },
+   "duplicate path id"],
+  ["dangling upgrade", (n) => { n.paths[0].upgrades = "ghost"; }, "unknown path id"],
+  ["self upgrade", (n) => { n.paths[0].id = "a"; n.paths[0].upgrades = "a"; }, "itself"],
+  ["upgrade loop", (n) => {
+    n.paths[0].id = "a"; n.paths[2].id = "b";
+    n.paths[0].upgrades = "b"; n.paths[2].upgrades = "a";
+  }, "loop"],
+  ["upgrade on a non-proposed path",
+   (n) => { n.paths[0].id = "a"; n.paths[1].upgrades = "a"; }, "proposed"],
+]) {
+  test(`validation rejects ${name}`, () => {
+    const n = net();
+    mutate(n);
+    const errors = validateNetwork(n);
+    assert.ok(errors.some((e) => e.includes(needle)), JSON.stringify(errors));
+  });
+}
+
+test("spots round-trip, default their status and round to 6 decimals", () => {
+  const n = net();
+  n.spots = [
+    makeSpot({ name: "Oak Grove racks", type: "bike_parking", status: "existing",
+               location: [42.43, -71.06], notes: "12 spaces" }),
+    makeSpot({ type: "speed_hump", phase: 1, location: [42.421234567, -71.07] }),
+  ];
+  const out = parseNetwork(serializeNetwork(n));
+  assert.equal(out.spots.length, 2);
+  assert.equal(out.spots[0].type, "bike_parking");
+  assert.equal(out.spots[0].notes, "12 spaces");
+  assert.equal(out.spots[1].status, "proposed");
+  assert.deepEqual(out.spots[1].location, [42.421235, -71.07]);
+  assert.deepEqual(validateNetwork(out), []);
+});
+
+test("a network with no spots serializes without a spots key", () => {
+  assert.ok(!serializeNetwork(net()).includes("spots"));
+});
+
+for (const [name, spot, needle] of [
+  ["unknown type", { type: "teleporter", location: [42.42, -71.07] }, "type"],
+  ["missing location", { type: "speed_hump" }, "location"],
+  ["out-of-range location", { type: "speed_hump", location: [442, -71.07] },
+   "out of range"],
+  ["bad status", { type: "speed_hump", status: "dreamed", location: [42.42, -71.07] },
+   "status"],
+  ["undeclared phase", { type: "speed_hump", phase: 9, location: [42.42, -71.07] },
+   "not declared"],
+]) {
+  test(`spot validation rejects ${name}`, () => {
+    const n = net();
+    n.spots = [makeSpot(spot)];
+    const errors = validateNetwork(n);
+    assert.ok(errors.some((e) => e.includes(needle)), JSON.stringify(errors));
+  });
+}
+
+test("spot `type` replaces `kind`, and `kind` still parses", () => {
+  // Matches what paths call the same idea; files written before the rename
+  // stay readable, as `treatment` does for paths.
+  const n = net();
+  n.spots = [makeSpot({ name: "Racks", type: "bike_parking", status: "existing",
+                        location: [42.43, -71.06] })];
+  const text = serializeNetwork(n);
+  assert.match(text, /type: bike_parking/);
+  assert.ok(!text.includes("kind:"));
+
+  const legacy = parseNetwork(
+    "spots:\n  - {kind: speed_hump, status: proposed, location: [42.42, -71.06]}\n");
+  assert.equal(legacy.spots[0].type, "speed_hump");
+});
+
+test("the access-control spot types are valid", () => {
+  const n = net();
+  for (const type of ["modal_filter", "bollards", "retractable_bollards"]) {
+    n.spots = [makeSpot({ type, location: [42.42, -71.06] })];
+    assert.deepEqual(validateNetwork(n), [], type);
+  }
+});
+
+test("spots carry a jurisdiction, defaulting to city", () => {
+  const n = net();
+  n.spots = [makeSpot({ type: "speed_hump", location: [42.42, -71.06] })];
+  assert.equal(n.spots[0].jurisdiction, "city");
+  assert.equal(parseNetwork(serializeNetwork(n)).spots[0].jurisdiction, "city");
+
+  n.spots[0].jurisdiction = "state";
+  const out = parseNetwork(serializeNetwork(n));
+  assert.equal(out.spots[0].jurisdiction, "state");
+  assert.deepEqual(validateNetwork(out), []);
+
+  n.spots[0].jurisdiction = "county";
+  assert.ok(validateNetwork(n).some((e) => e.includes("jurisdiction")));
+});
+
+test("spots written before jurisdiction existed default to city", () => {
+  const n = parseNetwork(
+    "spots:\n  - {kind: bike_parking, status: existing, location: [42.43, -71.06]}\n");
+  assert.equal(n.spots[0].jurisdiction, "city");
 });

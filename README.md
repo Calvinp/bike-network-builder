@@ -55,8 +55,8 @@ python editor.py             # -> http://127.0.0.1:5000
   state-road miles, and a planning-grade **cost estimate** (city builds and
   MassDOT requests separately; rates in `bikenetwork/costs.py`). Paths still
   carrying a default name get a warning chip that jumps you to them.
-- **Help** (header link) renders `editor/help.md` — edit that file to change
-  the user manual.
+- **Help** (header link) renders `web/help.md` — the single copy of the user
+  manual, shared by this editor and the static one. Edit that file to change it.
 - Works on phones: the layout stacks (map above the cards) below ~760 px.
 
 A first-time user starts from `data/base_network.yaml` — the existing +
@@ -92,6 +92,23 @@ precise intersections **on** `on_street` ("Main Street & Salem Street", never
 "Malden Center"), and names must be unique. When the same street names cross
 in both Malden and a neighbor (Melrose/Everett), the resolver picks the Malden
 node; border-only crossings are kept, clipped to the city line, and flagged.
+
+## Refreshing the map layers (`fetch_layers.py`)
+
+The "Map layers" card shows reference data under your network — existing bike
+parking and street trees (OpenStreetMap), and bike/pedestrian crash locations
+(MassDOT). The files live in `data/layers/` and are checked in, so nobody
+needs network access to use them. To refresh:
+
+```bash
+python fetch_layers.py                 # everything
+python fetch_layers.py --skip-crashes  # just the OpenStreetMap layers
+```
+
+Each layer degrades on its own: if a source is unreachable the previously
+checked-in file is kept and the script explains how to export that dataset by
+hand. Adding a layer later = drop a `.geojson` in `data/layers/` and add an
+entry to `layers.json` — no code change.
 
 ## How it works
 

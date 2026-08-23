@@ -64,6 +64,12 @@ def clip_polyline_latlon(geom: Sequence[Point], polygon: Polygon):
     return best, best_miles
 
 
+def point_in_polygon_latlon(pt: Point, polygon: Polygon) -> bool:
+    """True if a (lat, lon) point lies inside (or on) the city polygon."""
+    from shapely.geometry import Point as ShapelyPoint
+    return polygon.covers(ShapelyPoint(pt[1], pt[0]))
+
+
 def clip_segments_latlon(segments, polygon):
     """Clip a multi-segment path (BikePath.segments) to `polygon`: each segment
     keeps its longest in-boundary piece; fully-outside segments are dropped.

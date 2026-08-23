@@ -18,6 +18,9 @@ export const TYPE_COLORS = {
   shared_use_path: "#009E73",
   buffered_painted: "#E69F00",
   neighborway: "#56B4E9",
+  // Reddish purple deliberately shared with STATE_COLOR: that color only
+  // appears in phase mode, where type colors never draw.
+  pedestrianized: "#CC79A7",
 };
 export const TYPE_LABELS = {
   quick_build_separated: "Quick-build separated lane",
@@ -25,7 +28,42 @@ export const TYPE_LABELS = {
   shared_use_path: "Shared-use path",
   buffered_painted: "Buffered painted lane (interim)",
   neighborway: "Neighborway (calm shared street)",
+  pedestrianized: "Pedestrianized street",
 };
+
+// Spot (point) improvements: glyphs mirrored from render_map.py so the PNG,
+// the interactive map and the editor all draw the same characters.
+export const SPOT_GLYPHS = {
+  speed_hump: "∩",
+  raised_crosswalk: "▬",
+  raised_intersection: "◆",
+  curb_extension: "◖",
+  modal_filter: "⊘",             // no through motor traffic
+  bollards: "‖",                 // a line of posts
+  retractable_bollards: "⇕",     // posts that drop and rise
+  bike_parking: "P",
+  street_trees: "T",
+  other: "●",
+};
+export const SPOT_LABELS = {
+  speed_hump: "Speed hump",
+  raised_crosswalk: "Raised crosswalk",
+  raised_intersection: "Raised intersection",
+  curb_extension: "Curb extension",
+  modal_filter: "Modal filter",
+  bollards: "Bollards",
+  retractable_bollards: "Retractable bollards",
+  bike_parking: "Bike parking",
+  street_trees: "Street trees",
+  other: "Spot improvement",
+};
+export const SPOT_PROPOSED_COLOR = "#1a1a1a";
+export const SPOT_EXISTING_COLOR = "#707070";
+
+export const spotGlyph = (type) => SPOT_GLYPHS[type] || SPOT_GLYPHS.other;
+export const spotLabel = (type) => SPOT_LABELS[type] || String(type).replace(/_/g, " ");
+export const spotColor = (s) => (s.status === "existing"
+  ? SPOT_EXISTING_COLOR : SPOT_PROPOSED_COLOR);
 export const SINGLE_COLOR = "#0072B2";
 export const EXISTING_COLOR = "#000000";
 export const FUNDED_COLOR = "#E69F00";
@@ -70,6 +108,22 @@ export function chevron(seg) {
   const dx = (lon2 - lon1) * Math.cos((lat1 * Math.PI) / 180);
   const theta = (Math.atan2(-(lat2 - lat1), dx) * 180) / Math.PI;
   return { lat: (lat1 + lat2) / 2, lon: (lon1 + lon2) / 2, theta };
+}
+
+// Every color a rendered map draws with. The GIF encoder reserves these so a
+// basemap full of pale pixels can't crowd the network's own colors out of the
+// 256-entry palette. (Declared here, after the constants it collects.)
+export const MAP_PALETTE = [
+  ...Object.values(PHASE_COLORS), ...Object.values(TYPE_COLORS),
+  SINGLE_COLOR, EXISTING_COLOR, FUNDED_COLOR, STATE_COLOR, BOUNDARY_COLOR,
+  SPOT_PROPOSED_COLOR, SPOT_EXISTING_COLOR,
+  "#ffffff", "#000000", "#555555", "#1a1a1a", "#eef0ef", "#cccccc",
+];
+
+export function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16),
+          parseInt(h.slice(4, 6), 16)];
 }
 
 export function escapeHtml(s) {

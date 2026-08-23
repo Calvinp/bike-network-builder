@@ -17,8 +17,9 @@ commit).
 
 ## The format (the load-bearing decision)
 
-`network.yaml` holds city metadata, phases, and EVERY path (existing / funded / proposed)
-with `type`, `phase`, and full `[lat, lon]` geometry. Spec: `NETWORK_FORMAT.md`.
+`network.yaml` holds city metadata, phases, EVERY path (existing / funded / proposed) with
+`type`, `phase`, and full `[lat, lon]` geometry, and an optional `spots:` list of point
+improvements. Spec: `NETWORK_FORMAT.md`.
 Implementation: `bikenetwork/network_format.py` (canonical; `web/js/network_format.js` is
 its port — keep them in step). **Treat the format as a stable public contract**: exported
 files circulate and get re-imported, and downstream consumers read them, so files written
@@ -67,16 +68,20 @@ python editor.py                   # the Flask web editor -> http://127.0.0.1:50
 ## Code structure
 
 ```
-editor.py                   Flask backend (state/save/import/export/snap/regenerate)
+editor.py                   Flask backend (state/save/import/export/snap/regenerate/layers)
 build.py                    CLI seed: corridors.yaml + OSM -> output/network.yaml + maps
+fetch_layers.py             CLI (networked, untested): refresh data/layers/ reference data
 network.yaml                EDITABLE SOURCE OF TRUTH for the editor
 corridors.yaml              seed network (street names, no geometry)
 NETWORK_FORMAT.md           the shared format spec (canonical copy)
-editor/                     index.html, app.js, style.css, help.md (Leaflet + Geoman)
+editor/                     index.html, app.js, style.css, help.html (Leaflet + Geoman)
+                            — the manual itself is web/help.md, served at /help.md
 data/                       malden_boundary / existing_infra / committed_infra .geojson,
                             osm_cache.json, base_network.yaml (fresh-user start),
                             street_graph.json (TRACKED here: the snap-to-road asset the
                             static web port ships; it doubles as the local snap cache)
+  layers/                   context layers + layers.json manifest (fetch_layers.py);
+                            copied to web/data/layers/ (a test enforces the copies)
 bikenetwork/
   network_format.py         SHARED format module (canonical)
   geometry.py               haversine, bbox, Dijkstra, web-mercator (pure)
@@ -127,11 +132,89 @@ tests/                      incl. test_network_format, test_editor_api (Flask cl
   free-drawn while street clicks snap.
 - GOTCHA: never add decorator/plain LayerGroups to `networkGroup` — FeatureGroup.getBounds()
   throws on layers without getBounds and kills editor init; arrows live in `arrowsGroup`.
-- Help page at /help renders `editor/help.md`.
+- **`web/help.md` is the ONE copy of the manual, and it is human-authored (Calvin writes
+  it) — do NOT edit it.** It has to live inside `web/` because that folder is vendored into
+  the MSS site as a self-contained app; the Flask editor serves that same file at `/help.md`
+  rather than keeping a second copy in step. When you add a user-facing feature, list what
+  needs covering in your summary instead of writing it yourself.
+
+## Current state (2026-08)
+
+**New in 2026-08** — four features, all backwards compatible (`format_version` stays 1,
+every new key is optional and omitted when empty, so files written by older versions
+re-save with no value changes and no new keys; `tests/test_network_format.py` pins that
+against the checked-in base network):
+
+1. **`pedestrianized`** — 6th path type, Okabe-Ito reddish purple `#CC79A7`. That color is
+   deliberately shared with `STATE_COLOR`, which only draws in phase mode where type
+   colors never apply — don't "fix" the collision.
+2. **Phased upgrades.** Optional `id` + `upgrades` on a path: B `upgrades` A means B
+   replaces A in a later phase (quick-build now, concrete rebuild later — also upgrades OF
+   existing infra). **The math:** full-buildout mileage counts the corridor ONCE
+   (superseded paths excluded, via `superseded_ids()` / `supersededIds()`), while
+   per-phase rows and cost include EVERY phase's work — building twice costs twice. The
+   editors add "↑ Plan an upgrade" (clones the geometry into the next phase) and a header
+   "Show" menu previewing the network as of Today / Phase N / full. That preview is
+   **visual only — totals always describe the full plan**, because numbers that shift with
+   a view dropdown read as a bug to non-technical users.
+   Exports gain cumulative `map-phase-N.png` per phase, `phases.gif`, and a slider in
+   `map.html` (hand-injected; no folium time plugins — see the TextPath history above).
+3. **Spot infrastructure.** Optional top-level `spots:` (`type` from `SPOT_TYPES`, status
+   existing|proposed, `jurisdiction` city|state, optional phase, `location: [lat, lon]`).
+   The field is `type` to match paths; `kind` is accepted on read for files written before
+   the rename, as `treatment` is for paths. Spots carry no cost today — `jurisdiction` is
+   recorded so a future cost model can bill the right body. The wire format is a SEPARATE
+   `spots` FeatureCollection so every polyline-only path stays polyline-only. Drawn as
+   glyph markers (`SPOT_GLYPHS`, mirrored across render_map.py / render_html.py / editor
+   JS / render_common.js) using the white-halo text idiom.
+4. **Context layers.** Reference data — NOT part of network.yaml — in
+   `data/layers/<id>.geojson` + a `layers.json` manifest, served by `/api/layers` and read
+   as a static asset by the web app. The "Map layers" card lazy-fetches on first toggle and
+   draws points on a shared `L.canvas`, so layers cost nothing while off and stay smooth
+   with ~1300 trees. Shipped: bike-parking + street-trees (OSM), crashes-bike-ped +
+   crashes-fatal-serious (MassDOT, 2021 on). Adding a layer later needs no code — drop the
+   file in both `data/layers/` and `web/data/layers/`, add a manifest entry.
+
+**Gotchas from that work:**
+- **Nothing injected into folium's map.html may touch the map at parse time.**
+  `get_root().script` children are emitted BEFORE the `var map_… = L.map(…)`
+  assignment, so `map_….on(...)` there throws and takes the whole `<script>`
+  block — the map with it — leaving a blank page. Wrap injected code in
+  `DOMContentLoaded` (both the phase slider and the chevron-zoom handler do).
+  `test_html_never_touches_the_map_before_it_exists` pins this; it is the same
+  trap as the TextPath crash, and the chevron handler fell into it once.
+- **A replaced path is hidden only while its replacement is actually shown.**
+  In map.html that means consulting `map.hasLayer(replacement)` as well as the
+  slider position, so unticking the upgrade's phase falls back to the path it
+  replaced instead of blanking the corridor; the slider therefore re-asserts
+  phase groups on `input` only, never on `overlayadd`/`overlayremove` (which
+  would fight the checkbox the reader just clicked).
+- **Chevron membership belongs to `syncArrows()` alone** in both editors. Arrows are
+  rebuilt on load, on shape edits and on import, so any other place that adds them
+  resurrects a replaced path's chevron; and `init()` must call `applyPhaseView()`
+  itself, or the first paint ignores upgrades until the Show menu is touched (that
+  shipped once — the fix lived only in the menu handler). `web/test/app_structure.
+  test.js` guards both, plus the legend rebuild, since app.js has no DOM harness.
+- **A superseded path draws no one-way chevron** when its replacement is on the
+  same map: the upgrade covers the old line exactly, so only the stale arrow
+  would show, claiming the new lane is one-way.
+- `fetch_layers.py` derives its bbox from `data/malden_boundary.geojson` (not
+  `osm.MALDEN_BBOX`) so another city needs no code change, and it renames raw fields to
+  plain language AT FETCH TIME — MassDOT's `NON_MTRST_TYPE_CL`, epoch-ms dates and KABCO
+  codes mean nothing to a resident, and popups show property names verbatim. The
+  serious-injury signal is in `MAX_INJR_SVRTY_CL`, NOT `CRASH_SEVERITY_DESCR` (which only
+  says fatal / non-fatal / property damage).
+- Animation frames must be pixel-stable: `render_map.render_map(tight=False)` uses a fixed
+  canvas AND fixed axes box (tight_layout resizes the axes around whatever decorations a
+  frame happens to have), and captions are padded to a constant line count.
+- `web/js/gif.js` is a small GIF89a+LZW encoder (the web app has no Pillow). Two traps it
+  already fell into: never spread a frame's bytes into `Array.push` (argument limit), and
+  median cut allocates palette slots by area — a pale basemap will crowd the network's own
+  colors out unless `reserved` is passed (export.js passes `MAP_PALETTE`).
 
 ## Current state (2026-07)
 
-**Done:** everything above; 94 offline pytest tests green; the Overpass User-Agent uses
+**Done:** everything above; 141 offline pytest tests green; the Overpass User-Agent uses
 the MSS contact address (keep it that way — Overpass etiquette wants a reachable contact).
 
 **Done (2026-07): the static client-side port** — `web/` is a complete, framework-free
@@ -153,7 +236,12 @@ maldensafestreets.org; also servable from any static host). Key facts:
   city polygon ring to `web/data/malden_boundary_polygon.json` (a test fails if stale).
 - `web/data/` holds byte-identical copies of the data assets (test-enforced; identical
   blobs are free in git). The street graph (~4 MB) is fetched lazily on first snap.
-- **Tests:** `cd web && node --test` — 75 offline tests mirroring the pytest suite.
+- `web/serve.py` serves with **caching disabled** on purpose. Browsers cache ES
+  modules hard, and a plain reload revalidates the HTML but not always its module
+  graph — so after an edit the page can keep running the previous `app.js` and look
+  like it ignored the change. If you serve `web/` some other way, disable caching
+  there too or you will chase ghosts.
+- **Tests:** `cd web && node --test` — 121 offline tests mirroring the pytest suite.
   Serialization parity is real: Python parses JS-written YAML with zero errors and
   identical fields/geometry; clip/summarize totals match Python to 4 decimals on the
   full network.

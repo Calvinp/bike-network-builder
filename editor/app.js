@@ -6,26 +6,47 @@ const PHASE_COLORS = {1:"#0072B2",2:"#009E73",3:"#D55E00",4:"#E69F00",5:"#56B4E9
 const TYPE_COLORS = {
   quick_build_separated:"#0072B2", concrete_separated:"#D55E00",
   shared_use_path:"#009E73", buffered_painted:"#E69F00",
-  neighborway:"#56B4E9"
+  neighborway:"#56B4E9",
+  pedestrianized:"#CC79A7"  // shared with STATE on purpose (phase mode only)
 };
 const TYPE_LABELS = {
   quick_build_separated:"Quick-build separated lane",
   concrete_separated:"Concrete-protected lane",
   shared_use_path:"Shared-use path",
   buffered_painted:"Buffered painted lane (interim)",
-  neighborway:"Neighborway (calm shared street)"
+  neighborway:"Neighborway (calm shared street)",
+  pedestrianized:"Pedestrianized street"
 };
 const SINGLE="#0072B2", EXISTING="#000000", FUNDED="#E69F00", STATE="#CC79A7", BOUNDARY="#777777";
 
-let map, networkGroup, boundaryGroup, arrowsGroup;
+/* Spot (point) improvements — glyphs/labels mirror bikenetwork/render_map.py. */
+const SPOT_GLYPHS = {
+  speed_hump:"∩", raised_crosswalk:"▬", raised_intersection:"◆",
+  curb_extension:"◖", modal_filter:"⊘", bollards:"‖", retractable_bollards:"⇕",
+  bike_parking:"P", street_trees:"T", other:"●"
+};
+const SPOT_LABELS = {
+  speed_hump:"Speed hump", raised_crosswalk:"Raised crosswalk",
+  raised_intersection:"Raised intersection", curb_extension:"Curb extension",
+  modal_filter:"Modal filter", bollards:"Bollards",
+  retractable_bollards:"Retractable bollards",
+  bike_parking:"Bike parking", street_trees:"Street trees", other:"Spot improvement"
+};
+const SPOT_PROPOSED="#1a1a1a", SPOT_EXISTING="#707070";
+
+let map, networkGroup, boundaryGroup, arrowsGroup, spotsGroup;
 let features = [];          // [{props, layer}]
+let spots = [];             // [{props, marker}] — point improvements
 let selected = null;
+let selectedSpot = null;
+let placingSpot = false;    // "+ Add spot" waits for the next map click
 let config = {city:"Malden", phases:[]};
 let options = {types:[], statuses:[], jurisdictions:[], color_modes:["phase","type","single"]};
 let colorMode = "type";      // path type excites people; phases are for nerds
 let dirty = false;
 let editMode = false;
 let combineFrom = null;      // set while "Combine…" waits for a second path
+let phaseView = "all";       // "all" | "0" (today) | a phase number as string
 
 /* ---------- geometry helpers ---------- */
 function haversineMiles(a, b){
@@ -103,7 +124,36 @@ function updateArrows(f){
     g.addLayer(L.marker([(a.lat+b.lat)/2,(a.lng+b.lng)/2],
       {icon, interactive:false, keyboard:false, pmIgnore:true}));
   });
-  g.addTo(arrowsGroup); f.arrows=g;
+  f.arrows=g;
+  // Membership is decided centrally: arrows get rebuilt on load, on edit and
+  // on import, and each of those would otherwise resurrect the chevron of a
+  // path that a shown upgrade has replaced.
+  syncArrows();
+}
+
+/* Which features the current "Show" setting puts on the map. */
+function visibleFeatureSet(){
+  if(phaseView==="all") return new Set(features);
+  const n=parseInt(phaseView,10);   // 0 = today (existing + funded only)
+  const shown=features.filter(f=>f.props.status!=="proposed"
+    || (f.props.phase!=null && f.props.phase<=n));
+  const superseded=supersededIdSet(shown);
+  return new Set(shown.filter(f=>!(f.props.id && superseded.has(f.props.id))));
+}
+
+/* A path keeps its one-way chevron only while it is on the map AND nothing
+   shown replaces it: the replacement covers the old line exactly, so the
+   arrow would be all that shows, claiming the new lane is one-way. */
+function syncArrows(shownSet){
+  if(!arrowsGroup) return;                 // not built yet during early init
+  const shown = shownSet || visibleFeatureSet();
+  const replaced = supersededIdSet([...shown]);
+  features.forEach(f=>{
+    if(!f.arrows) return;
+    const want = shown.has(f) && !(f.props.id && replaced.has(f.props.id));
+    if(want && !arrowsGroup.hasLayer(f.arrows)) arrowsGroup.addLayer(f.arrows);
+    if(!want && arrowsGroup.hasLayer(f.arrows)) arrowsGroup.removeLayer(f.arrows);
+  });
 }
 /* Chevron icons are fixed-size DivIcons, so zoomed way out they'd dwarf the
    streets themselves — below this zoom the whole arrows layer comes off. */
@@ -136,20 +186,166 @@ function addFeature(props, latlngs){
   layer.addTo(networkGroup);
   features.push(f);
   updateArrows(f);
+  renderLegend();
   return f;
 }
 function removeFeature(f){
   networkGroup.removeLayer(f.layer);
   if(f.arrows) arrowsGroup.removeLayer(f.arrows);
   features=features.filter(x=>x!==f);
+  // Don't leave upgrade links pointing at a deleted path (the file would
+  // fail validation on the next import).
+  if(f.props.id) features.forEach(x=>{
+    if(x.props.upgrades===f.props.id) x.props.upgrades="";
+  });
   if(selected===f) deselect();
-  markDirty(); recomputeTotals();
+  markDirty(); recomputeTotals(); renderLegend();
 }
 function clearFeatures(){
   deselect();
   features.forEach(f=>{ networkGroup.removeLayer(f.layer);
     if(f.arrows) arrowsGroup.removeLayer(f.arrows); });
   features=[];
+}
+
+/* ---------- spot improvements (point features) ---------- */
+function spotIcon(p){
+  const color = p.status==="existing" ? SPOT_EXISTING : SPOT_PROPOSED;
+  const glyph = SPOT_GLYPHS[p.type] || SPOT_GLYPHS.other;
+  return L.divIcon({className:"spot-glyph", iconSize:[18,18], iconAnchor:[9,9],
+    html:`<div style="color:${color}">${glyph}</div>`});
+}
+function addSpot(props, latlng){
+  const marker=L.marker(latlng, {icon:spotIcon(props), draggable:true,
+                                 pmIgnore:true, keyboard:false});
+  const s={props, marker};
+  marker.on("click", ()=>{ if(!editMode) selectSpot(s); });
+  marker.on("dragend", ()=>{ markDirty(); });
+  marker.addTo(spotsGroup);   // own group — never networkGroup (getBounds)
+  spots.push(s);
+  return s;
+}
+function removeSpot(s){
+  spotsGroup.removeLayer(s.marker);
+  spots=spots.filter(x=>x!==s);
+  if(selectedSpot===s) deselect();
+  markDirty(); recomputeTotals();
+}
+function clearSpots(){
+  spots.forEach(s=>spotsGroup.removeLayer(s.marker));
+  spots=[]; selectedSpot=null;
+}
+function defaultSpotProps(){
+  return {name:"", type:"speed_hump", status:"proposed", jurisdiction:"city",
+          phase:null, notes:""};
+}
+function selectSpot(s){
+  if(selected){ const prev=selected; selected=null; restyle(prev); }
+  selectedSpot=s;
+  document.getElementById("prop-empty").style.display="none";
+  document.getElementById("prop-form").style.display="none";
+  document.getElementById("spot-form").style.display="";
+  fillSpotForm(s);
+  if(isMobile() && !document.querySelector(".sidebar").classList.contains("open")){
+    document.getElementById("peek-name").textContent =
+      s.props.name || SPOT_LABELS[s.props.type] || "Spot";
+    document.getElementById("peek").classList.add("show");
+  }
+}
+function fillSpotForm(s){
+  const p=s.props;
+  document.getElementById("sel-pill").textContent =
+    p.name || SPOT_LABELS[p.type] || "";
+  opt(document.getElementById("s-type"), options.spot_types||Object.keys(SPOT_GLYPHS),
+      p.type, v=>SPOT_LABELS[v]||v.replace(/_/g," "));
+  opt(document.getElementById("s-juris"), options.jurisdictions, p.jurisdiction);
+  document.getElementById("s-name").value=p.name||"";
+  document.getElementById("s-status").value=p.status||"proposed";
+  document.getElementById("s-notes").value=p.notes||"";
+  fillSpotPhaseSelect(s);
+}
+function fillSpotPhaseSelect(s){
+  const sel=document.getElementById("s-phase");
+  if(s.props.status==="proposed"){
+    sel.disabled=false;
+    sel.innerHTML="";
+    const any=document.createElement("option");
+    any.value=""; any.textContent="— any time —";
+    sel.appendChild(any);
+    config.phases.forEach(ph=>{
+      const o=document.createElement("option");
+      o.value=String(ph.phase); o.textContent=`Phase ${ph.phase}`;
+      sel.appendChild(o);
+    });
+    sel.value = s.props.phase==null ? "" : String(s.props.phase);
+  } else {
+    sel.innerHTML="<option>— n/a —</option>"; sel.disabled=true;
+  }
+}
+function bindSpotForm(){
+  const set=(id,key,cast)=>{
+    document.getElementById(id).addEventListener("input", e=>{
+      if(!selectedSpot) return;
+      selectedSpot.props[key]= cast?cast(e.target.value):e.target.value;
+      if(key==="status"){
+        if(selectedSpot.props.status!=="proposed") selectedSpot.props.phase=null;
+        fillSpotPhaseSelect(selectedSpot);
+      }
+      if(key==="type"||key==="status")
+        selectedSpot.marker.setIcon(spotIcon(selectedSpot.props));
+      if(key==="name"||key==="type")
+        document.getElementById("sel-pill").textContent =
+          selectedSpot.props.name || SPOT_LABELS[selectedSpot.props.type] || "";
+      markDirty(); recomputeTotals();
+    });
+  };
+  set("s-name","name"); set("s-notes","notes"); set("s-status","status");
+  set("s-type","type"); set("s-juris","jurisdiction");
+  set("s-phase","phase", v=> v==="" ? null : parseInt(v,10));
+  document.getElementById("btn-spot-delete").addEventListener("click", ()=>{
+    if(selectedSpot && confirm("Delete this spot?")) removeSpot(selectedSpot);
+  });
+}
+function startPlaceSpot(){
+  if(phaseView!=="all") setPhaseView("all");
+  deselect();
+  placingSpot=true;
+  setStatus("Click the map where the improvement goes — Esc cancels.");
+}
+
+/* ---------- upgrades (quick-build now, better build later) ---------- */
+function ensureId(f){
+  // Ids exist only where an upgrade link needs one, so plain files stay clean.
+  while(!f.props.id || features.some(x=>x!==f && x.props.id===f.props.id))
+    f.props.id="p-"+Math.random().toString(36).slice(2,8);
+  return f.props.id;
+}
+function supersededIdSet(list){
+  const ids=new Set(list.map(f=>f.props.id).filter(Boolean));
+  const out=new Set();
+  list.forEach(f=>{
+    if(f.props.upgrades && ids.has(f.props.upgrades)) out.add(f.props.upgrades);
+  });
+  return out;
+}
+function planUpgrade(){
+  if(!selected) return;
+  const target=selected, tid=ensureId(target);
+  const segs=segsOf(target.layer).map(seg=>seg.map(p=>L.latLng(p.lat,p.lng)));
+  const nums=config.phases.map(x=>x.phase).sort((a,b)=>a-b);
+  const after=target.props.phase;
+  let next=nums.find(n=>after==null || n>after);
+  if(next==null) next=nums.length?nums[nums.length-1]:1;
+  const f=addFeature(defaultProps({
+    name:(target.props.name||"Path")+" (upgrade)",
+    status:"proposed", type:target.props.type,
+    jurisdiction:target.props.jurisdiction, directions:target.props.directions,
+    on_street:target.props.on_street, from:target.props.from, to:target.props.to,
+    upgrades:tid, phase:next
+  }), segs.length===1?segs[0]:segs);
+  setPhaseView("all");
+  markDirty(); recomputeTotals(); selectFeature(f);
+  setStatus(`Added an upgrade of “${target.props.name}” — pick its phase and type.`);
 }
 
 /* ---------- combining paths ---------- */
@@ -173,6 +369,8 @@ function combineInto(target, other){
 /* ---------- selection + property form ---------- */
 function isMobile(){ return window.matchMedia("(max-width: 760px)").matches; }
 function selectFeature(f){
+  selectedSpot=null;
+  document.getElementById("spot-form").style.display="none";
   const prev=selected; selected=f;
   if(prev && prev!==f) restyle(prev);
   restyle(f);
@@ -183,9 +381,10 @@ function selectFeature(f){
   }
 }
 function deselect(){
-  const prev=selected; selected=null;
+  const prev=selected; selected=null; selectedSpot=null;
   if(prev) restyle(prev);
   document.getElementById("prop-form").style.display="none";
+  document.getElementById("spot-form").style.display="none";
   document.getElementById("prop-empty").style.display="";
   document.getElementById("sel-pill").textContent="";
   document.getElementById("peek").classList.remove("show");
@@ -218,7 +417,17 @@ function fillForm(f){
   document.getElementById("f-dir").value=String(p.directions||2);
   document.getElementById("btn-reverse").style.display =
     p.directions===1 ? "" : "none";
+  updateUpgradeRow(f);
   updateLenField(f);
+}
+function updateUpgradeRow(f){
+  const row=document.getElementById("upgrade-row");
+  if(f.props.upgrades){
+    const target=features.find(x=>x.props.id===f.props.upgrades);
+    document.getElementById("upgrade-target").textContent =
+      target ? `Replaces “${target.props.name||"(unnamed)"}”` : "Replaces a removed path";
+    row.style.display="";
+  } else row.style.display="none";
 }
 function fillPhaseSelect(f){
   // Phase only applies to proposed paths; existing/funded have phase = null.
@@ -244,9 +453,19 @@ function bindForm(){
       if(key==="status"){
         selected.props.phase = selected.props.status==="proposed"
           ? ((config.phases[0]||{}).phase||1) : null;
+        // Only a proposed path can be an upgrade of another.
+        if(selected.props.status!=="proposed" && selected.props.upgrades){
+          selected.props.upgrades="";
+          updateUpgradeRow(selected);
+        }
         fillPhaseSelect(selected);
       }
-      if(["status","jurisdiction","phase","type"].includes(key)) restyle(selected);
+      if(["status","jurisdiction","phase","type"].includes(key)){
+        restyle(selected);
+        // The legend lists only the types in use, so retyping the last
+        // path of a kind (or the first of a new one) changes it.
+        renderLegend();
+      }
       if(key==="name"){
         document.getElementById("sel-pill").textContent=e.target.value;
         e.target.classList.toggle("warn-field", isDefaultName(e.target.value));
@@ -268,6 +487,12 @@ function bindForm(){
   document.getElementById("btn-delete").addEventListener("click", ()=>{
     if(selected && confirm("Delete this path?")) removeFeature(selected);
   });
+  document.getElementById("btn-upgrade").addEventListener("click", planUpgrade);
+  document.getElementById("btn-unlink").addEventListener("click", ()=>{
+    if(!selected) return;
+    selected.props.upgrades="";
+    updateUpgradeRow(selected); markDirty(); recomputeTotals();
+  });
 }
 
 /* ---------- totals ---------- */
@@ -282,14 +507,21 @@ function recomputeTotals(){
   let city=0, lane=0, state=0, count=0;
   let cLow=0,cHigh=0,sLow=0,sHigh=0, unnamed=0;
   const rates=options.cost_per_mile||{};
+  // A corridor that a later phase upgrades counts ONCE in the mileage (the
+  // final facility) — but every phase's work still costs money.
+  const superseded=supersededIdSet(features);
   for(const f of features){
     const p=f.props;
     if(isDefaultName(p.name)) unnamed++;
     if(p.status!=="proposed") continue;
     const mi=featureMiles(f);
     const [lo,hi]=rates[p.type]||[0,0];
-    if(p.jurisdiction==="state"){ state+=mi; sLow+=mi*lo; sHigh+=mi*hi; }
-    else { city+=mi; lane+=mi*(p.directions||2); count++; cLow+=mi*lo; cHigh+=mi*hi; }
+    const counted=!(p.id && superseded.has(p.id));
+    if(p.jurisdiction==="state"){ if(counted) state+=mi; sLow+=mi*lo; sHigh+=mi*hi; }
+    else {
+      if(counted){ city+=mi; lane+=mi*(p.directions||2); count++; }
+      cLow+=mi*lo; cHigh+=mi*hi;
+    }
   }
   document.getElementById("t-city").textContent=city.toFixed(1);
   document.getElementById("t-lane").textContent=lane.toFixed(1);
@@ -299,6 +531,12 @@ function recomputeTotals(){
   document.getElementById("c-city").textContent=range(cLow,cHigh);
   document.getElementById("c-state").textContent=range(sLow,sHigh);
   document.getElementById("c-total").textContent=range(cLow+sLow,cHigh+sHigh);
+  const built=spots.filter(s=>s.props.status==="existing").length;
+  const planned=spots.length-built;
+  document.getElementById("t-spots-row").style.display = spots.length ? "" : "none";
+  document.getElementById("t-spots").textContent =
+    [built?`${built} existing`:"", planned?`${planned} planned`:""]
+      .filter(Boolean).join(" · ");
   const warn=document.getElementById("unnamed-warn");
   warn.style.display = unnamed ? "" : "none";
   if(unnamed) warn.textContent =
@@ -336,11 +574,71 @@ function renderPhases(){
     });
     box.appendChild(div);
   });
+  renderPhaseView();
 }
 function addPhase(){
   const next=(config.phases.reduce((m,p)=>Math.max(m,p.phase),0))+1;
   config.phases.push({phase:next,label:`Phase ${next}`,deadline:""});
   renderPhases(); if(selected) fillForm(selected); markDirty();
+}
+
+/* ---------- phase view (Show: full network / today / as of phase N) ---------- */
+function renderPhaseView(){
+  const sel=document.getElementById("phase-view");
+  sel.innerHTML="";
+  const add=(v,label)=>{
+    const o=document.createElement("option");
+    o.value=v; o.textContent=label; sel.appendChild(o);
+  };
+  add("all","Full network");
+  add("0","Today (existing + funded)");
+  config.phases.slice().sort((a,b)=>a.phase-b.phase).forEach(ph=>
+    add(String(ph.phase), `As of Phase ${ph.phase}${ph.label?": "+ph.label:""}`));
+  sel.value=[...sel.options].some(o=>o.value===phaseView)?phaseView:"all";
+  phaseView=sel.value;
+}
+function setPhaseView(v){
+  phaseView=v;
+  document.getElementById("phase-view").value=v;
+  applyPhaseView();
+}
+function applyPhaseView(){
+  let shownSet;
+  if(phaseView==="all"){
+    shownSet=new Set(features);
+  } else {
+    const n=parseInt(phaseView,10);  // 0 = today (existing + funded only)
+    let shown=features.filter(f=>f.props.status!=="proposed"
+      || (f.props.phase!=null && f.props.phase<=n));
+    const superseded=supersededIdSet(shown);
+    shown=shown.filter(f=>!(f.props.id && superseded.has(f.props.id)));
+    shownSet=new Set(shown);
+  }
+  // A path whose replacement is also on screen (the full view draws both, the
+  // upgrade exactly covering it) keeps its line so it stays selectable.
+  features.forEach(f=>{
+    if(shownSet.has(f)){
+      if(!networkGroup.hasLayer(f.layer)) networkGroup.addLayer(f.layer);
+    } else {
+      if(selected===f) deselect();
+      if(networkGroup.hasLayer(f.layer)) networkGroup.removeLayer(f.layer);
+    }
+  });
+  syncArrows(shownSet);
+  // Spots follow the same clock: existing always; proposed once their phase
+  // arrives (no phase = any time, so any phased view shows them).
+  spots.forEach(s=>{
+    let show=true;
+    if(phaseView!=="all" && s.props.status==="proposed"){
+      const n=parseInt(phaseView,10);
+      show = n>0 && (s.props.phase==null || s.props.phase<=n);
+    }
+    if(show){ if(!spotsGroup.hasLayer(s.marker)) spotsGroup.addLayer(s.marker); }
+    else {
+      if(selectedSpot===s) deselect();
+      if(spotsGroup.hasLayer(s.marker)) spotsGroup.removeLayer(s.marker);
+    }
+  });
 }
 
 /* ---------- legend ---------- */
@@ -366,6 +664,74 @@ function renderLegend(){
     const d=document.createElement("div"); d.className="item";
     d.innerHTML=`<span class="ln" style="border-top-color:${c};border-top-style:${dashed?"dashed":"solid"}"></span>${label}`;
     box.appendChild(d);
+  });
+}
+
+/* ---------- context layers (reference data, not part of the plan) ----------
+   Lazy on every axis: nothing is fetched until a layer is first checked, and
+   unchecked layers are plain removeLayer'd — zero cost while off. Points are
+   drawn on a shared canvas renderer so thousands of markers stay smooth. */
+const contextLayers = {};   // id -> {entry, leaflet layer or null, loading}
+const contextRenderer = typeof L!=="undefined" ? L.canvas({padding:0.5}) : null;
+
+function contextPopupHtml(props){
+  const rows=Object.entries(props||{})
+    .filter(([k,v])=>v!=null && v!=="" && typeof v!=="object").slice(0,6)
+    .map(([k,v])=>`<div><b>${k.replace(/_/g," ")}</b>: ${String(v)}</div>`);
+  return rows.join("") || "<i>(no details)</i>";
+}
+async function toggleContextLayer(entry, on){
+  const state=contextLayers[entry.id];
+  if(!on){
+    if(state && state.layer) map.removeLayer(state.layer);
+    return;
+  }
+  if(state && state.layer){ state.layer.addTo(map); return; }
+  if(state && state.loading) return;
+  contextLayers[entry.id]={entry, layer:null, loading:true};
+  try{
+    const r=await fetch(`/api/layers/${entry.id}`);
+    if(!r.ok) throw new Error(r.status);
+    const data=await r.json();
+    const style=entry.style||{};
+    const layer=L.geoJSON(data, {
+      renderer: contextRenderer,
+      pointToLayer:(ft,ll)=>L.circleMarker(ll,{
+        renderer: contextRenderer,
+        radius: style.radius||4, color: style.color||"#666", weight:1,
+        fillColor: style.color||"#666", fillOpacity:0.55, opacity:0.8}),
+      style: ()=>({color: style.color||"#666", weight:2, opacity:0.7}),
+      onEachFeature:(ft,l)=>l.bindPopup(
+        `<b>${entry.label}</b>`+contextPopupHtml(ft.properties), {maxWidth:260}),
+    });
+    contextLayers[entry.id]={entry, layer, loading:false};
+    // Only add if the box is still checked (the user may have re-toggled).
+    const box=document.querySelector(`#layers-list input[data-id="${entry.id}"]`);
+    if(!box || box.checked) layer.addTo(map);
+  }catch(e){
+    contextLayers[entry.id]=null;
+    setStatus(`Couldn’t load the “${entry.label}” layer.`);
+  }
+}
+async function initContextLayers(){
+  let entries=[];
+  try{ entries=await (await fetch("/api/layers")).json(); }catch(e){ return; }
+  if(!entries.length) return;
+  document.getElementById("layers-card").style.display="";
+  const box=document.getElementById("layers-list");
+  entries.forEach(entry=>{
+    const row=document.createElement("label");
+    row.className="layer-row";
+    if(entry.description||entry.attribution)
+      row.title=[entry.description,entry.attribution].filter(Boolean).join(" — ");
+    const cb=document.createElement("input");
+    cb.type="checkbox"; cb.dataset.id=entry.id;
+    cb.addEventListener("change",()=>toggleContextLayer(entry, cb.checked));
+    const sw=document.createElement("span"); sw.className="layer-swatch";
+    sw.style.background=(entry.style||{}).color||"#666";
+    row.appendChild(cb); row.appendChild(sw);
+    row.appendChild(document.createTextNode(entry.label||entry.id));
+    box.appendChild(row);
   });
 }
 
@@ -397,8 +763,16 @@ function toGeoJSON(){
     };
   })};
 }
+function spotsToGeoJSON(){
+  return {type:"FeatureCollection", features: spots.map(s=>{
+    const ll=s.marker.getLatLng();
+    return {type:"Feature", properties:Object.assign({}, s.props),
+            geometry:{type:"Point", coordinates:[ll.lng, ll.lat]}};
+  })};
+}
 function statePayload(){
-  return JSON.stringify({network:toGeoJSON(), config:{city:config.city, phases:config.phases}});
+  return JSON.stringify({network:toGeoJSON(), spots:spotsToGeoJSON(),
+                         config:{city:config.city, phases:config.phases}});
 }
 async function autosave(){
   if(saving){ saveTimer=setTimeout(autosave, 500); return; }  // one save at a time
@@ -482,13 +856,18 @@ async function importYamlFile(file){
   if(features.length && !confirm(
     "Replace the current network with the imported one? (Tip: Export your "
     + "current network first if you might want it back.)")) { setStatus(); return; }
-  clearFeatures();
+  clearFeatures(); clearSpots();
   config={city:j.config.city, phases:j.config.phases};
   (j.network.features||[]).forEach(ft=>{
     const ll=latlngsFromGeometry(ft.geometry);
     if(ll) addFeature(ft.properties||defaultProps(), ll);
   });
-  renderPhases(); renderLegend(); recomputeTotals();
+  ((j.spots||{}).features||[]).forEach(ft=>{
+    const c=(ft.geometry||{}).coordinates||[];
+    if(c.length===2) addSpot(Object.assign(defaultSpotProps(), ft.properties),
+                             L.latLng(c[1], c[0]));
+  });
+  renderPhases(); renderLegend(); recomputeTotals(); applyPhaseView();
   if(networkGroup.getLayers().length) map.fitBounds(networkGroup.getBounds().pad(0.05));
   markDirty();
 }
@@ -530,6 +909,8 @@ function reverseSelected(){
 /* ---------- drawing / edit mode ---------- */
 let drawDefaults=null;
 function startDraw(over){
+  // Drawing means editing the full plan — leave any phase preview first.
+  if(phaseView!=="all") setPhaseView("all");
   drawDefaults=over; deselect();
   map.pm.enableDraw("Line",{finishOn:"dblclick", continueDrawing:false});
   const snap=document.getElementById("snap").checked;
@@ -563,6 +944,7 @@ async function init(){
   networkGroup=L.featureGroup().addTo(map);
   boundaryGroup=L.featureGroup().addTo(map);
   arrowsGroup=L.layerGroup().addTo(map);
+  spotsGroup=L.layerGroup().addTo(map);
   map.pm.setGlobalOptions({pmIgnore:false});
 
   const res=await fetch("/api/state"); const data=await res.json();
@@ -577,6 +959,11 @@ async function init(){
   (data.network.features||[]).forEach(ft=>{
     const ll=latlngsFromGeometry(ft.geometry);
     if(ll) addFeature(ft.properties||defaultProps(), ll);
+  });
+  ((data.spots||{}).features||[]).forEach(ft=>{
+    const c=(ft.geometry||{}).coordinates||[];
+    if(c.length===2) addSpot(Object.assign(defaultSpotProps(), ft.properties),
+                             L.latLng(c[1], c[0]));
   });
 
   if(networkGroup.getLayers().length) map.fitBounds(networkGroup.getBounds().pad(0.05));
@@ -596,10 +983,19 @@ async function init(){
     selectFeature(f); markDirty(); recomputeTotals(); setStatus();
   });
 
-  bindForm(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
+  bindForm(); bindSpotForm(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
+  applyPhaseView();   // a fresh load must already honour upgrades
+  initContextLayers();
   document.getElementById("btn-add").onclick=()=>startDraw({status:"proposed"});
   document.getElementById("btn-add-existing").onclick=()=>startDraw(
     {status:"existing", name:"Existing path", type:"shared_use_path", phase:null});
+  document.getElementById("btn-add-spot").onclick=startPlaceSpot;
+  map.on("click", e=>{
+    if(!placingSpot) return;
+    placingSpot=false;
+    const s=addSpot(defaultSpotProps(), e.latlng);
+    selectSpot(s); markDirty(); recomputeTotals(); setStatus();
+  });
   document.getElementById("btn-edit").onclick=toggleEdit;
   document.getElementById("btn-add-phase").onclick=addPhase;
   document.getElementById("btn-snap-sel").onclick=snapSelected;
@@ -608,6 +1004,7 @@ async function init(){
   document.getElementById("unnamed-warn").onclick=selectNextUnnamed;
   document.addEventListener("keydown", e=>{
     if(e.key==="Escape" && combineFrom){ combineFrom=null; setStatus(); }
+    if(e.key==="Escape" && placingSpot){ placingSpot=false; setStatus(); }
     const typing=/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
     if(!typing && (e.key==="Backspace" || e.key==="Delete"
                    || (e.ctrlKey && e.key.toLowerCase()==="z"))){
@@ -626,6 +1023,10 @@ async function init(){
     document.getElementById("peek").classList.remove("show");
     document.getElementById("prop-form").scrollIntoView({block:"center"});
   };
+
+  document.getElementById("phase-view").addEventListener("change", e=>{
+    phaseView=e.target.value; applyPhaseView();
+  });
 
   const phasesBox=document.getElementById("phases-box");
   phasesBox.open = (colorMode==="phase");
@@ -663,6 +1064,17 @@ async function init(){
     if(dirty) navigator.sendBeacon("/api/state",
       new Blob([statePayload()], {type:"application/json"}));
   };
+  // Leaflet doesn't notice its container changing size (phone rotation, a
+  // header row wrapping, the browser chrome hiding), and leaves the new area
+  // blank grey until told. Debounced so a drag-resize isn't a redraw storm.
+  let resizeTimer=null;
+  const onResize=()=>{
+    clearTimeout(resizeTimer);
+    resizeTimer=setTimeout(()=>map.invalidateSize(), 150);
+  };
+  window.addEventListener("resize", onResize);
+  window.addEventListener("orientationchange", onResize);
+
   window.addEventListener("pagehide", beaconFlush);
   document.addEventListener("visibilitychange", ()=>{
     if(document.visibilityState==="hidden") beaconFlush();

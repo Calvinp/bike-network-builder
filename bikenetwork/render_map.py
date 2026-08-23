@@ -32,7 +32,7 @@ from matplotlib import patheffects
 from matplotlib.lines import Line2D
 
 from .geometry import lonlat_to_mercator
-from .network_format import BikePath, Network
+from .network_format import BikePath, Network, superseded_ids
 
 Point = Tuple[float, float]
 
@@ -54,6 +54,10 @@ TYPE_COLORS = {
     "shared_use_path": "#009E73",        # bluish green
     "buffered_painted": "#E69F00",       # orange
     "neighborway": "#56B4E9",            # sky blue
+    # Reddish purple deliberately shared with STATE_COLOR: that color only
+    # appears in phase mode, where type colors never draw. Okabe-Ito's last
+    # unused hue (yellow) is illegible on a light basemap.
+    "pedestrianized": "#CC79A7",         # reddish purple
 }
 TYPE_LABELS = {
     "quick_build_separated": "Quick-build separated lane",
@@ -61,6 +65,7 @@ TYPE_LABELS = {
     "shared_use_path": "Shared-use path",
     "buffered_painted": "Buffered painted lane (interim)",
     "neighborway": "Neighborway (calm shared street)",
+    "pedestrianized": "Pedestrianized street",
 }
 SINGLE_COLOR = "#0072B2"    # the whole network, one color
 EXISTING_COLOR = "#000000"  # black (dashed) — existing built facilities
@@ -70,6 +75,36 @@ BOUNDARY_COLOR = "#777777"  # grey (thin dashed) — city boundary
 
 EXISTING_DASH = (0, (3.2, 2.6))
 FUNDED_DASH = (0, (4.2, 2.6))
+
+# Spot (point) improvements: text glyphs, mirrored in the editor JS and the
+# HTML export. All chosen from DejaVu Sans coverage so matplotlib can draw
+# the very same characters.
+SPOT_GLYPHS = {
+    "speed_hump": "∩",
+    "raised_crosswalk": "▬",
+    "raised_intersection": "◆",
+    "curb_extension": "◖",
+    "modal_filter": "⊘",            # no through motor traffic
+    "bollards": "‖",                # a line of posts
+    "retractable_bollards": "⇕",    # posts that drop and rise
+    "bike_parking": "P",
+    "street_trees": "T",
+    "other": "●",
+}
+SPOT_LABELS = {
+    "speed_hump": "Speed hump",
+    "raised_crosswalk": "Raised crosswalk",
+    "raised_intersection": "Raised intersection",
+    "curb_extension": "Curb extension",
+    "modal_filter": "Modal filter",
+    "bollards": "Bollards",
+    "retractable_bollards": "Retractable bollards",
+    "bike_parking": "Bike parking",
+    "street_trees": "Street trees",
+    "other": "Spot improvement",
+}
+SPOT_PROPOSED_COLOR = "#1a1a1a"  # near-black glyph (white halo)
+SPOT_EXISTING_COLOR = "#707070"  # grey — already on the ground
 
 # Names the editor assigns to freshly-drawn paths — never worth labeling.
 DEFAULT_NAMES = {"new path", "existing path", "new corridor"}
@@ -125,15 +160,25 @@ def render_map(
     color_mode: str = "type",
     title: str | None = None,
     dpi: int = 250,
+    figsize: float | tuple = 16,
+    spots=None,
+    tight: bool = True,
 ) -> Path:
     """Draw proposed + existing paths over a basemap. Returns the output path.
     16in @ 250dpi gives a ~4000px print-quality export with breathing room for
     labels (and pulls sharper, more detailed basemap tiles); tests may pass a
-    lower dpi to stay fast."""
+    lower dpi to stay fast, and GIF frames use a smaller figsize.
+
+    `tight` crops the saved image to its content — right for a standalone map,
+    but WRONG for animation frames: the crop follows the title and legend, so
+    frames with longer captions come out wider and the map appears to jump
+    between scales. Animation frames pass tight=False for a fixed canvas."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(16, 16), dpi=dpi)
+    if not isinstance(figsize, (tuple, list)):
+        figsize = (figsize, figsize)
+    fig, ax = plt.subplots(figsize=tuple(figsize), dpi=dpi)
 
     all_lats: List[float] = []
     phases_seen = set()
@@ -144,6 +189,10 @@ def render_map(
     # Pick one representative (longest) path per street name for labeling.
     label_pick: Dict[str, BikePath] = {}
     arrow_pts: List[tuple] = []  # one-way chevron positions (labels avoid them)
+    # A path drawn together with the upgrade that replaces it is completely
+    # covered by it, so only its chevron would still show — an arrow claiming
+    # the new lane is one-way. The replacement owns the direction now.
+    replaced = superseded_ids(paths)
 
     for p in paths:
         segs = [s for s in p.segments if len(s) >= 2]
@@ -172,7 +221,7 @@ def render_map(
                         solid_capstyle="round", alpha=0.55)
                 ax.plot(xs, ys, color=color, linewidth=4.0,
                         zorder=5, solid_capstyle="round")
-            if p.directions == 1:
+            if p.directions == 1 and p.id not in replaced:
                 arrow_pts.append(_direction_arrow(ax, seg))
 
         if p.status == "existing":
@@ -202,8 +251,13 @@ def render_map(
     ax.set_aspect("equal")
     ax.autoscale()
 
+    # Spot (point) improvements: small glyphs over the lines. Text with a
+    # white stroke — the same idiom as the one-way chevrons.
+    spot_pts = _draw_spots(ax, spots or [])
+
     # Route-name labels (drawn after autoscale so positions are stable).
-    _place_route_labels(ax, label_pick, paths, avoid_pts=arrow_pts)
+    _place_route_labels(ax, label_pick, paths, avoid_pts=arrow_pts + spot_pts,
+                        fig_width_in=figsize[0])
 
     # Tiled street basemap (network); silently fall back to a plain background.
     if basemap:
@@ -222,6 +276,7 @@ def render_map(
 
     handles = _legend_handles(net, color_mode, phases_seen, types_seen,
                               has_state, has_funded, has_existing, bool(boundary))
+    handles += _spot_legend_handles(spots or [])
     if handles:
         ax.legend(handles=handles, loc="upper left", fontsize=9, framealpha=0.93)
 
@@ -229,8 +284,15 @@ def render_map(
                  fontsize=15, fontweight="bold")
     ax.set_axis_off()
 
-    fig.tight_layout()
-    fig.savefig(out_path, bbox_inches="tight")
+    if tight:
+        fig.tight_layout()
+        fig.savefig(out_path, bbox_inches="tight")
+    else:
+        # Fixed canvas AND fixed axes box: tight_layout sizes the axes around
+        # whatever decorations a frame happens to have (route labels, a taller
+        # title), which would rescale the map from frame to frame.
+        fig.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.88)
+        fig.savefig(out_path)
     plt.close(fig)
     return out_path
 
@@ -286,6 +348,36 @@ def _legend_handles(net: Network, color_mode: str, phases_seen, types_seen,
     return handles
 
 
+def _draw_spots(ax, spots) -> list:
+    """Draw spot glyphs (text + white stroke, the chevron idiom — NEVER
+    marker patches). Returns the (x, y) positions so labels avoid them."""
+    pts = []
+    for s in spots:
+        if s.location is None:
+            continue
+        x, y = lonlat_to_mercator(*s.location)
+        color = SPOT_EXISTING_COLOR if s.status == "existing" else SPOT_PROPOSED_COLOR
+        ax.text(x, y, SPOT_GLYPHS.get(s.type, SPOT_GLYPHS["other"]),
+                fontsize=9, color=color, ha="center", va="center", zorder=7,
+                fontweight="bold",
+                path_effects=[patheffects.withStroke(linewidth=2.5,
+                                                     foreground="white")])
+        pts.append((x, y))
+    return pts
+
+
+def _spot_legend_handles(spots) -> list:
+    """One legend row per spot kind present. The glyph lives in the label text
+    (legend markers can't render arbitrary Unicode reliably)."""
+    kinds = {s.type for s in spots}
+    handles = []
+    for kind in [k for k in SPOT_GLYPHS if k in kinds]:
+        handles.append(Line2D([], [], linestyle="none",
+                              label=f"{SPOT_GLYPHS[kind]}  "
+                                    f"{SPOT_LABELS.get(kind, kind)}"))
+    return handles
+
+
 def _point_at_fraction(pts, t: float):
     """The point a fraction t (0..1) along a polyline's arc length."""
     dists = [math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:])]
@@ -300,7 +392,7 @@ def _point_at_fraction(pts, t: float):
 
 
 def _place_route_labels(ax, label_pick: Dict[str, BikePath], paths,
-                        avoid_pts=()) -> None:
+                        avoid_pts=(), fig_width_in: float = 16) -> None:
     """Label routes only where there's room. Candidate positions slide along
     the route; each is scored by how many vertices of OTHER paths sit under
     the label's box. Longest routes claim space first; a label whose every
@@ -311,9 +403,9 @@ def _place_route_labels(ax, label_pick: Dict[str, BikePath], paths,
         return
     x0, x1 = ax.get_xlim()
     span_x = x1 - x0
-    # Approximate an 8pt text box in data units on the 16in figure.
-    char_w = span_x * (8 * 0.62 / 72) / 16
-    box_h = span_x * (8 * 1.9 / 72) / 16
+    # Approximate an 8pt text box in data units, scaled to the figure width.
+    char_w = span_x * (8 * 0.62 / 72) / fig_width_in
+    box_h = span_x * (8 * 1.9 / 72) / fig_width_in
     merc = {id(p): [[lonlat_to_mercator(*pt) for pt in seg]
                     for seg in p.segments if len(seg) >= 2] for p in paths}
 

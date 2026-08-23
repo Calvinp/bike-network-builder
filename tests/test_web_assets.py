@@ -25,6 +25,28 @@ def test_web_data_copies_are_identical(name):
             f"(the web app ships it as a static asset).")
 
 
+def _layer_files():
+    layers = os.path.join(ROOT, "data", "layers")
+    if not os.path.isdir(layers):
+        return []
+    return sorted(n for n in os.listdir(layers) if not n.startswith("."))
+
+
+@pytest.mark.parametrize("name", _layer_files())
+def test_web_layer_copies_are_identical(name):
+    """Discovered, not listed: dropping a new layer into data/layers/ should
+    fail here until it is copied to the web app too."""
+    canonical = os.path.join(ROOT, "data", "layers", name)
+    copy = os.path.join(ROOT, "web", "data", "layers", name)
+    assert os.path.exists(copy), (
+        f"web/data/layers/{name} is missing — copy it over (the static "
+        f"editor fetches its map layers from there).")
+    with open(canonical, "rb") as a, open(copy, "rb") as b:
+        assert a.read() == b.read(), (
+            f"web/data/layers/{name} has diverged from data/layers/{name} — "
+            f"recopy it.")
+
+
 def test_boundary_polygon_matches_generator():
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     try:
