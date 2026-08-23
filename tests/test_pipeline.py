@@ -196,6 +196,34 @@ def test_html_has_no_slider_without_phases(tmp_path):
     assert "phase-slider" not in html
 
 
+def _fake_layer(n_features=1):
+    return ({"id": "bike-parking", "label": "Bike parking (existing)",
+             "style": {"color": "#0072B2", "radius": 4},
+             "attribution": "© OpenStreetMap contributors"},
+            {"type": "FeatureCollection", "features": [
+                {"type": "Feature", "properties": {"capacity": "8", "pad": "x" * 90},
+                 "geometry": {"type": "Point", "coordinates": [-71.06, 42.42]}},
+            ] * n_features})
+
+
+def test_render_all_embeds_small_context_layers(tmp_path):
+    summary = render_all(_net([_p("A", 1)]), BOUNDARY, tmp_path, basemap=False,
+                         context_layers=[_fake_layer()])
+    html = (tmp_path / "map.html").read_text(encoding="utf-8")
+    assert "Bike parking (existing)" in html
+    assert not any("left out" in n for n in summary["notices"])
+
+
+def test_render_all_skips_oversized_context_layer(tmp_path):
+    # ~800 KB of features blows the per-layer cap; the map stays lean and the
+    # summary says so instead of silently dropping the layer.
+    summary = render_all(_net([_p("A", 1)]), BOUNDARY, tmp_path, basemap=False,
+                         context_layers=[_fake_layer(n_features=5000)])
+    html = (tmp_path / "map.html").read_text(encoding="utf-8")
+    assert "Bike parking (existing)" not in html
+    assert any("left out" in n for n in summary["notices"])
+
+
 def test_render_all_rejects_unknown_color_mode(tmp_path):
     with pytest.raises(ValueError):
         render_all(_net([_p("A")]), BOUNDARY, tmp_path, basemap=False,

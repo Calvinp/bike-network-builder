@@ -93,6 +93,23 @@ precise intersections **on** `on_street` ("Main Street & Salem Street", never
 in both Malden and a neighbor (Melrose/Everett), the resolver picks the Malden
 node; border-only crossings are kept, clipped to the city line, and flagged.
 
+## Refreshing the map layers (`fetch_layers.py`)
+
+The "Map layers" card shows reference data under your network — existing bike
+parking and street trees (OpenStreetMap), and bike/pedestrian crash locations
+(MassDOT). The files live in `data/layers/` and are checked in, so nobody
+needs network access to use them. To refresh:
+
+```bash
+python fetch_layers.py                 # everything
+python fetch_layers.py --skip-crashes  # just the OpenStreetMap layers
+```
+
+Each layer degrades on its own: if a source is unreachable the previously
+checked-in file is kept and the script explains how to export that dataset by
+hand. Adding a layer later = drop a `.geojson` in `data/layers/` and add an
+entry to `layers.json` — no code change.
+
 ## How it works
 
 ```

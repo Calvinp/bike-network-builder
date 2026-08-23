@@ -185,11 +185,34 @@ def render_phase_exports(net: Network, boundary, output_dir, basemap=True,
     return written
 
 
+# map.html embeds context layers inline; big ones would bloat a file people
+# email around, so oversized layers are left out with a notice instead.
+CONTEXT_LAYER_MAX_BYTES = 512 * 1024
+CONTEXT_TOTAL_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _embeddable_context_layers(context_layers, notices):
+    kept, total = [], 0
+    for entry, data in context_layers or []:
+        size = len(json.dumps(data, separators=(",", ":")))
+        if size > CONTEXT_LAYER_MAX_BYTES or total + size > CONTEXT_TOTAL_MAX_BYTES:
+            notices.append(f"{entry.get('label', entry.get('id'))}: left out of "
+                           f"map.html ({size // 1024} KB is too much to embed) — "
+                           f"view it in the editor instead.")
+            continue
+        total += size
+        kept.append((entry, data))
+    return kept
+
+
 def render_all(net: Network, boundary, output_dir, basemap=True,
-               color_mode="type", warnings=None, notices=None) -> dict:
+               color_mode="type", warnings=None, notices=None,
+               context_layers=None) -> dict:
     """Clip, then write network.geojson + map.png + map.html into output_dir.
     Returns a summary dict (mileage, warnings, notices). `net` is not mutated —
-    the clipped copies exist only in the outputs."""
+    the clipped copies exist only in the outputs. `context_layers` is a list of
+    (manifest_entry, geojson_dict) embedded in map.html as toggleable
+    reference layers (the caller does the file IO)."""
     if color_mode not in COLOR_MODES:
         raise ValueError(f"color_mode must be one of {COLOR_MODES} (got {color_mode!r})")
     warnings = list(warnings or [])
@@ -210,7 +233,8 @@ def render_all(net: Network, boundary, output_dir, basemap=True,
     render_map(paths, net, output_dir / "map.png", boundary=boundary,
                basemap=basemap, color_mode=color_mode, spots=spots)
     render_html(paths, net, output_dir / "map.html", boundary=boundary,
-                color_mode=color_mode, spots=spots)
+                color_mode=color_mode, spots=spots,
+                context_layers=_embeddable_context_layers(context_layers, notices))
 
     summary = summarize(paths, net)
     summary["warnings"] = warnings

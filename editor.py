@@ -49,6 +49,7 @@ SEED_FILE = ROOT / "output" / "network.yaml"    # produced by build.py
 BASE_FILE = ROOT / "data" / "base_network.yaml"
 BOUNDARY_FILE = ROOT / "data" / "malden_boundary.geojson"
 STREET_GRAPH_CACHE = ROOT / "data" / "street_graph.json"
+LAYERS_DIR = ROOT / "data" / "layers"           # context layers (fetch_layers.py)
 OUTPUT = ROOT / "output"
 
 # Lazily-loaded, then kept in memory for instant snapping.
@@ -164,6 +165,46 @@ def api_save():
     return jsonify({"ok": True})
 
 
+def layers_manifest() -> list:
+    """The context-layer manifest, or [] if none is installed. Layers are
+    reference data (bike parking, trees, crashes…) drawn under the network."""
+    manifest = LAYERS_DIR / "layers.json"
+    if not manifest.exists():
+        return []
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [l for l in (data.get("layers") or []) if l.get("id")]
+
+
+def load_context_layers() -> list:
+    """(manifest_entry, geojson) pairs for embedding in exported map.html."""
+    out = []
+    for entry in layers_manifest():
+        path = LAYERS_DIR / f"{entry['id']}.geojson"
+        try:
+            out.append((entry, json.loads(path.read_text(encoding="utf-8"))))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+@app.route("/api/layers")
+def api_layers():
+    return jsonify(layers_manifest())
+
+
+@app.route("/api/layers/<path:layer_id>")
+def api_layer_data(layer_id):
+    """One layer's GeoJSON, fetched lazily by the client the first time the
+    layer is toggled on. Only manifest ids are served (no path traversal)."""
+    if layer_id not in {l["id"] for l in layers_manifest()}:
+        return jsonify({"error": f"unknown layer {layer_id!r}"}), 404
+    return send_from_directory(LAYERS_DIR, f"{layer_id}.geojson",
+                               mimetype="application/geo+json")
+
+
 @app.route("/api/import", methods=["POST"])
 def api_import():
     """Validate an uploaded network.yaml — or a .zip bundle containing one —
@@ -217,7 +258,8 @@ def api_export_bundle():
     if color_mode not in COLOR_MODES:
         color_mode = "type"
     basemap = bool(request.args.get("basemap", "1") != "0")
-    render_all(net, boundary, OUTPUT, basemap=basemap, color_mode=color_mode)
+    render_all(net, boundary, OUTPUT, basemap=basemap, color_mode=color_mode,
+               context_layers=load_context_layers())
     phase_files = render_phase_exports(net, boundary, OUTPUT, basemap=basemap,
                                        color_mode=color_mode)
     buf = io.BytesIO()
@@ -280,7 +322,8 @@ def api_regenerate():
     if color_mode not in COLOR_MODES:
         color_mode = "type"
     summary = render_all(net, boundary, OUTPUT, basemap=basemap,
-                         color_mode=color_mode)
+                         color_mode=color_mode,
+                         context_layers=load_context_layers())
     return jsonify({"ok": True, "summary": summary})
 
 

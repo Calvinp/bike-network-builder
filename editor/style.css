@@ -139,6 +139,12 @@ input.warn-field { border-color: #f59e0b; background: #fffbeb; }
   text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff;
 }
 
+/* Context layers */
+.layer-row { display: flex; align-items: center; gap: 8px; padding: 4px 0;
+  font-size: 13px; cursor: pointer; user-select: none; }
+.layer-swatch { width: 11px; height: 11px; border-radius: 50%; flex: none;
+  opacity: 0.75; }
+
 /* Phases */
 .phase { border: 1px solid var(--line); border-radius: 8px; padding: 9px; margin-bottom: 8px; }
 .phase .ph-top { display:flex; align-items:center; gap:8px; margin-bottom: 6px; }

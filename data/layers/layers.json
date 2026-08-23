@@ -1,0 +1,52 @@
+{
+  "layers": [
+    {
+      "id": "bike-parking",
+      "label": "Bike parking (existing)",
+      "description": "Bike racks mapped in OpenStreetMap.",
+      "style": {
+        "color": "#0072B2",
+        "radius": 4
+      },
+      "attribution": "\u00a9 OpenStreetMap contributors",
+      "source": "https://overpass-api.de",
+      "fetched": "2026-08-22"
+    },
+    {
+      "id": "street-trees",
+      "label": "Street trees",
+      "description": "Trees mapped in OpenStreetMap (coverage varies).",
+      "style": {
+        "color": "#009E73",
+        "radius": 3
+      },
+      "attribution": "\u00a9 OpenStreetMap contributors",
+      "source": "https://overpass-api.de",
+      "fetched": "2026-08-22"
+    },
+    {
+      "id": "crashes-bike-ped",
+      "label": "Bike & pedestrian crashes",
+      "description": "Crashes involving a bicyclist or pedestrian, 2021 on (MassDOT publishes this service from 2021).",
+      "style": {
+        "color": "#E69F00",
+        "radius": 4
+      },
+      "attribution": "MassDOT IMPACT crash data",
+      "source": "https://gis.crashdata.dot.mass.gov",
+      "fetched": "2026-08-22"
+    },
+    {
+      "id": "crashes-fatal-serious",
+      "label": "Fatal & serious-injury crashes",
+      "description": "The subset of bike/ped crashes with a death or suspected serious injury.",
+      "style": {
+        "color": "#D55E00",
+        "radius": 5
+      },
+      "attribution": "MassDOT IMPACT crash data",
+      "source": "https://gis.crashdata.dot.mass.gov",
+      "fetched": "2026-08-22"
+    }
+  ]
+}

@@ -29,6 +29,7 @@ def render_html(
     boundary: List[List[Point]] | None = None,
     color_mode: str = "type",
     spots=None,
+    context_layers=None,
 ) -> Path:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -56,6 +57,10 @@ def render_html(
         p.status == "proposed" and p.phase is not None for p in paths)
     groups: Dict[str, folium.FeatureGroup] = {}
     phase_groups: Dict[int, folium.FeatureGroup] = {}
+    # Sort key per group so the layer checklist reads in a sensible order
+    # (existing, funded, then phases in order) rather than in the arbitrary
+    # order paths happen to appear in the file.
+    group_order: Dict[str, tuple] = {}
 
     def _phase_key(n) -> str:
         cfg = phase_map.get(n)
@@ -64,21 +69,24 @@ def render_html(
 
     def group_for(p: BikePath):
         if p.status == "existing":
-            key = "Existing infrastructure"
+            key, order = "Existing infrastructure", (0, 0)
         elif p.status == "funded":
-            key = "Approved / funded (not yet built)"
+            key, order = "Approved / funded (not yet built)", (1, 0)
         elif phased:
             key = _phase_key(p.phase) if p.phase is not None else "Proposed"
+            order = (2, p.phase if p.phase is not None else 10 ** 6)
         elif color_mode == "single":
-            key = "Bike network (proposed)"
+            key, order = "Bike network (proposed)", (2, len(groups))
         elif color_mode == "type":
             key = TYPE_LABELS.get(p.type, p.type.replace("_", " "))
+            order = (2, len(groups))
         elif p.jurisdiction == "state":
-            key = "On a state road (MassDOT approval needed)"
+            key, order = "On a state road (MassDOT approval needed)", (2, len(groups))
         else:
-            key = _phase_key(p.phase)
+            key, order = _phase_key(p.phase), (2, p.phase or 0)
         if key not in groups:
             groups[key] = folium.FeatureGroup(name=key, show=True)
+            group_order[key] = order
         if phased and p.status == "proposed" and p.phase is not None:
             phase_groups[p.phase] = groups[key]
         return groups[key]
@@ -128,6 +136,11 @@ def render_html(
                 if p.id:
                     layers_by_id.setdefault(p.id, []).append((marker, group))
 
+    # The network's own groups first (ordered), then spots, then the
+    # reference layers — the order the checklist reads top to bottom.
+    for key in sorted(groups, key=lambda k: group_order[k]):
+        groups[key].add_to(m)
+
     # Spot (point) improvements: one toggleable group of glyph markers.
     spot_entries = []  # (marker, group, phase-for-the-slider) for proposed spots
     spots_group = None
@@ -144,11 +157,27 @@ def render_html(
                                      s.phase if s.phase is not None else first_phase))
         spots_group.add_to(m)
 
-    for g in groups.values():
-        g.add_to(m)
+    # Context layers (reference data): unchecked by default in LayerControl.
+    for entry, data in context_layers or []:
+        style = entry.get("style") or {}
+        color = style.get("color", "#666666")
+        fg = folium.FeatureGroup(name=entry.get("label", entry.get("id")),
+                                 show=False)
+        folium.GeoJson(
+            data,
+            marker=folium.CircleMarker(radius=style.get("radius", 4),
+                                       color=color, weight=1, fill=True,
+                                       fill_color=color, fill_opacity=0.55),
+            style_function=lambda f, c=color: {"color": c, "weight": 2,
+                                               "opacity": 0.7},
+        ).add_to(fg)
+        fg.add_to(m)
+
     folium.LayerControl(collapsed=False).add_to(m)
 
-    m.get_root().html.add_child(folium.Element(_legend_html(net, color_mode, paths)))
+    # The slider occupies the bottom strip, so the legend sits above it.
+    m.get_root().html.add_child(folium.Element(
+        _legend_html(net, color_mode, paths, bottom_px=96 if phased else 24)))
     # Chevrons are fixed-size DivIcons; hide them when zoomed out far enough
     # that they'd dwarf the streets (mirrors the editor's behavior).
     # overlayadd re-hides ones re-added via the layer control while zoomed out.
@@ -286,7 +315,8 @@ def _direction_marker(seg) -> folium.Marker:
         html=html, icon_size=(16, 16), icon_anchor=(8, 8), class_name="dir-arrow"))
 
 
-def _legend_html(net: Network, color_mode: str, paths: List[BikePath]) -> str:
+def _legend_html(net: Network, color_mode: str, paths: List[BikePath],
+                 bottom_px: int = 24) -> str:
     def row(color, label, dashed=False):
         style = f"border-top:4px {'dashed' if dashed else 'solid'} {color};"
         return (f'<div><span style="{style}width:14px;display:inline-block;'
@@ -312,7 +342,7 @@ def _legend_html(net: Network, color_mode: str, paths: List[BikePath]) -> str:
         rows += row(color, "Existing infrastructure", dashed=True)
 
     return f"""
-    <div style="position:fixed;bottom:24px;left:24px;z-index:9999;background:white;
+    <div style="position:fixed;bottom:{bottom_px}px;left:24px;z-index:9999;background:white;
          padding:10px 12px;border:1px solid #999;border-radius:6px;font:12px sans-serif;
          box-shadow:0 1px 4px rgba(0,0,0,.3);">
       <b>{net.city} Bike Network</b>{rows}

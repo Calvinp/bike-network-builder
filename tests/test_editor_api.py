@@ -32,6 +32,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(editor, "SEED_FILE", tmp_path / "no-seed.yaml")
     monkeypatch.setattr(editor, "BASE_FILE", tmp_path / "no-base.yaml")
     monkeypatch.setattr(editor, "OUTPUT", tmp_path / "output")
+    monkeypatch.setattr(editor, "LAYERS_DIR", tmp_path / "layers")
     editor.app.config["TESTING"] = True
     return editor.app.test_client()
 
@@ -165,6 +166,40 @@ def test_export_bundle_zips_everything(client, tmp_path):
                                      "phases.gif"}
         net = parse_network(z.read("network.yaml").decode("utf-8"))
         assert net.paths[0].name == "Main Street"
+
+
+def _write_layers(tmp_path):
+    layers = tmp_path / "layers"
+    layers.mkdir()
+    (layers / "layers.json").write_text(json.dumps({"layers": [
+        {"id": "bike-parking", "label": "Bike parking (existing)",
+         "description": "Racks mapped in OpenStreetMap",
+         "style": {"color": "#0072B2", "radius": 4},
+         "attribution": "© OpenStreetMap contributors",
+         "source": "https://overpass-api.de", "fetched": "2026-08-22"},
+    ]}), encoding="utf-8")
+    (layers / "bike-parking.geojson").write_text(json.dumps(
+        {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"capacity": "8"},
+             "geometry": {"type": "Point", "coordinates": [-71.066, 42.426]}},
+        ]}), encoding="utf-8")
+
+
+def test_layers_list_is_empty_without_data(client):
+    r = client.get("/api/layers")
+    assert r.status_code == 200 and r.get_json() == []
+
+
+def test_layers_manifest_and_data(client, tmp_path):
+    _write_layers(tmp_path)
+    listed = client.get("/api/layers").get_json()
+    assert [l["id"] for l in listed] == ["bike-parking"]
+    assert listed[0]["style"]["color"] == "#0072B2"
+    data = client.get("/api/layers/bike-parking").get_json()
+    assert data["features"][0]["geometry"]["type"] == "Point"
+    # Ids not in the manifest 404 (this also blocks path traversal).
+    assert client.get("/api/layers/nope").status_code == 404
+    assert client.get("/api/layers/..%2Flayers").status_code == 404
 
 
 def test_import_accepts_zip_bundle(client):

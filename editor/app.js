@@ -626,6 +626,74 @@ function renderLegend(){
   });
 }
 
+/* ---------- context layers (reference data, not part of the plan) ----------
+   Lazy on every axis: nothing is fetched until a layer is first checked, and
+   unchecked layers are plain removeLayer'd — zero cost while off. Points are
+   drawn on a shared canvas renderer so thousands of markers stay smooth. */
+const contextLayers = {};   // id -> {entry, leaflet layer or null, loading}
+const contextRenderer = typeof L!=="undefined" ? L.canvas({padding:0.5}) : null;
+
+function contextPopupHtml(props){
+  const rows=Object.entries(props||{})
+    .filter(([k,v])=>v!=null && v!=="" && typeof v!=="object").slice(0,6)
+    .map(([k,v])=>`<div><b>${k.replace(/_/g," ")}</b>: ${String(v)}</div>`);
+  return rows.join("") || "<i>(no details)</i>";
+}
+async function toggleContextLayer(entry, on){
+  const state=contextLayers[entry.id];
+  if(!on){
+    if(state && state.layer) map.removeLayer(state.layer);
+    return;
+  }
+  if(state && state.layer){ state.layer.addTo(map); return; }
+  if(state && state.loading) return;
+  contextLayers[entry.id]={entry, layer:null, loading:true};
+  try{
+    const r=await fetch(`/api/layers/${entry.id}`);
+    if(!r.ok) throw new Error(r.status);
+    const data=await r.json();
+    const style=entry.style||{};
+    const layer=L.geoJSON(data, {
+      renderer: contextRenderer,
+      pointToLayer:(ft,ll)=>L.circleMarker(ll,{
+        renderer: contextRenderer,
+        radius: style.radius||4, color: style.color||"#666", weight:1,
+        fillColor: style.color||"#666", fillOpacity:0.55, opacity:0.8}),
+      style: ()=>({color: style.color||"#666", weight:2, opacity:0.7}),
+      onEachFeature:(ft,l)=>l.bindPopup(
+        `<b>${entry.label}</b>`+contextPopupHtml(ft.properties), {maxWidth:260}),
+    });
+    contextLayers[entry.id]={entry, layer, loading:false};
+    // Only add if the box is still checked (the user may have re-toggled).
+    const box=document.querySelector(`#layers-list input[data-id="${entry.id}"]`);
+    if(!box || box.checked) layer.addTo(map);
+  }catch(e){
+    contextLayers[entry.id]=null;
+    setStatus(`Couldn’t load the “${entry.label}” layer.`);
+  }
+}
+async function initContextLayers(){
+  let entries=[];
+  try{ entries=await (await fetch("/api/layers")).json(); }catch(e){ return; }
+  if(!entries.length) return;
+  document.getElementById("layers-card").style.display="";
+  const box=document.getElementById("layers-list");
+  entries.forEach(entry=>{
+    const row=document.createElement("label");
+    row.className="layer-row";
+    if(entry.description||entry.attribution)
+      row.title=[entry.description,entry.attribution].filter(Boolean).join(" — ");
+    const cb=document.createElement("input");
+    cb.type="checkbox"; cb.dataset.id=entry.id;
+    cb.addEventListener("change",()=>toggleContextLayer(entry, cb.checked));
+    const sw=document.createElement("span"); sw.className="layer-swatch";
+    sw.style.background=(entry.style||{}).color||"#666";
+    row.appendChild(cb); row.appendChild(sw);
+    row.appendChild(document.createTextNode(entry.label||entry.id));
+    box.appendChild(row);
+  });
+}
+
 /* ---------- autosave ----------
    Every edit schedules a debounced save to the server (network.yaml), so a
    crash or power loss costs at most ~a second of work. There is no Save
@@ -875,6 +943,7 @@ async function init(){
   });
 
   bindForm(); bindSpotForm(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
+  initContextLayers();
   document.getElementById("btn-add").onclick=()=>startDraw({status:"proposed"});
   document.getElementById("btn-add-existing").onclick=()=>startDraw(
     {status:"existing", name:"Existing path", type:"shared_use_path", phase:null});
