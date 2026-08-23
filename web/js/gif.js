@@ -159,10 +159,13 @@ function lzwEncode(indices, minCodeSize) {
  * Encode frames into an animated GIF.
  *
  * @param {Array<Uint8ClampedArray|Uint8Array>} frames RGBA pixels, width*height*4 each.
- * @param {object} opts width, height, delays (ms, per frame), loop (0 = forever).
+ * @param {object} opts width, height, delays (ms, per frame), loop (0 = forever),
+ *   and `reserved`: [[r,g,b], ...] colors that MUST survive quantization.
  * @returns {Uint8Array} the GIF bytes.
  */
-export function encodeGif(frames, { width, height, delays = [], loop = 0 } = {}) {
+export function encodeGif(frames, {
+  width, height, delays = [], loop = 0, reserved = [],
+} = {}) {
   if (!frames.length) throw new Error("encodeGif: no frames");
   for (const f of frames) {
     if (f.length !== width * height * 4) {
@@ -170,10 +173,24 @@ export function encodeGif(frames, { width, height, delays = [], loop = 0 } = {})
     }
   }
 
-  const palette = medianCut(histogram(frames), MAX_COLORS);
+  // Median cut allocates slots by how much of the image a color covers, so on
+  // a map — where a basemap fills nearly every pixel and the network itself is
+  // a thin minority — the lines would quantize to whatever pale color is
+  // nearest. Reserving the palette we draw with keeps them exact.
+  const seen = new Set();
+  const keep = [];
+  for (const c of reserved) {
+    const k = c.join(",");
+    if (!seen.has(k) && keep.length < MAX_COLORS) { seen.add(k); keep.push(c); }
+  }
+  const palette = keep.concat(
+    medianCut(histogram(frames), MAX_COLORS - keep.length));
   const toIndex = indexer(palette);
   const bytes = [];
   const push = (...v) => bytes.push(...v);
+  // Never spread a frame's worth of bytes into push(): a real map frame is
+  // hundreds of thousands of them and blows the argument-count limit.
+  const pushAll = (arr) => { for (let i = 0; i < arr.length; i++) bytes.push(arr[i]); };
   const short = (v) => push(v & 0xff, (v >> 8) & 0xff);
 
   push(0x47, 0x49, 0x46, 0x38, 0x39, 0x61);          // "GIF89a"
@@ -190,7 +207,7 @@ export function encodeGif(frames, { width, height, delays = [], loop = 0 } = {})
 
   // NETSCAPE2.0 application extension = loop forever.
   push(0x21, 0xff, 0x0b);
-  push(...[..."NETSCAPE2.0"].map((c) => c.charCodeAt(0)));
+  pushAll([..."NETSCAPE2.0"].map((c) => c.charCodeAt(0)));
   push(0x03, 0x01);
   short(loop);
   push(0x00);
@@ -210,7 +227,7 @@ export function encodeGif(frames, { width, height, delays = [], loop = 0 } = {})
       indices[p] = toIndex(data[q], data[q + 1], data[q + 2]);
     }
     push(0x08);                                      // LZW minimum code size
-    push(...lzwEncode(indices, 8));
+    pushAll(lzwEncode(indices, 8));
   });
 
   push(0x3b);                                        // trailer

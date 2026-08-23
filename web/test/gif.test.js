@@ -189,3 +189,52 @@ test("rejects frames whose size does not match", () => {
   assert.throws(() => encodeGif([new Uint8ClampedArray(3)], { width: 2, height: 2 }),
                 /width\*height\*4/);
 });
+
+test("handles a real map-sized frame", () => {
+  // Regression: the encoder used to spread a frame's bytes into Array.push,
+  // which blows the argument limit once frames are map-sized (the small
+  // frames above never reached it). Noise defeats LZW so the byte stream is
+  // genuinely large.
+  const w = 900, h = 540;
+  const data = new Uint8ClampedArray(w * h * 4);
+  let seed = 1;
+  for (let i = 0; i < data.length; i += 4) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    data[i] = seed & 0xff;
+    data[i + 1] = (seed >> 8) & 0xff;
+    data[i + 2] = (seed >> 16) & 0xff;
+    data[i + 3] = 255;
+  }
+  const bytes = encodeGif([data], { width: w, height: h, delays: [100] });
+  assert.ok(bytes.length > 150_000, `expected a large stream, got ${bytes.length}`);
+  const gif = decodeGif(bytes);
+  assert.equal(gif.frames[0].indices.length, w * h);
+});
+
+test("reserved colors survive a background that dominates the image", () => {
+  // The map case: a pale basemap covers ~99% of the pixels and the network is
+  // a handful of vivid ones. Without reserving the palette we draw with, the
+  // lines quantize to the nearest pale color and the animation comes out grey.
+  const w = 200, h = 200;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      // Pale, slightly varying background (like basemap tiles).
+      data[i] = 235 + ((x + y) % 12);
+      data[i + 1] = 238 + ((x * 3) % 10);
+      data[i + 2] = 231 + ((y * 5) % 14);
+      data[i + 3] = 255;
+      if (y === 100) {                       // one thin blue line
+        data[i] = 0x00; data[i + 1] = 0x72; data[i + 2] = 0xB2;
+      }
+    }
+  }
+  const blue = [0x00, 0x72, 0xB2];
+  const gif = decodeGif(encodeGif([data], {
+    width: w, height: h, delays: [100], reserved: [blue],
+  }));
+  const idx = gif.frames[0].indices;
+  const onLine = gif.palette[idx[100 * w + 50]];
+  assert.deepEqual(onLine, blue, "the line kept its exact color");
+});

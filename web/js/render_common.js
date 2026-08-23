@@ -104,6 +104,22 @@ export function chevron(seg) {
   return { lat: (lat1 + lat2) / 2, lon: (lon1 + lon2) / 2, theta };
 }
 
+// Every color a rendered map draws with. The GIF encoder reserves these so a
+// basemap full of pale pixels can't crowd the network's own colors out of the
+// 256-entry palette. (Declared here, after the constants it collects.)
+export const MAP_PALETTE = [
+  ...Object.values(PHASE_COLORS), ...Object.values(TYPE_COLORS),
+  SINGLE_COLOR, EXISTING_COLOR, FUNDED_COLOR, STATE_COLOR, BOUNDARY_COLOR,
+  SPOT_PROPOSED_COLOR, SPOT_EXISTING_COLOR,
+  "#ffffff", "#000000", "#555555", "#1a1a1a", "#eef0ef", "#cccccc",
+];
+
+export function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16),
+          parseInt(h.slice(4, 6), 16)];
+}
+
 export function escapeHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");

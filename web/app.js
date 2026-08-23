@@ -5,12 +5,13 @@
    runs on a street graph fetched once as a static asset. */
 "use strict";
 
-import { buildArtifacts } from "./js/export.js";
+import { buildArtifacts, buildPhaseArtifacts } from "./js/export.js";
 import { clipPolylineLatlon } from "./js/boundary.js";
 import { renderPng } from "./js/render_png.js";
 import {
-  EXISTING_COLOR, FUNDED_COLOR, PHASE_COLORS, SINGLE_COLOR, STATE_COLOR,
-  TYPE_COLORS, TYPE_LABELS,
+  EXISTING_COLOR, FUNDED_COLOR, PHASE_COLORS, SINGLE_COLOR, SPOT_EXISTING_COLOR,
+  SPOT_GLYPHS, SPOT_LABELS, SPOT_PROPOSED_COLOR, STATE_COLOR, TYPE_COLORS,
+  TYPE_LABELS,
 } from "./js/render_common.js";
 import { snapRoute } from "./js/routing.js";
 import { Store } from "./js/store.js";
@@ -18,20 +19,25 @@ import { zipCreate } from "./js/zip.js";
 
 const SINGLE = SINGLE_COLOR, EXISTING = EXISTING_COLOR, FUNDED = FUNDED_COLOR,
       STATE = STATE_COLOR, BOUNDARY = "#777777";
+const SPOT_PROPOSED = SPOT_PROPOSED_COLOR, SPOT_EXISTING = SPOT_EXISTING_COLOR;
 
 const store = new Store();
 let baseNet = null;         // last parsed stored network (uneditable fields)
 let boundaryRing = null;    // precomputed city polygon ring (clipping)
 
-let map, networkGroup, boundaryGroup, arrowsGroup;
+let map, networkGroup, boundaryGroup, arrowsGroup, spotsGroup;
 let features = [];          // [{props, layer}]
+let spots = [];             // [{props, marker}] — point improvements
 let selected = null;
+let selectedSpot = null;
+let placingSpot = false;    // "+ Add spot" waits for the next map click
 let config = {city:"Malden", phases:[]};
 let options = {types:[], statuses:[], jurisdictions:[], color_modes:["phase","type","single"]};
 let colorMode = "type";      // path type excites people; phases are for nerds
 let dirty = false;
 let editMode = false;
 let combineFrom = null;      // set while "Combine…" waits for a second path
+let phaseView = "all";       // "all" | "0" (today) | a phase number as string
 
 /* ---------- geometry helpers ---------- */
 function haversineMiles(a, b){
@@ -148,6 +154,11 @@ function removeFeature(f){
   networkGroup.removeLayer(f.layer);
   if(f.arrows) arrowsGroup.removeLayer(f.arrows);
   features=features.filter(x=>x!==f);
+  // Don't leave upgrade links pointing at a deleted path (the file would
+  // fail validation on the next import).
+  if(f.props.id) features.forEach(x=>{
+    if(x.props.upgrades===f.props.id) x.props.upgrades="";
+  });
   if(selected===f) deselect();
   markDirty(); recomputeTotals();
 }
@@ -156,6 +167,144 @@ function clearFeatures(){
   features.forEach(f=>{ networkGroup.removeLayer(f.layer);
     if(f.arrows) arrowsGroup.removeLayer(f.arrows); });
   features=[];
+}
+
+/* ---------- spot improvements (point features) ---------- */
+function spotIcon(p){
+  const color = p.status==="existing" ? SPOT_EXISTING : SPOT_PROPOSED;
+  const glyph = SPOT_GLYPHS[p.kind] || SPOT_GLYPHS.other;
+  return L.divIcon({className:"spot-glyph", iconSize:[18,18], iconAnchor:[9,9],
+    html:`<div style="color:${color}">${glyph}</div>`});
+}
+function addSpot(props, latlng){
+  const marker=L.marker(latlng, {icon:spotIcon(props), draggable:true,
+                                 pmIgnore:true, keyboard:false});
+  const s={props, marker};
+  marker.on("click", ()=>{ if(!editMode) selectSpot(s); });
+  marker.on("dragend", ()=>{ markDirty(); });
+  marker.addTo(spotsGroup);   // own group — never networkGroup (getBounds)
+  spots.push(s);
+  return s;
+}
+function removeSpot(s){
+  spotsGroup.removeLayer(s.marker);
+  spots=spots.filter(x=>x!==s);
+  if(selectedSpot===s) deselect();
+  markDirty(); recomputeTotals();
+}
+function clearSpots(){
+  spots.forEach(s=>spotsGroup.removeLayer(s.marker));
+  spots=[]; selectedSpot=null;
+}
+function defaultSpotProps(){
+  return {name:"", kind:"speed_hump", status:"proposed", phase:null, notes:""};
+}
+function selectSpot(s){
+  if(selected){ const prev=selected; selected=null; restyle(prev); }
+  selectedSpot=s;
+  document.getElementById("prop-empty").style.display="none";
+  document.getElementById("prop-form").style.display="none";
+  document.getElementById("spot-form").style.display="";
+  fillSpotForm(s);
+  if(isMobile() && !document.querySelector(".sidebar").classList.contains("open")){
+    document.getElementById("peek-name").textContent =
+      s.props.name || SPOT_LABELS[s.props.kind] || "Spot";
+    document.getElementById("peek").classList.add("show");
+  }
+}
+function fillSpotForm(s){
+  const p=s.props;
+  document.getElementById("sel-pill").textContent =
+    p.name || SPOT_LABELS[p.kind] || "";
+  opt(document.getElementById("s-kind"), options.spot_kinds||Object.keys(SPOT_GLYPHS),
+      p.kind, v=>SPOT_LABELS[v]||v.replace(/_/g," "));
+  document.getElementById("s-name").value=p.name||"";
+  document.getElementById("s-status").value=p.status||"proposed";
+  document.getElementById("s-notes").value=p.notes||"";
+  fillSpotPhaseSelect(s);
+}
+function fillSpotPhaseSelect(s){
+  const sel=document.getElementById("s-phase");
+  if(s.props.status==="proposed"){
+    sel.disabled=false;
+    sel.innerHTML="";
+    const any=document.createElement("option");
+    any.value=""; any.textContent="— any time —";
+    sel.appendChild(any);
+    config.phases.forEach(ph=>{
+      const o=document.createElement("option");
+      o.value=String(ph.phase); o.textContent=`Phase ${ph.phase}`;
+      sel.appendChild(o);
+    });
+    sel.value = s.props.phase==null ? "" : String(s.props.phase);
+  } else {
+    sel.innerHTML="<option>— n/a —</option>"; sel.disabled=true;
+  }
+}
+function bindSpotForm(){
+  const set=(id,key,cast)=>{
+    document.getElementById(id).addEventListener("input", e=>{
+      if(!selectedSpot) return;
+      selectedSpot.props[key]= cast?cast(e.target.value):e.target.value;
+      if(key==="status"){
+        if(selectedSpot.props.status!=="proposed") selectedSpot.props.phase=null;
+        fillSpotPhaseSelect(selectedSpot);
+      }
+      if(key==="kind"||key==="status")
+        selectedSpot.marker.setIcon(spotIcon(selectedSpot.props));
+      if(key==="name"||key==="kind")
+        document.getElementById("sel-pill").textContent =
+          selectedSpot.props.name || SPOT_LABELS[selectedSpot.props.kind] || "";
+      markDirty(); recomputeTotals();
+    });
+  };
+  set("s-name","name"); set("s-notes","notes"); set("s-status","status");
+  set("s-kind","kind");
+  set("s-phase","phase", v=> v==="" ? null : parseInt(v,10));
+  document.getElementById("btn-spot-delete").addEventListener("click", ()=>{
+    if(selectedSpot && confirm("Delete this spot?")) removeSpot(selectedSpot);
+  });
+}
+function startPlaceSpot(){
+  if(phaseView!=="all") setPhaseView("all");
+  deselect();
+  placingSpot=true;
+  setStatus("Click the map where the improvement goes — Esc cancels.");
+}
+
+/* ---------- upgrades (quick-build now, better build later) ---------- */
+function ensureId(f){
+  // Ids exist only where an upgrade link needs one, so plain files stay clean.
+  while(!f.props.id || features.some(x=>x!==f && x.props.id===f.props.id))
+    f.props.id="p-"+Math.random().toString(36).slice(2,8);
+  return f.props.id;
+}
+function supersededIdSet(list){
+  const ids=new Set(list.map(f=>f.props.id).filter(Boolean));
+  const out=new Set();
+  list.forEach(f=>{
+    if(f.props.upgrades && ids.has(f.props.upgrades)) out.add(f.props.upgrades);
+  });
+  return out;
+}
+function planUpgrade(){
+  if(!selected) return;
+  const target=selected, tid=ensureId(target);
+  const segs=segsOf(target.layer).map(seg=>seg.map(p=>L.latLng(p.lat,p.lng)));
+  const nums=config.phases.map(x=>x.phase).sort((a,b)=>a-b);
+  const after=target.props.phase;
+  let next=nums.find(n=>after==null || n>after);
+  if(next==null) next=nums.length?nums[nums.length-1]:1;
+  const f=addFeature(defaultProps({
+    name:(target.props.name||"Path")+" (upgrade)",
+    status:"proposed", type:target.props.type,
+    jurisdiction:target.props.jurisdiction, directions:target.props.directions,
+    on_street:target.props.on_street, from:target.props.from, to:target.props.to,
+    upgrades:tid, phase:next
+  }), segs.length===1?segs[0]:segs);
+  setPhaseView("all");
+  markDirty(); recomputeTotals(); selectFeature(f);
+  setStatus(`Added an upgrade of “${target.props.name}” — pick its phase and type.`);
 }
 
 /* ---------- combining paths ---------- */
@@ -179,6 +328,8 @@ function combineInto(target, other){
 /* ---------- selection + property form ---------- */
 function isMobile(){ return window.matchMedia("(max-width: 760px)").matches; }
 function selectFeature(f){
+  selectedSpot=null;
+  document.getElementById("spot-form").style.display="none";
   const prev=selected; selected=f;
   if(prev && prev!==f) restyle(prev);
   restyle(f);
@@ -189,9 +340,10 @@ function selectFeature(f){
   }
 }
 function deselect(){
-  const prev=selected; selected=null;
+  const prev=selected; selected=null; selectedSpot=null;
   if(prev) restyle(prev);
   document.getElementById("prop-form").style.display="none";
+  document.getElementById("spot-form").style.display="none";
   document.getElementById("prop-empty").style.display="";
   document.getElementById("sel-pill").textContent="";
   document.getElementById("peek").classList.remove("show");
@@ -224,7 +376,17 @@ function fillForm(f){
   document.getElementById("f-dir").value=String(p.directions||2);
   document.getElementById("btn-reverse").style.display =
     p.directions===1 ? "" : "none";
+  updateUpgradeRow(f);
   updateLenField(f);
+}
+function updateUpgradeRow(f){
+  const row=document.getElementById("upgrade-row");
+  if(f.props.upgrades){
+    const target=features.find(x=>x.props.id===f.props.upgrades);
+    document.getElementById("upgrade-target").textContent =
+      target ? `Replaces “${target.props.name||"(unnamed)"}”` : "Replaces a removed path";
+    row.style.display="";
+  } else row.style.display="none";
 }
 function fillPhaseSelect(f){
   // Phase only applies to proposed paths; existing/funded have phase = null.
@@ -250,6 +412,11 @@ function bindForm(){
       if(key==="status"){
         selected.props.phase = selected.props.status==="proposed"
           ? ((config.phases[0]||{}).phase||1) : null;
+        // Only a proposed path can be an upgrade of another.
+        if(selected.props.status!=="proposed" && selected.props.upgrades){
+          selected.props.upgrades="";
+          updateUpgradeRow(selected);
+        }
         fillPhaseSelect(selected);
       }
       if(["status","jurisdiction","phase","type"].includes(key)) restyle(selected);
@@ -274,6 +441,12 @@ function bindForm(){
   document.getElementById("btn-delete").addEventListener("click", ()=>{
     if(selected && confirm("Delete this path?")) removeFeature(selected);
   });
+  document.getElementById("btn-upgrade").addEventListener("click", planUpgrade);
+  document.getElementById("btn-unlink").addEventListener("click", ()=>{
+    if(!selected) return;
+    selected.props.upgrades="";
+    updateUpgradeRow(selected); markDirty(); recomputeTotals();
+  });
 }
 
 /* ---------- totals ---------- */
@@ -288,14 +461,21 @@ function recomputeTotals(){
   let city=0, lane=0, state=0, count=0;
   let cLow=0,cHigh=0,sLow=0,sHigh=0, unnamed=0;
   const rates=options.cost_per_mile||{};
+  // A corridor that a later phase upgrades counts ONCE in the mileage (the
+  // final facility) — but every phase's work still costs money.
+  const superseded=supersededIdSet(features);
   for(const f of features){
     const p=f.props;
     if(isDefaultName(p.name)) unnamed++;
     if(p.status!=="proposed") continue;
     const mi=featureMiles(f);
     const [lo,hi]=rates[p.type]||[0,0];
-    if(p.jurisdiction==="state"){ state+=mi; sLow+=mi*lo; sHigh+=mi*hi; }
-    else { city+=mi; lane+=mi*(p.directions||2); count++; cLow+=mi*lo; cHigh+=mi*hi; }
+    const counted=!(p.id && superseded.has(p.id));
+    if(p.jurisdiction==="state"){ if(counted) state+=mi; sLow+=mi*lo; sHigh+=mi*hi; }
+    else {
+      if(counted){ city+=mi; lane+=mi*(p.directions||2); count++; }
+      cLow+=mi*lo; cHigh+=mi*hi;
+    }
   }
   document.getElementById("t-city").textContent=city.toFixed(1);
   document.getElementById("t-lane").textContent=lane.toFixed(1);
@@ -305,6 +485,12 @@ function recomputeTotals(){
   document.getElementById("c-city").textContent=range(cLow,cHigh);
   document.getElementById("c-state").textContent=range(sLow,sHigh);
   document.getElementById("c-total").textContent=range(cLow+sLow,cHigh+sHigh);
+  const built=spots.filter(s=>s.props.status==="existing").length;
+  const planned=spots.length-built;
+  document.getElementById("t-spots-row").style.display = spots.length ? "" : "none";
+  document.getElementById("t-spots").textContent =
+    [built?`${built} existing`:"", planned?`${planned} planned`:""]
+      .filter(Boolean).join(" · ");
   const warn=document.getElementById("unnamed-warn");
   warn.style.display = unnamed ? "" : "none";
   if(unnamed) warn.textContent =
@@ -342,11 +528,70 @@ function renderPhases(){
     });
     box.appendChild(div);
   });
+  renderPhaseView();
 }
 function addPhase(){
   const next=(config.phases.reduce((m,p)=>Math.max(m,p.phase),0))+1;
   config.phases.push({phase:next,label:`Phase ${next}`,deadline:""});
   renderPhases(); if(selected) fillForm(selected); markDirty();
+}
+
+/* ---------- phase view (Show: full network / today / as of phase N) ---------- */
+function renderPhaseView(){
+  const sel=document.getElementById("phase-view");
+  sel.innerHTML="";
+  const add=(v,label)=>{
+    const o=document.createElement("option");
+    o.value=v; o.textContent=label; sel.appendChild(o);
+  };
+  add("all","Full network");
+  add("0","Today (existing + funded)");
+  config.phases.slice().sort((a,b)=>a.phase-b.phase).forEach(ph=>
+    add(String(ph.phase), `As of Phase ${ph.phase}${ph.label?": "+ph.label:""}`));
+  sel.value=[...sel.options].some(o=>o.value===phaseView)?phaseView:"all";
+  phaseView=sel.value;
+}
+function setPhaseView(v){
+  phaseView=v;
+  document.getElementById("phase-view").value=v;
+  applyPhaseView();
+}
+function applyPhaseView(){
+  let shownSet;
+  if(phaseView==="all"){
+    shownSet=new Set(features);
+  } else {
+    const n=parseInt(phaseView,10);  // 0 = today (existing + funded only)
+    let shown=features.filter(f=>f.props.status!=="proposed"
+      || (f.props.phase!=null && f.props.phase<=n));
+    const superseded=supersededIdSet(shown);
+    shown=shown.filter(f=>!(f.props.id && superseded.has(f.props.id)));
+    shownSet=new Set(shown);
+  }
+  features.forEach(f=>{
+    if(shownSet.has(f)){
+      if(!networkGroup.hasLayer(f.layer)) networkGroup.addLayer(f.layer);
+      if(f.arrows && !arrowsGroup.hasLayer(f.arrows)) arrowsGroup.addLayer(f.arrows);
+    } else {
+      if(selected===f) deselect();
+      if(networkGroup.hasLayer(f.layer)) networkGroup.removeLayer(f.layer);
+      if(f.arrows && arrowsGroup.hasLayer(f.arrows)) arrowsGroup.removeLayer(f.arrows);
+    }
+  });
+  // Spots follow the same clock: existing always; proposed once their phase
+  // arrives (no phase = any time, so any phased view shows them).
+  spots.forEach(s=>{
+    let show=true;
+    if(phaseView!=="all" && s.props.status==="proposed"){
+      const n=parseInt(phaseView,10);
+      show = n>0 && (s.props.phase==null || s.props.phase<=n);
+    }
+    if(show){ if(!spotsGroup.hasLayer(s.marker)) spotsGroup.addLayer(s.marker); }
+    else {
+      if(selectedSpot===s) deselect();
+      if(spotsGroup.hasLayer(s.marker)) spotsGroup.removeLayer(s.marker);
+    }
+  });
 }
 
 /* ---------- legend ---------- */
@@ -372,6 +617,72 @@ function renderLegend(){
     const d=document.createElement("div"); d.className="item";
     d.innerHTML=`<span class="ln" style="border-top-color:${c};border-top-style:${dashed?"dashed":"solid"}"></span>${label}`;
     box.appendChild(d);
+  });
+}
+
+/* ---------- context layers (reference data, not part of the plan) ----------
+   Lazy on every axis: nothing is fetched until a layer is first checked, and
+   unchecked layers are plain removeLayer'd — zero cost while off. Points are
+   drawn on a shared canvas renderer so thousands of markers stay smooth. */
+const contextLayers = {};   // id -> {entry, leaflet layer or null, loading}
+const contextRenderer = typeof L!=="undefined" ? L.canvas({padding:0.5}) : null;
+
+function contextPopupHtml(props){
+  const rows=Object.entries(props||{})
+    .filter(([k,v])=>v!=null && v!=="" && typeof v!=="object").slice(0,6)
+    .map(([k,v])=>`<div><b>${k.replace(/_/g," ")}</b>: ${String(v)}</div>`);
+  return rows.join("") || "<i>(no details)</i>";
+}
+async function toggleContextLayer(entry, on){
+  const state=contextLayers[entry.id];
+  if(!on){
+    if(state && state.layer) map.removeLayer(state.layer);
+    return;
+  }
+  if(state && state.layer){ state.layer.addTo(map); return; }
+  if(state && state.loading) return;
+  contextLayers[entry.id]={entry, layer:null, loading:true};
+  try{
+    const data=await store.layerGeojson(entry.id);
+    const style=entry.style||{};
+    const layer=L.geoJSON(data, {
+      renderer: contextRenderer,
+      pointToLayer:(ft,ll)=>L.circleMarker(ll,{
+        renderer: contextRenderer,
+        radius: style.radius||4, color: style.color||"#666", weight:1,
+        fillColor: style.color||"#666", fillOpacity:0.55, opacity:0.8}),
+      style: ()=>({color: style.color||"#666", weight:2, opacity:0.7}),
+      onEachFeature:(ft,l)=>l.bindPopup(
+        `<b>${entry.label}</b>`+contextPopupHtml(ft.properties), {maxWidth:260}),
+    });
+    contextLayers[entry.id]={entry, layer, data, loading:false};
+    // Only add if the box is still checked (the user may have re-toggled).
+    const box=document.querySelector(`#layers-list input[data-id="${entry.id}"]`);
+    if(!box || box.checked) layer.addTo(map);
+  }catch(e){
+    contextLayers[entry.id]=null;
+    setStatus(`Couldn’t load the “${entry.label}” layer.`);
+  }
+}
+async function initContextLayers(){
+  let entries=[];
+  try{ entries=await store.layersManifest(); }catch(e){ return; }
+  if(!entries.length) return;
+  document.getElementById("layers-card").style.display="";
+  const box=document.getElementById("layers-list");
+  entries.forEach(entry=>{
+    const row=document.createElement("label");
+    row.className="layer-row";
+    if(entry.description||entry.attribution)
+      row.title=[entry.description,entry.attribution].filter(Boolean).join(" — ");
+    const cb=document.createElement("input");
+    cb.type="checkbox"; cb.dataset.id=entry.id;
+    cb.addEventListener("change",()=>toggleContextLayer(entry, cb.checked));
+    const sw=document.createElement("span"); sw.className="layer-swatch";
+    sw.style.background=(entry.style||{}).color||"#666";
+    row.appendChild(cb); row.appendChild(sw);
+    row.appendChild(document.createTextNode(entry.label||entry.id));
+    box.appendChild(row);
   });
 }
 
@@ -403,8 +714,16 @@ function toGeoJSON(){
     };
   })};
 }
+function spotsToGeoJSON(){
+  return {type:"FeatureCollection", features: spots.map(s=>{
+    const ll=s.marker.getLatLng();
+    return {type:"Feature", properties:Object.assign({}, s.props),
+            geometry:{type:"Point", coordinates:[ll.lng, ll.lat]}};
+  })};
+}
 function stateData(){
-  return {network:toGeoJSON(), config:{city:config.city, phases:config.phases}};
+  return {network:toGeoJSON(), spots:spotsToGeoJSON(),
+          config:{city:config.city, phases:config.phases}};
 }
 async function autosave(){
   if(saving){ saveTimer=setTimeout(autosave, 500); return; }  // one save at a time
@@ -454,8 +773,13 @@ async function makeArtifacts(withPng){
   const net=await store.loadNetwork();
   const rings=await store.boundaryRings();
   const ring=await store.boundaryRing();
+  // Only layers the reader actually turned on are worth embedding in a file
+  // they'll email around; the rest stay a click away in the editor.
+  const chosen=Object.values(contextLayers)
+    .filter(s=>s && s.layer && s.data && map.hasLayer(s.layer))
+    .map(s=>({entry:s.entry, geojson:s.data}));
   return buildArtifacts(net, rings, ring,
-    {colorMode, renderPng: withPng ? renderPng : null});
+    {colorMode, renderPng: withPng ? renderPng : null, contextLayers: chosen});
 }
 async function exportOutput(name){
   // Rendered fresh with the current color mode, so the download matches the screen.
@@ -471,17 +795,27 @@ async function exportOutput(name){
   }catch(e){ console.error(e); setStatus('<span class="dirty">Export failed</span>'); }
 }
 async function exportBundle(){
-  // Everything in one zip: yaml + png + html + geojson.
+  // Everything in one zip: yaml + png + html + geojson, plus a map per phase
+  // and the animation when the plan is phased.
   setStatus("Preparing export… (a few seconds)");
   try{
     const art=await makeArtifacts(true);
     showExportNotes(art.summary);
-    const zip=await zipCreate([
+    const entries=[
       {name:"network.yaml", data:await store.exportYamlText()},
       {name:"map.png", data:new Uint8Array(await art.pngBlob.arrayBuffer())},
       {name:"map.html", data:art.html},
       {name:"network.geojson", data:JSON.stringify(art.geojson, null, 2)},
-    ]);
+    ];
+    const net=await store.loadNetwork();
+    const phaseFiles=await buildPhaseArtifacts(
+      net, await store.boundaryRings(), await store.boundaryRing(),
+      {colorMode, renderPng, paths:art.paths, spots:art.spots,
+       onProgress:(msg)=>setStatus(msg)});
+    for(const f of phaseFiles){
+      entries.push({name:f.name, data:new Uint8Array(await f.blob.arrayBuffer())});
+    }
+    const zip=await zipCreate(entries);
     downloadBlob(new Blob([zip],{type:"application/zip"}), "bike-network.zip");
     setStatus();
   }catch(e){ console.error(e); setStatus('<span class="dirty">Export failed</span>'); }
@@ -499,11 +833,16 @@ async function importYamlFile(file){
   if(features.length && !confirm(
     "Replace the current network with the imported one? (Tip: Export your "
     + "current network first if you might want it back.)")) { setStatus(); return; }
-  clearFeatures();
+  clearFeatures(); clearSpots();
   config={city:j.config.city, phases:j.config.phases};
   (j.network.features||[]).forEach(ft=>{
     const ll=latlngsFromGeometry(ft.geometry);
     if(ll) addFeature(ft.properties||defaultProps(), ll);
+  });
+  ((j.spots||{}).features||[]).forEach(ft=>{
+    const c=(ft.geometry||{}).coordinates||[];
+    if(c.length===2) addSpot(Object.assign(defaultSpotProps(), ft.properties),
+                             L.latLng(c[1], c[0]));
   });
   renderPhases(); renderLegend(); recomputeTotals();
   if(networkGroup.getLayers().length) map.fitBounds(networkGroup.getBounds().pad(0.05));
@@ -551,6 +890,8 @@ function reverseSelected(){
 /* ---------- drawing / edit mode ---------- */
 let drawDefaults=null;
 function startDraw(over){
+  // Drawing means editing the full plan — leave any phase preview first.
+  if(phaseView!=="all") setPhaseView("all");
   drawDefaults=over; deselect();
   map.pm.enableDraw("Line",{finishOn:"dblclick", continueDrawing:false});
   const snap=document.getElementById("snap").checked;
@@ -584,6 +925,7 @@ async function init(){
   networkGroup=L.featureGroup().addTo(map);
   boundaryGroup=L.featureGroup().addTo(map);
   arrowsGroup=L.layerGroup().addTo(map);
+  spotsGroup=L.layerGroup().addTo(map);
   map.pm.setGlobalOptions({pmIgnore:false});
 
   const data=await store.state();
@@ -599,6 +941,11 @@ async function init(){
   (data.network.features||[]).forEach(ft=>{
     const ll=latlngsFromGeometry(ft.geometry);
     if(ll) addFeature(ft.properties||defaultProps(), ll);
+  });
+  ((data.spots||{}).features||[]).forEach(ft=>{
+    const c=(ft.geometry||{}).coordinates||[];
+    if(c.length===2) addSpot(Object.assign(defaultSpotProps(), ft.properties),
+                             L.latLng(c[1], c[0]));
   });
 
   if(networkGroup.getLayers().length) map.fitBounds(networkGroup.getBounds().pad(0.05));
@@ -618,10 +965,18 @@ async function init(){
     selectFeature(f); markDirty(); recomputeTotals(); setStatus();
   });
 
-  bindForm(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
+  bindForm(); bindSpotForm(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
+  initContextLayers();
   document.getElementById("btn-add").onclick=()=>startDraw({status:"proposed"});
   document.getElementById("btn-add-existing").onclick=()=>startDraw(
     {status:"existing", name:"Existing path", type:"shared_use_path", phase:null});
+  document.getElementById("btn-add-spot").onclick=startPlaceSpot;
+  map.on("click", e=>{
+    if(!placingSpot) return;
+    placingSpot=false;
+    const s=addSpot(defaultSpotProps(), e.latlng);
+    selectSpot(s); markDirty(); recomputeTotals(); setStatus();
+  });
   document.getElementById("btn-edit").onclick=toggleEdit;
   document.getElementById("btn-add-phase").onclick=addPhase;
   document.getElementById("btn-snap-sel").onclick=snapSelected;
@@ -630,6 +985,7 @@ async function init(){
   document.getElementById("unnamed-warn").onclick=selectNextUnnamed;
   document.addEventListener("keydown", e=>{
     if(e.key==="Escape" && combineFrom){ combineFrom=null; setStatus(); }
+    if(e.key==="Escape" && placingSpot){ placingSpot=false; setStatus(); }
     const typing=/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
     if(!typing && (e.key==="Backspace" || e.key==="Delete"
                    || (e.ctrlKey && e.key.toLowerCase()==="z"))){
@@ -648,6 +1004,10 @@ async function init(){
     document.getElementById("peek").classList.remove("show");
     document.getElementById("prop-form").scrollIntoView({block:"center"});
   };
+
+  document.getElementById("phase-view").addEventListener("change", e=>{
+    phaseView=e.target.value; applyPhaseView();
+  });
 
   const phasesBox=document.getElementById("phases-box");
   phasesBox.open = (colorMode==="phase");
@@ -688,6 +1048,17 @@ async function init(){
       catch(e){ /* keep dirty; the debounced autosave will retry */ }
     }
   };
+  // Leaflet doesn't notice its container changing size (phone rotation, a
+  // header row wrapping, the browser chrome hiding), and leaves the new area
+  // blank grey until told. Debounced so a drag-resize isn't a redraw storm.
+  let resizeTimer=null;
+  const onResize=()=>{
+    clearTimeout(resizeTimer);
+    resizeTimer=setTimeout(()=>map.invalidateSize(), 150);
+  };
+  window.addEventListener("resize", onResize);
+  window.addEventListener("orientationchange", onResize);
+
   window.addEventListener("pagehide", syncFlush);
   document.addEventListener("visibilitychange", ()=>{
     if(document.visibilityState==="hidden") syncFlush();

@@ -3,9 +3,11 @@
 // are fetched as static assets. Injectable seams (storage, fetchText,
 // fetchJson) keep it unit-testable offline in Node.
 import { COST_PER_MILE } from "./costs.js";
-import { pathsFromGeojson, pathsToGeojson } from "./geojson.js";
 import {
-  JURISDICTIONS, PATH_TYPES, STATUSES, makeNetwork, makePhase,
+  pathsFromGeojson, pathsToGeojson, spotsFromGeojson, spotsToGeojson,
+} from "./geojson.js";
+import {
+  JURISDICTIONS, PATH_TYPES, SPOT_KINDS, STATUSES, makeNetwork, makePhase,
   parseNetwork, serializeNetwork, validateNetwork,
 } from "./network_format.js";
 import { COLOR_MODES } from "./render_common.js";
@@ -39,6 +41,9 @@ export function networkFromBrowser(data, existing) {
     ordinance_chapter: existing.ordinance_chapter,
     phases: phases.length ? phases : existing.phases,
     paths: pathsFromGeojson(data.network || {}),
+    // A payload without a "spots" key (e.g. a stale cached app.js) must not
+    // wipe the stored spots — absent means "unchanged".
+    spots: "spots" in data ? spotsFromGeojson(data.spots) : existing.spots,
   });
 }
 
@@ -107,12 +112,14 @@ export class Store {
     const net = await this.loadNetwork();
     return {
       network: pathsToGeojson(net.paths),
+      spots: spotsToGeojson(net.spots),
       config: configForBrowser(net),
       boundary: await this.boundaryRings(),
       options: {
         types: [...PATH_TYPES],
         statuses: [...STATUSES],
         jurisdictions: [...JURISDICTIONS],
+        spot_kinds: [...SPOT_KINDS],
         color_modes: [...COLOR_MODES],
         cost_per_mile: Object.fromEntries(
           Object.entries(COST_PER_MILE).map(([k, v]) => [k, [...v]])),
@@ -170,6 +177,25 @@ export class Store {
     const errors = validateNetwork(net);
     if (errors.length) return { ok: false, errors };
     return { ok: true, network: pathsToGeojson(net.paths),
+             spots: spotsToGeojson(net.spots),
              config: configForBrowser(net) };
+  }
+
+  // The context ("map layers") manifest, or [] when the deployment ships
+  // none. Layer data itself is fetched lazily, only once a layer is toggled.
+  async layersManifest() {
+    if (this._layers === undefined) {
+      try {
+        const doc = JSON.parse(await this.fetchText(this.asset("data/layers/layers.json")));
+        this._layers = (doc.layers || []).filter((l) => l.id);
+      } catch {
+        this._layers = [];      // no layers installed — the card stays hidden
+      }
+    }
+    return this._layers;
+  }
+
+  async layerGeojson(id) {
+    return JSON.parse(await this.fetchText(this.asset(`data/layers/${id}.geojson`)));
   }
 }

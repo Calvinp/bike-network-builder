@@ -7,7 +7,7 @@ import { segmentsMiles } from "./geometry.js";
 import {
   clipPaths, clipSpots, pathsAsOfPhase, spotsAsOfPhase, summarize,
 } from "./pipeline.js";
-import { COLOR_MODES } from "./render_common.js";
+import { COLOR_MODES, MAP_PALETTE, hexToRgb } from "./render_common.js";
 import { renderHtml } from "./render_html.js";
 import { encodeGif } from "./gif.js";
 
@@ -166,8 +166,9 @@ export async function buildPhaseArtifacts(net, boundaryRings, clipRing, {
     // Linger on "Today" and on the finished network so the loop reads clearly.
     const delays = frames.map((_, i) => (i === 0 ? 2000
       : i === frames.length - 1 ? 3000 : 1400));
-    const bytes = encodeGif(frames.map((f) => f.data),
-                            { width, height, delays, loop: 0 });
+    const bytes = encodeGif(frames.map((f) => f.data), {
+      width, height, delays, loop: 0, reserved: MAP_PALETTE.map(hexToRgb),
+    });
     files.push({ name: "phases.gif",
                  blob: new Blob([bytes], { type: "image/gif" }) });
   }
