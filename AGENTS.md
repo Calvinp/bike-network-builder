@@ -183,6 +183,12 @@ against the checked-in base network):
   replaced instead of blanking the corridor; the slider therefore re-asserts
   phase groups on `input` only, never on `overlayadd`/`overlayremove` (which
   would fight the checkbox the reader just clicked).
+- **Chevron membership belongs to `syncArrows()` alone** in both editors. Arrows are
+  rebuilt on load, on shape edits and on import, so any other place that adds them
+  resurrects a replaced path's chevron; and `init()` must call `applyPhaseView()`
+  itself, or the first paint ignores upgrades until the Show menu is touched (that
+  shipped once — the fix lived only in the menu handler). `web/test/app_structure.
+  test.js` guards both, plus the legend rebuild, since app.js has no DOM harness.
 - **A superseded path draws no one-way chevron** when its replacement is on the
   same map: the upgrade covers the old line exactly, so only the stale arrow
   would show, claiming the new lane is one-way.
@@ -229,7 +235,7 @@ maldensafestreets.org; also servable from any static host). Key facts:
   graph — so after an edit the page can keep running the previous `app.js` and look
   like it ignored the change. If you serve `web/` some other way, disable caching
   there too or you will chase ghosts.
-- **Tests:** `cd web && node --test` — 111 offline tests mirroring the pytest suite.
+- **Tests:** `cd web && node --test` — 117 offline tests mirroring the pytest suite.
   Serialization parity is real: Python parses JS-written YAML with zero errors and
   identical fields/geometry; clip/summarize totals match Python to 4 decimals on the
   full network.

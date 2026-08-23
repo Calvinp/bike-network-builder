@@ -115,7 +115,36 @@ function updateArrows(f){
     g.addLayer(L.marker([(a.lat+b.lat)/2,(a.lng+b.lng)/2],
       {icon, interactive:false, keyboard:false, pmIgnore:true}));
   });
-  g.addTo(arrowsGroup); f.arrows=g;
+  f.arrows=g;
+  // Membership is decided centrally: arrows get rebuilt on load, on edit and
+  // on import, and each of those would otherwise resurrect the chevron of a
+  // path that a shown upgrade has replaced.
+  syncArrows();
+}
+
+/* Which features the current "Show" setting puts on the map. */
+function visibleFeatureSet(){
+  if(phaseView==="all") return new Set(features);
+  const n=parseInt(phaseView,10);   // 0 = today (existing + funded only)
+  const shown=features.filter(f=>f.props.status!=="proposed"
+    || (f.props.phase!=null && f.props.phase<=n));
+  const superseded=supersededIdSet(shown);
+  return new Set(shown.filter(f=>!(f.props.id && superseded.has(f.props.id))));
+}
+
+/* A path keeps its one-way chevron only while it is on the map AND nothing
+   shown replaces it: the replacement covers the old line exactly, so the
+   arrow would be all that shows, claiming the new lane is one-way. */
+function syncArrows(shownSet){
+  if(!arrowsGroup) return;                 // not built yet during early init
+  const shown = shownSet || visibleFeatureSet();
+  const replaced = supersededIdSet([...shown]);
+  features.forEach(f=>{
+    if(!f.arrows) return;
+    const want = shown.has(f) && !(f.props.id && replaced.has(f.props.id));
+    if(want && !arrowsGroup.hasLayer(f.arrows)) arrowsGroup.addLayer(f.arrows);
+    if(!want && arrowsGroup.hasLayer(f.arrows)) arrowsGroup.removeLayer(f.arrows);
+  });
 }
 /* Chevron icons are fixed-size DivIcons, so zoomed way out they'd dwarf the
    streets themselves — below this zoom the whole arrows layer comes off. */
@@ -575,24 +604,16 @@ function applyPhaseView(){
     shownSet=new Set(shown);
   }
   // A path whose replacement is also on screen (the full view draws both, the
-  // upgrade exactly covering it) keeps its line so it stays selectable, but
-  // drops its one-way chevron: that arrow describes a facility the upgrade
-  // has already replaced, and it floats above the new line.
-  const replaced=supersededIdSet([...shownSet]);
+  // upgrade exactly covering it) keeps its line so it stays selectable.
   features.forEach(f=>{
-    const shown=shownSet.has(f);
-    const wantArrows=shown && !(f.props.id && replaced.has(f.props.id));
-    if(shown){
+    if(shownSet.has(f)){
       if(!networkGroup.hasLayer(f.layer)) networkGroup.addLayer(f.layer);
     } else {
       if(selected===f) deselect();
       if(networkGroup.hasLayer(f.layer)) networkGroup.removeLayer(f.layer);
     }
-    if(f.arrows){
-      if(wantArrows && !arrowsGroup.hasLayer(f.arrows)) arrowsGroup.addLayer(f.arrows);
-      if(!wantArrows && arrowsGroup.hasLayer(f.arrows)) arrowsGroup.removeLayer(f.arrows);
-    }
   });
+  syncArrows(shownSet);
   // Spots follow the same clock: existing always; proposed once their phase
   // arrives (no phase = any time, so any phased view shows them).
   spots.forEach(s=>{
@@ -859,7 +880,7 @@ async function importYamlFile(file){
     if(c.length===2) addSpot(Object.assign(defaultSpotProps(), ft.properties),
                              L.latLng(c[1], c[0]));
   });
-  renderPhases(); renderLegend(); recomputeTotals();
+  renderPhases(); renderLegend(); recomputeTotals(); applyPhaseView();
   if(networkGroup.getLayers().length) map.fitBounds(networkGroup.getBounds().pad(0.05));
   markDirty();
 }
@@ -981,6 +1002,7 @@ async function init(){
   });
 
   bindForm(); bindSpotForm(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
+  applyPhaseView();   // a fresh load must already honour upgrades
   initContextLayers();
   document.getElementById("btn-add").onclick=()=>startDraw({status:"proposed"});
   document.getElementById("btn-add-existing").onclick=()=>startDraw(
