@@ -143,10 +143,10 @@ def render_phase_exports(net: Network, boundary, output_dir, basemap=True,
                    title=f"{net.city} Bike Network — Phase {n}")
         written.append(out)
 
-    # GIF frames: small renders, one per stop. The boundary is drawn before
-    # autoscale so every frame shares (nearly) the same extent; frames are
-    # then pasted onto a common canvas because bbox_inches="tight" still
-    # crops each frame slightly differently.
+    # GIF frames: small fixed-size renders, one per stop. The boundary is
+    # always drawn, so every frame shares the same map extent, and tight=False
+    # keeps the canvas identical regardless of caption length — otherwise the
+    # map visibly jumps between frames as the title grows.
     phase_map = net.phase_map()
     stops = [(0, "Today")]
     for n in phase_numbers:
@@ -155,20 +155,30 @@ def render_phase_exports(net: Network, boundary, output_dir, basemap=True,
         if cfg and cfg.label:
             caption += f": {cfg.label}"
         if cfg and cfg.deadline:
-            caption += f" (by {cfg.deadline})"
+            # Second line: long labels + a date overflow a single title line.
+            caption += f"\nby {cfg.deadline}"
         stops.append((n, caption))
+    # Every title must be the same number of lines: tight_layout shrinks the
+    # axes to fit a taller title, which would make the map breathe in and out
+    # as the animation plays.
+    lines = max(c.count("\n") for _, c in stops) + 1
+    stops = [(n, c + "\n" * (lines - 1 - c.count("\n"))) for n, c in stops]
 
     frames = []
     for i, (n, caption) in enumerate(stops):
         tmp = output_dir / f"_gif_frame_{i}.png"
         render_map(paths_as_of_phase(paths, n), net, tmp, boundary=boundary,
                    basemap=basemap, color_mode=color_mode, dpi=gif_dpi,
-                   figsize=7, spots=spots_as_of_phase(spots, n),
+                   figsize=GIF_FIGSIZE, tight=False,
+                   spots=spots_as_of_phase(spots, n),
                    title=f"{net.city} Bike Network — {caption}")
         with Image.open(tmp) as im:
             frames.append(im.convert("RGB"))
         tmp.unlink()
 
+    # tight=False already makes every frame the same size; padding onto a
+    # common canvas is a cheap belt-and-braces against a stray odd frame
+    # (GIF requires uniform frames — a short one would otherwise garble).
     w = max(f.width for f in frames)
     h = max(f.height for f in frames)
     padded = []
@@ -189,6 +199,10 @@ def render_phase_exports(net: Network, boundary, output_dir, basemap=True,
 # email around, so oversized layers are left out with a notice instead.
 CONTEXT_LAYER_MAX_BYTES = 512 * 1024
 CONTEXT_TOTAL_MAX_BYTES = 2 * 1024 * 1024
+
+# Animation frame size, in inches (a landscape frame suits a city that is
+# wider than it is tall, and leaves room for the title and legend).
+GIF_FIGSIZE = (10, 6)
 
 
 def _embeddable_context_layers(context_layers, notices):

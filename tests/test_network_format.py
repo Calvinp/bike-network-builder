@@ -206,3 +206,18 @@ def test_spot_validation(spot, needle):
     net.spots = [spot]
     errors = validate_network(net)
     assert any(needle in e for e in errors), errors
+
+
+def test_checked_in_network_roundtrips_byte_identically():
+    """People are already using this tool, so their files must survive every
+    format change untouched: parse -> serialize must reproduce the checked-in
+    base network exactly (new optional keys are omitted when unset)."""
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base = os.path.join(here, "data", "base_network.yaml")
+    if not os.path.exists(base):
+        pytest.skip("data/base_network.yaml not present")
+    with open(base, encoding="utf-8") as f:
+        text = f.read()
+    net = parse_network(text)
+    assert validate_network(net) == []
+    assert serialize_network(net).splitlines() == text.splitlines()

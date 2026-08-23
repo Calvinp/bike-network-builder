@@ -154,17 +154,25 @@ def render_map(
     color_mode: str = "type",
     title: str | None = None,
     dpi: int = 250,
-    figsize: float = 16,
+    figsize: float | tuple = 16,
     spots=None,
+    tight: bool = True,
 ) -> Path:
     """Draw proposed + existing paths over a basemap. Returns the output path.
     16in @ 250dpi gives a ~4000px print-quality export with breathing room for
     labels (and pulls sharper, more detailed basemap tiles); tests may pass a
-    lower dpi to stay fast, and GIF frames use a smaller figsize."""
+    lower dpi to stay fast, and GIF frames use a smaller figsize.
+
+    `tight` crops the saved image to its content — right for a standalone map,
+    but WRONG for animation frames: the crop follows the title and legend, so
+    frames with longer captions come out wider and the map appears to jump
+    between scales. Animation frames pass tight=False for a fixed canvas."""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(figsize, figsize), dpi=dpi)
+    if not isinstance(figsize, (tuple, list)):
+        figsize = (figsize, figsize)
+    fig, ax = plt.subplots(figsize=tuple(figsize), dpi=dpi)
 
     all_lats: List[float] = []
     phases_seen = set()
@@ -238,7 +246,8 @@ def render_map(
     spot_pts = _draw_spots(ax, spots or [])
 
     # Route-name labels (drawn after autoscale so positions are stable).
-    _place_route_labels(ax, label_pick, paths, avoid_pts=arrow_pts + spot_pts)
+    _place_route_labels(ax, label_pick, paths, avoid_pts=arrow_pts + spot_pts,
+                        fig_width_in=figsize[0])
 
     # Tiled street basemap (network); silently fall back to a plain background.
     if basemap:
@@ -265,8 +274,15 @@ def render_map(
                  fontsize=15, fontweight="bold")
     ax.set_axis_off()
 
-    fig.tight_layout()
-    fig.savefig(out_path, bbox_inches="tight")
+    if tight:
+        fig.tight_layout()
+        fig.savefig(out_path, bbox_inches="tight")
+    else:
+        # Fixed canvas AND fixed axes box: tight_layout sizes the axes around
+        # whatever decorations a frame happens to have (route labels, a taller
+        # title), which would rescale the map from frame to frame.
+        fig.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.88)
+        fig.savefig(out_path)
     plt.close(fig)
     return out_path
 
@@ -366,7 +382,7 @@ def _point_at_fraction(pts, t: float):
 
 
 def _place_route_labels(ax, label_pick: Dict[str, BikePath], paths,
-                        avoid_pts=()) -> None:
+                        avoid_pts=(), fig_width_in: float = 16) -> None:
     """Label routes only where there's room. Candidate positions slide along
     the route; each is scored by how many vertices of OTHER paths sit under
     the label's box. Longest routes claim space first; a label whose every
@@ -377,9 +393,9 @@ def _place_route_labels(ax, label_pick: Dict[str, BikePath], paths,
         return
     x0, x1 = ax.get_xlim()
     span_x = x1 - x0
-    # Approximate an 8pt text box in data units on the 16in figure.
-    char_w = span_x * (8 * 0.62 / 72) / 16
-    box_h = span_x * (8 * 1.9 / 72) / 16
+    # Approximate an 8pt text box in data units, scaled to the figure width.
+    char_w = span_x * (8 * 0.62 / 72) / fig_width_in
+    box_h = span_x * (8 * 1.9 / 72) / fig_width_in
     merc = {id(p): [[lonlat_to_mercator(*pt) for pt in seg]
                     for seg in p.segments if len(seg) >= 2] for p in paths}
 

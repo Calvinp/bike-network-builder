@@ -38,6 +38,52 @@ def test_render_map_writes_png_in_every_mode(tmp_path, mode):
     assert out.exists() and out.stat().st_size > 1000
 
 
+def test_untight_frames_have_a_fixed_canvas_and_axes(tmp_path):
+    """Animation frames must be pixel-stable: same canvas AND same axes box no
+    matter how long the title is or whether a frame has route labels — the
+    map would otherwise jump around as the GIF plays."""
+    from PIL import Image
+
+    sizes, boxes = set(), set()
+    for paths, title in ((_paths()[1:2], "Today\n"),
+                         (_paths(), "Phase 2: A Very Long Phase Label Indeed\n"
+                                    "by December 31, 2032")):
+        out = tmp_path / f"frame-{len(paths)}.png"
+        fig_before = len(_open_figures())
+        render_map(paths, NET, out, boundary=BOUNDARY, basemap=False,
+                   figsize=(10, 6), dpi=40, tight=False, title=title)
+        assert len(_open_figures()) == fig_before  # figures are closed
+        with Image.open(out) as im:
+            sizes.add(im.size)
+        boxes.add(_last_axes_box)
+    assert sizes == {(400, 240)}, sizes          # figsize * dpi exactly
+    assert len(boxes) == 1, boxes                # identical axes rectangle
+
+
+_last_axes_box = None
+
+
+@pytest.fixture(autouse=True)
+def _capture_axes_box(monkeypatch):
+    """Record the axes rectangle of the last rendered figure."""
+    import matplotlib.pyplot as plt
+    real = plt.Figure.savefig
+
+    def spy(self, *a, **k):
+        global _last_axes_box
+        if self.axes:
+            _last_axes_box = tuple(round(v, 6)
+                                   for v in self.axes[0].get_position().bounds)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(plt.Figure, "savefig", spy)
+
+
+def _open_figures():
+    import matplotlib.pyplot as plt
+    return plt.get_fignums()
+
+
 def test_path_color_by_phase():
     spine, trail, state = _paths()
     assert path_color(spine, "phase") == PHASE_COLORS[1]
