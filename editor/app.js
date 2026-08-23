@@ -1022,6 +1022,17 @@ async function init(){
     if(dirty) navigator.sendBeacon("/api/state",
       new Blob([statePayload()], {type:"application/json"}));
   };
+  // Leaflet doesn't notice its container changing size (phone rotation, a
+  // header row wrapping, the browser chrome hiding), and leaves the new area
+  // blank grey until told. Debounced so a drag-resize isn't a redraw storm.
+  let resizeTimer=null;
+  const onResize=()=>{
+    clearTimeout(resizeTimer);
+    resizeTimer=setTimeout(()=>map.invalidateSize(), 150);
+  };
+  window.addEventListener("resize", onResize);
+  window.addEventListener("orientationchange", onResize);
+
   window.addEventListener("pagehide", beaconFlush);
   document.addEventListener("visibilitychange", ()=>{
     if(document.visibilityState==="hidden") beaconFlush();

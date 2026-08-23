@@ -28,7 +28,10 @@ header .brand span { color: var(--accent); }
 header .spacer { flex: 1; }
 header .status { color: var(--muted); font-size: 13px; }
 header .checkbox { display: flex; align-items: center; gap: 6px; font-size: 13px;
-  color: var(--muted); cursor: pointer; user-select: none; }
+  color: var(--muted); cursor: pointer; user-select: none; min-width: 0; }
+/* Phase labels can be long ("As of Phase 3: Citywide Completion…"); the
+   select must shrink rather than push the header off-screen. */
+header select { max-width: 100%; min-width: 0; }
 header .dirty { color: #b45309; font-weight: 600; }
 
 /* Buttons */
@@ -177,6 +180,9 @@ input.warn-field { border-color: #f59e0b; background: #fffbeb; }
   header .brand { width: 100%; font-size: 15px; }
   header .status { font-size: 12px; }
   header button, header .btnlike { padding: 6px 10px; font-size: 13px; }
+  /* Let the two dropdowns share a row and shrink to fit the screen. */
+  header .checkbox { flex: 1 1 auto; }
+  header select { flex: 1 1 auto; }
   .main { position: relative; min-height: 0; }
   .sidebar {
     display: none; position: absolute; inset: 0; width: auto; z-index: 1200;
