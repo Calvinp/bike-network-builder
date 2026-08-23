@@ -229,8 +229,10 @@ if (DATA.boundary.length) {
 }
 var phaseGroups = [];        // [phase, group] for the slider
 var layersById = {};         // path id -> [leaflet layers], for supersession
+var groupLayers = [];        // one Leaflet group per DATA.groups entry
 DATA.groups.forEach(function (group) {
   var g = L.featureGroup();
+  groupLayers.push(g);
   group.features.forEach(function (f) {
     var line = L.polyline(f.latlngs, {
       color: f.color, weight: f.weight, opacity: 0.9,
@@ -340,13 +342,16 @@ if (DATA.stops.length > 1) {
     + (DATA.stops.length - 1) + '">';
   document.body.appendChild(box);
 
-  // Layers to pull once their upgrader's phase arrives.
+  // A replaced path steps aside only while its replacement is actually on
+  // screen. Turning the upgrade's phase off in the layer list has to bring
+  // the original back, or that corridor would vanish from the map entirely.
   var hidden = [];
-  DATA.groups.forEach(function (group) {
+  DATA.groups.forEach(function (group, gi) {
     group.features.forEach(function (f) {
       if (f.upgrades && f.phase !== null && f.phase !== undefined) {
         (layersById[f.upgrades] || []).forEach(function (pair) {
-          hidden.push({layer: pair[0], group: pair[1], phase: f.phase});
+          hidden.push({layer: pair[0], group: pair[1], phase: f.phase,
+                       replacement: groupLayers[gi]});
         });
       }
     });
@@ -354,15 +359,22 @@ if (DATA.stops.length > 1) {
 
   var slider = document.getElementById("phase-slider");
   var label = document.getElementById("phase-slider-label");
-  function applyPhase() {
-    var cur = DATA.stops[Number(slider.value)].n;
-    label.textContent = DATA.stops[Number(slider.value)].caption;
+  var applying = false;
+
+  // What the slider position alone decides: which phase groups are on.
+  function applyGroups(cur) {
     phaseGroups.forEach(function (pg) {
       if (pg[0] <= cur) map.addLayer(pg[1]);
       else map.removeLayer(pg[1]);
     });
+  }
+
+  // What the slider AND the layer checkboxes together decide. Kept separate
+  // so ticking a box off doesn't get instantly overruled by the slider.
+  function applyOverrides(cur) {
     hidden.forEach(function (h) {
-      if (h.phase <= cur) h.group.removeLayer(h.layer);
+      var replacementShown = h.phase <= cur && map.hasLayer(h.replacement);
+      if (replacementShown) h.group.removeLayer(h.layer);
       else if (!h.group.hasLayer(h.layer)) h.group.addLayer(h.layer);
     });
     spotEntries.forEach(function (s) {
@@ -372,7 +384,20 @@ if (DATA.stops.length > 1) {
     });
     syncDirArrows();
   }
+
+  function current() { return DATA.stops[Number(slider.value)].n; }
+  function applyPhase() {
+    applying = true;
+    label.textContent = DATA.stops[Number(slider.value)].caption;
+    applyGroups(current());
+    applyOverrides(current());
+    applying = false;
+  }
   slider.addEventListener("input", applyPhase);
+  // Toggling an overlay changes what "is the replacement showing?" answers.
+  map.on("overlayadd overlayremove", function () {
+    if (!applying) applyOverrides(current());
+  });
   applyPhase();
 }
 `}

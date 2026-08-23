@@ -120,3 +120,21 @@ test("phase artifacts need a canvas renderer, so they are empty without one", as
   assert.deepEqual(
     await buildPhaseArtifacts(net(paths), BOUNDARY_RINGS, CLIP_RING), []);
 });
+
+test("a replaced path stays in map.html and returns if the upgrade is hidden", async () => {
+  // The slider removes the old path when its replacement arrives, but the
+  // reader can also untick the upgrade's phase in the layer list — and then
+  // the corridor must fall back to what it replaced, not go blank.
+  const geom = [[42.41, -71.07], [42.42, -71.06]];
+  const old = p("Main Street", geom, { id: "main-1", directions: 1 });
+  const up = p("Main Street rebuild", geom, { phase: 2, upgrades: "main-1" });
+  const { html } = await buildArtifacts(net([old, up]), BOUNDARY_RINGS, CLIP_RING);
+  // Both are still in the file (hiding is a runtime decision, not a filter).
+  assert.match(html, /Main Street rebuild/);
+  assert.match(html, /"Main Street"/);
+  // ...and the decision consults whether the replacement is actually shown.
+  assert.match(html, /replacement: groupLayers\[gi\]/);
+  assert.match(html, /hasLayer\(h\.replacement\)/);
+  // Unticking a box must not be undone by the slider re-asserting groups.
+  assert.match(html, /overlayadd overlayremove/);
+});

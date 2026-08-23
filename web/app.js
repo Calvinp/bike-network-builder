@@ -148,6 +148,7 @@ function addFeature(props, latlngs){
   layer.addTo(networkGroup);
   features.push(f);
   updateArrows(f);
+  renderLegend();
   return f;
 }
 function removeFeature(f){
@@ -160,7 +161,7 @@ function removeFeature(f){
     if(x.props.upgrades===f.props.id) x.props.upgrades="";
   });
   if(selected===f) deselect();
-  markDirty(); recomputeTotals();
+  markDirty(); recomputeTotals(); renderLegend();
 }
 function clearFeatures(){
   deselect();
@@ -419,7 +420,12 @@ function bindForm(){
         }
         fillPhaseSelect(selected);
       }
-      if(["status","jurisdiction","phase","type"].includes(key)) restyle(selected);
+      if(["status","jurisdiction","phase","type"].includes(key)){
+        restyle(selected);
+        // The legend lists only the types in use, so retyping the last
+        // path of a kind (or the first of a new one) changes it.
+        renderLegend();
+      }
       if(key==="name"){
         document.getElementById("sel-pill").textContent=e.target.value;
         e.target.classList.toggle("warn-field", isDefaultName(e.target.value));
@@ -568,14 +574,23 @@ function applyPhaseView(){
     shown=shown.filter(f=>!(f.props.id && superseded.has(f.props.id)));
     shownSet=new Set(shown);
   }
+  // A path whose replacement is also on screen (the full view draws both, the
+  // upgrade exactly covering it) keeps its line so it stays selectable, but
+  // drops its one-way chevron: that arrow describes a facility the upgrade
+  // has already replaced, and it floats above the new line.
+  const replaced=supersededIdSet([...shownSet]);
   features.forEach(f=>{
-    if(shownSet.has(f)){
+    const shown=shownSet.has(f);
+    const wantArrows=shown && !(f.props.id && replaced.has(f.props.id));
+    if(shown){
       if(!networkGroup.hasLayer(f.layer)) networkGroup.addLayer(f.layer);
-      if(f.arrows && !arrowsGroup.hasLayer(f.arrows)) arrowsGroup.addLayer(f.arrows);
     } else {
       if(selected===f) deselect();
       if(networkGroup.hasLayer(f.layer)) networkGroup.removeLayer(f.layer);
-      if(f.arrows && arrowsGroup.hasLayer(f.arrows)) arrowsGroup.removeLayer(f.arrows);
+    }
+    if(f.arrows){
+      if(wantArrows && !arrowsGroup.hasLayer(f.arrows)) arrowsGroup.addLayer(f.arrows);
+      if(!wantArrows && arrowsGroup.hasLayer(f.arrows)) arrowsGroup.removeLayer(f.arrows);
     }
   });
   // Spots follow the same clock: existing always; proposed once their phase

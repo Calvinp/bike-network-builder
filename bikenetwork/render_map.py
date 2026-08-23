@@ -32,7 +32,7 @@ from matplotlib import patheffects
 from matplotlib.lines import Line2D
 
 from .geometry import lonlat_to_mercator
-from .network_format import BikePath, Network
+from .network_format import BikePath, Network, superseded_ids
 
 Point = Tuple[float, float]
 
@@ -183,6 +183,10 @@ def render_map(
     # Pick one representative (longest) path per street name for labeling.
     label_pick: Dict[str, BikePath] = {}
     arrow_pts: List[tuple] = []  # one-way chevron positions (labels avoid them)
+    # A path drawn together with the upgrade that replaces it is completely
+    # covered by it, so only its chevron would still show — an arrow claiming
+    # the new lane is one-way. The replacement owns the direction now.
+    replaced = superseded_ids(paths)
 
     for p in paths:
         segs = [s for s in p.segments if len(s) >= 2]
@@ -211,7 +215,7 @@ def render_map(
                         solid_capstyle="round", alpha=0.55)
                 ax.plot(xs, ys, color=color, linewidth=4.0,
                         zorder=5, solid_capstyle="round")
-            if p.directions == 1:
+            if p.directions == 1 and p.id not in replaced:
                 arrow_pts.append(_direction_arrow(ax, seg))
 
         if p.status == "existing":

@@ -6,7 +6,7 @@
 // rotated dark glyphs with a white outline, scale bar, north arrow, legend.
 // Browser-only (needs a DOM canvas); everything upstream of it is node-tested.
 import { lonlatToMercator } from "./geometry.js";
-import { phaseMap } from "./network_format.js";
+import { phaseMap, supersededIds } from "./network_format.js";
 import {
   BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR, SPOT_GLYPHS,
   STATE_COLOR, TYPE_COLORS, labelText, pathColor, phaseColor, spotColor,
@@ -237,6 +237,10 @@ export async function renderPng(paths, net, {
                  existing: false, funded: false, state: false,
                  spots: new Set((spots || []).map((s) => s.kind)),
                  boundary: Boolean(boundaryMerc.length) };
+  // A path drawn together with the upgrade that replaces it is completely
+  // covered by it, so only its chevron would still show — an arrow claiming
+  // the new lane is one-way. The replacement owns the direction now.
+  const replaced = supersededIds(paths);
   const arrowPts = [];    // mercator chevron positions (labels avoid them)
   const labelPick = new Map();
 
@@ -277,7 +281,7 @@ export async function renderPng(paths, net, {
       } else if (p.status !== "existing") {
         stroke(ctx, seg, toPx, { color, lwPt: 4.0 });
       }
-      if (p.directions === 1 && seg.length >= 2) {
+      if (p.directions === 1 && seg.length >= 2 && !replaced.has(p.id)) {
         const k = Math.max(1, Math.floor(seg.length / 2));
         const [x0, y0] = seg[k - 1];
         const [x1, y1] = seg[k];

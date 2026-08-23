@@ -101,3 +101,38 @@ def test_path_color_by_type():
 def test_path_color_single():
     for p in _paths():
         assert path_color(p, "single") == SINGLE_COLOR
+
+
+def test_superseded_path_loses_its_one_way_chevron(tmp_path, monkeypatch):
+    """The full-network map draws a replaced path and its replacement on the
+    same geometry, so the upgrade covers the old line completely — but the old
+    chevron would still float on top, claiming the new lane is one-way."""
+    import bikenetwork.render_map as rm
+
+    drawn = []
+    real = rm._direction_arrow
+
+    def spy(ax, seg):
+        drawn.append(seg)
+        return real(ax, seg)
+
+    monkeypatch.setattr(rm, "_direction_arrow", spy)
+
+    geom = [(42.42, -71.07), (42.43, -71.06)]
+    old = BikePath("Main Street", phase=1, type="quick_build_separated",
+                   status="proposed", directions=1, id="main-1")
+    old.segments = [geom]
+    new = BikePath("Main Street rebuild", phase=2, type="concrete_separated",
+                   status="proposed", directions=2, upgrades="main-1")
+    new.segments = [geom]
+
+    # On its own the one-way path draws its chevron...
+    rm.render_map([old], NET, tmp_path / "alone.png", boundary=BOUNDARY,
+                  basemap=False, dpi=40)
+    assert len(drawn) == 1
+
+    # ...but not once the upgrade that replaces it is on the same map.
+    drawn.clear()
+    rm.render_map([old, new], NET, tmp_path / "both.png", boundary=BOUNDARY,
+                  basemap=False, dpi=40)
+    assert drawn == []

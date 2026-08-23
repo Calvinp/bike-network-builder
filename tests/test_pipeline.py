@@ -1,6 +1,7 @@
 """Tests for the shared pipeline: clipping, summarizing, and rendering all
 outputs (offline — basemap disabled)."""
 import json
+import re
 
 import pytest
 from bikenetwork.boundary import build_polygon
@@ -228,3 +229,26 @@ def test_render_all_rejects_unknown_color_mode(tmp_path):
     with pytest.raises(ValueError):
         render_all(_net([_p("A")]), BOUNDARY, tmp_path, basemap=False,
                    color_mode="rainbow")
+
+
+def test_html_never_touches_the_map_before_it_exists(tmp_path):
+    """folium emits our injected scripts BEFORE the line that assigns the map
+    variable, so any statement that reaches for the map at parse time throws
+    and takes the whole <script> block — the map included — down with it,
+    leaving a blank page. Everything we inject must wait for DOMContentLoaded.
+    (This is how the one-way-chevron script silently blanked map.html.)"""
+    a = _p("Quick", 1, id="a", directions=1)
+    b = _p("Rebuild", 2, upgrades="a")
+    render_all(_net([a, b]), BOUNDARY, tmp_path, basemap=False)
+    html = (tmp_path / "map.html").read_text(encoding="utf-8")
+
+    match = re.search(r"var (map_[0-9a-f]+) = L\.map\(", html)
+    assert match, "no map constructor found"
+    name, born = match.group(1), match.start()
+    for use in re.finditer(rf"\b{name}\.(on|fire|addLayer|removeLayer|hasLayer)\(", html):
+        if use.start() < born:
+            deferred = html.rfind("DOMContentLoaded", 0, use.start())
+            opener = html.rfind("<script", 0, use.start())
+            assert deferred > opener, (
+                f"{html[use.start():use.start() + 60]!r} runs before the map "
+                f"exists and is not inside a DOMContentLoaded handler")

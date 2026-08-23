@@ -170,6 +170,22 @@ against the checked-in base network):
    file in both `data/layers/` and `web/data/layers/`, add a manifest entry.
 
 **Gotchas from that work:**
+- **Nothing injected into folium's map.html may touch the map at parse time.**
+  `get_root().script` children are emitted BEFORE the `var map_… = L.map(…)`
+  assignment, so `map_….on(...)` there throws and takes the whole `<script>`
+  block — the map with it — leaving a blank page. Wrap injected code in
+  `DOMContentLoaded` (both the phase slider and the chevron-zoom handler do).
+  `test_html_never_touches_the_map_before_it_exists` pins this; it is the same
+  trap as the TextPath crash, and the chevron handler fell into it once.
+- **A replaced path is hidden only while its replacement is actually shown.**
+  In map.html that means consulting `map.hasLayer(replacement)` as well as the
+  slider position, so unticking the upgrade's phase falls back to the path it
+  replaced instead of blanking the corridor; the slider therefore re-asserts
+  phase groups on `input` only, never on `overlayadd`/`overlayremove` (which
+  would fight the checkbox the reader just clicked).
+- **A superseded path draws no one-way chevron** when its replacement is on the
+  same map: the upgrade covers the old line exactly, so only the stale arrow
+  would show, claiming the new lane is one-way.
 - `fetch_layers.py` derives its bbox from `data/malden_boundary.geojson` (not
   `osm.MALDEN_BBOX`) so another city needs no code change, and it renames raw fields to
   plain language AT FETCH TIME — MassDOT's `NON_MTRST_TYPE_CL`, epoch-ms dates and KABCO
@@ -186,7 +202,7 @@ against the checked-in base network):
 
 ## Current state (2026-07)
 
-**Done:** everything above; 134 offline pytest tests green; the Overpass User-Agent uses
+**Done:** everything above; 136 offline pytest tests green; the Overpass User-Agent uses
 the MSS contact address (keep it that way — Overpass etiquette wants a reachable contact).
 
 **Done (2026-07): the static client-side port** — `web/` is a complete, framework-free
@@ -208,7 +224,7 @@ maldensafestreets.org; also servable from any static host). Key facts:
   city polygon ring to `web/data/malden_boundary_polygon.json` (a test fails if stale).
 - `web/data/` holds byte-identical copies of the data assets (test-enforced; identical
   blobs are free in git). The street graph (~4 MB) is fetched lazily on first snap.
-- **Tests:** `cd web && node --test` — 110 offline tests mirroring the pytest suite.
+- **Tests:** `cd web && node --test` — 111 offline tests mirroring the pytest suite.
   Serialization parity is real: Python parses JS-written YAML with zero errors and
   identical fields/geometry; clip/summarize totals match Python to 4 decimals on the
   full network.

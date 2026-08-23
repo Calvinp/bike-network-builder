@@ -181,14 +181,21 @@ def render_html(
     # Chevrons are fixed-size DivIcons; hide them when zoomed out far enough
     # that they'd dwarf the streets (mirrors the editor's behavior).
     # overlayadd re-hides ones re-added via the layer control while zoomed out.
+    #
+    # MUST be deferred: folium emits root-script children BEFORE the statement
+    # that assigns the map variable, so touching the map at parse time throws
+    # and takes the whole <script> block — including the map itself — with it,
+    # leaving a blank page. Everything injected here waits for DOMContentLoaded.
     m.get_root().script.add_child(folium.Element(f"""
+      document.addEventListener("DOMContentLoaded", function() {{
         {m.get_name()}.on('zoomend overlayadd', function () {{
             var show = {m.get_name()}.getZoom() >= 14;
             document.querySelectorAll('.dir-arrow').forEach(function (el) {{
                 el.style.display = show ? '' : 'none';
             }});
         }});
-        {m.get_name()}.whenReady(function () {{ {m.get_name()}.fire('zoomend'); }});
+        {m.get_name()}.fire('zoomend');
+      }});
     """))
     if phased:
         _add_phase_slider(m, net, paths, phase_groups, layers_by_id, spot_entries)
@@ -239,14 +246,19 @@ def _add_phase_slider(m, net: Network, paths: List[BikePath],
     if len(stops) > 1:
         stops[-1] = (stops[-1][0], stops[-1][1] + " (full network)")
 
-    # {layer var, group var, phase at which the upgrading path appears}.
+    # A replaced path steps aside only while its replacement is actually on
+    # screen: {layer, its group, the upgrade's phase, the upgrade's group}.
+    # Without that last part, hiding the upgrade in the layer list would leave
+    # the corridor blank instead of falling back to what it replaced.
     hidden_entries = []
     for p in paths:
-        if p.upgrades and p.status == "proposed" and p.phase is not None:
+        if (p.upgrades and p.status == "proposed" and p.phase is not None
+                and p.phase in phase_groups):
             for layer, group in layers_by_id.get(p.upgrades, []):
                 hidden_entries.append(
                     f'{{layer: {layer.get_name()}, group: {group.get_name()}, '
-                    f'phase: {p.phase}}}')
+                    f'phase: {p.phase}, '
+                    f'replacement: {phase_groups[p.phase].get_name()}}}')
 
     # Proposed spots appear once the slider reaches their phase.
     appear_entries = [
@@ -276,15 +288,21 @@ def _add_phase_slider(m, net: Network, paths: List[BikePath],
       var appearing = [{", ".join(appear_entries)}];
       var slider = document.getElementById("phase-slider");
       var label = document.getElementById("phase-slider-label");
-      function apply() {{
-        var cur = stops[+slider.value];
-        label.textContent = labels[+slider.value];
+      var applying = false;
+      function current() {{ return stops[+slider.value]; }}
+      // What the slider position alone decides: which phase groups are on.
+      function applyGroups(cur) {{
         phaseGroups.forEach(function(pg) {{
           if (pg[0] <= cur) {{ {m.get_name()}.addLayer(pg[1]); }}
           else {{ {m.get_name()}.removeLayer(pg[1]); }}
         }});
+      }}
+      // What the slider AND the layer checkboxes decide together. Kept apart
+      // so unticking a box isn't instantly overruled by the slider.
+      function applyOverrides(cur) {{
         hidden.forEach(function(h) {{
-          if (h.phase <= cur) {{ h.group.removeLayer(h.layer); }}
+          var shown = h.phase <= cur && {m.get_name()}.hasLayer(h.replacement);
+          if (shown) {{ h.group.removeLayer(h.layer); }}
           else if (!h.group.hasLayer(h.layer)) {{ h.group.addLayer(h.layer); }}
         }});
         appearing.forEach(function(a) {{
@@ -293,7 +311,18 @@ def _add_phase_slider(m, net: Network, paths: List[BikePath],
           }} else {{ a.group.removeLayer(a.layer); }}
         }});
       }}
+      function apply() {{
+        applying = true;
+        label.textContent = labels[+slider.value];
+        applyGroups(current());
+        applyOverrides(current());
+        applying = false;
+      }}
       slider.addEventListener("input", apply);
+      // Toggling an overlay changes what "is the replacement showing?" answers.
+      {m.get_name()}.on("overlayadd overlayremove", function() {{
+        if (!applying) applyOverrides(current());
+      }});
       apply();
     }});"""
     m.get_root().script.add_child(folium.Element(slider_js))
