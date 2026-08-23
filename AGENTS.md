@@ -250,6 +250,17 @@ maldensafestreets.org; also servable from any static host). Key facts:
   graph — so after an edit the page can keep running the previous `app.js` and look
   like it ignored the change. If you serve `web/` some other way, disable caching
   there too or you will chase ghosts.
+- **The other stale-page ghost: a server from a DIFFERENT checkout.** `serve.py` used
+  to inherit `allow_reuse_address = 1`, and on Windows that is a hijack licence — a
+  second serve.py (say, from a worktree) binds port 8613 too, prints its happy startup
+  line, and the ORIGINAL server keeps answering every request. Nothing about the page
+  is cached; the bytes really are the other checkout's, so hard reloads and a second
+  browser prove nothing. `Server.allow_reuse_address = False` now turns that into a
+  loud error, the banner prints the folder being served, and `--port` lets two
+  checkouts run side by side (`tests/test_web_serve.py` pins all three). When a change
+  "doesn't show up", check WHO is on the port before you suspect your code:
+  `curl -s http://127.0.0.1:8613/js/render_common.js | md5sum` against the file on
+  disk settles it in one command.
 - **Tests:** `cd web && node --test` — 121 offline tests mirroring the pytest suite.
   Serialization parity is real: Python parses JS-written YAML with zero errors and
   identical fields/geometry; clip/summarize totals match Python to 4 decimals on the
