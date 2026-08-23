@@ -2,8 +2,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  makeNetwork, makePath, makePhase, parseNetwork, serializeNetwork,
-  validateNetwork,
+  makeNetwork, makePath, makePhase, makeSpot, parseNetwork, serializeNetwork,
+  supersededIds, validateNetwork,
 } from "../js/network_format.js";
 
 function net() {
@@ -128,3 +128,90 @@ test("serialized yaml keeps single-segment geometry flow-style and compact", () 
   const text = serializeNetwork(net());
   assert.match(text, /geometry: \[\[42\.42, -71\.07\], \[42\.43, -71\.06\]\]/);
 });
+
+test("pedestrianized is a valid type", () => {
+  const n = net();
+  n.paths[0].type = "pedestrianized";
+  assert.deepEqual(validateNetwork(n), []);
+});
+
+test("upgrade links round-trip and are omitted when unset", () => {
+  const n = net();
+  n.paths[0].id = "main-1";
+  n.paths[2].upgrades = "main-1";
+  const out = parseNetwork(serializeNetwork(n));
+  assert.equal(out.paths[0].id, "main-1");
+  assert.equal(out.paths[2].upgrades, "main-1");
+  assert.deepEqual(validateNetwork(out), []);
+  // A network with no ids serializes exactly as it did before the fields
+  // existed — old files keep round-tripping without spurious diffs.
+  const plain = serializeNetwork(net());
+  assert.ok(!plain.includes("id:") && !plain.includes("upgrades"));
+});
+
+test("supersededIds reports paths another path replaces", () => {
+  const n = net();
+  n.paths[0].id = "main-1";
+  n.paths[2].upgrades = "main-1";
+  assert.deepEqual([...supersededIds(n.paths)], ["main-1"]);
+  n.paths[2].upgrades = "";
+  assert.deepEqual([...supersededIds(n.paths)], []);
+});
+
+for (const [name, mutate, needle] of [
+  ["duplicate ids", (n) => { n.paths[0].id = "x"; n.paths[2].id = "x"; },
+   "duplicate path id"],
+  ["dangling upgrade", (n) => { n.paths[0].upgrades = "ghost"; }, "unknown path id"],
+  ["self upgrade", (n) => { n.paths[0].id = "a"; n.paths[0].upgrades = "a"; }, "itself"],
+  ["upgrade loop", (n) => {
+    n.paths[0].id = "a"; n.paths[2].id = "b";
+    n.paths[0].upgrades = "b"; n.paths[2].upgrades = "a";
+  }, "loop"],
+  ["upgrade on a non-proposed path",
+   (n) => { n.paths[0].id = "a"; n.paths[1].upgrades = "a"; }, "proposed"],
+]) {
+  test(`validation rejects ${name}`, () => {
+    const n = net();
+    mutate(n);
+    const errors = validateNetwork(n);
+    assert.ok(errors.some((e) => e.includes(needle)), JSON.stringify(errors));
+  });
+}
+
+test("spots round-trip, default their status and round to 6 decimals", () => {
+  const n = net();
+  n.spots = [
+    makeSpot({ name: "Oak Grove racks", kind: "bike_parking", status: "existing",
+               location: [42.43, -71.06], notes: "12 spaces" }),
+    makeSpot({ kind: "speed_hump", phase: 1, location: [42.421234567, -71.07] }),
+  ];
+  const out = parseNetwork(serializeNetwork(n));
+  assert.equal(out.spots.length, 2);
+  assert.equal(out.spots[0].kind, "bike_parking");
+  assert.equal(out.spots[0].notes, "12 spaces");
+  assert.equal(out.spots[1].status, "proposed");
+  assert.deepEqual(out.spots[1].location, [42.421235, -71.07]);
+  assert.deepEqual(validateNetwork(out), []);
+});
+
+test("a network with no spots serializes without a spots key", () => {
+  assert.ok(!serializeNetwork(net()).includes("spots"));
+});
+
+for (const [name, spot, needle] of [
+  ["unknown kind", { kind: "teleporter", location: [42.42, -71.07] }, "kind"],
+  ["missing location", { kind: "speed_hump" }, "location"],
+  ["out-of-range location", { kind: "speed_hump", location: [442, -71.07] },
+   "out of range"],
+  ["bad status", { kind: "speed_hump", status: "dreamed", location: [42.42, -71.07] },
+   "status"],
+  ["undeclared phase", { kind: "speed_hump", phase: 9, location: [42.42, -71.07] },
+   "not declared"],
+]) {
+  test(`spot validation rejects ${name}`, () => {
+    const n = net();
+    n.spots = [makeSpot(spot)];
+    const errors = validateNetwork(n);
+    assert.ok(errors.some((e) => e.includes(needle)), JSON.stringify(errors));
+  });
+}

@@ -2,8 +2,12 @@
 // render_all file outputs, which in the web port are exercised as exports).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clipPaths, summarize } from "../js/pipeline.js";
-import { makeNetwork, makePath, makePhase } from "../js/network_format.js";
+import {
+  clipPaths, clipSpots, pathsAsOfPhase, spotsAsOfPhase, summarize,
+} from "../js/pipeline.js";
+import {
+  makeNetwork, makePath, makePhase, makeSpot,
+} from "../js/network_format.js";
 
 const approx = (got, want, abs = 1e-6) =>
   assert.ok(Math.abs(got - want) <= abs, `${got} !~ ${want}`);
@@ -73,4 +77,49 @@ test("summarize buckets statuses and state", () => {
   approx(s.committed_miles, 1.0);
   assert.deepEqual(s.phases.map(ph => ph.phase), [1, 2]);
   assert.equal(s.phases[0].label, "Core");
+});
+
+test("summarize counts an upgraded corridor once but keeps both phases", () => {
+  // Quick-build in phase 1, full rebuild of the same corridor in phase 2: the
+  // corridor counts ONCE at full buildout, but each phase still shows its own
+  // work (you pay to build twice).
+  const a = p("Main quick-build", 1, { id: "a" });
+  const b = p("Main rebuild", 2, { upgrades: "a" });
+  a.length_miles = 1.0;
+  b.length_miles = 1.0;
+  const s = summarize([a, b], net([a, b]));
+  approx(s.total_build_miles, 1.0);
+  approx(s.total_lane_miles, 2.0);
+  assert.equal(s.total_paths, 1);
+  assert.deepEqual(s.phases.map((ph) => ph.miles), [1.0, 1.0]);
+});
+
+test("pathsAsOfPhase is cumulative and hides superseded paths", () => {
+  const a = p("Quick", 1, { id: "a" });
+  const b = p("Rebuild", 2, { upgrades: "a" });
+  const e = p("Trail", null, { status: "existing" });
+  const names = (n) => pathsAsOfPhase([a, b, e], n).map((x) => x.name);
+  assert.deepEqual(names(0), ["Trail"]);
+  assert.deepEqual(names(1), ["Quick", "Trail"]);
+  // Once the rebuild's phase arrives it replaces the quick-build.
+  assert.deepEqual(names(2), ["Rebuild", "Trail"]);
+});
+
+test("spotsAsOfPhase shows existing always and proposed on schedule", () => {
+  const built = makeSpot({ kind: "bike_parking", status: "existing",
+                           location: [42.42, -71.06] });
+  const later = makeSpot({ kind: "speed_hump", status: "proposed", phase: 2,
+                           location: [42.42, -71.06] });
+  const anytime = makeSpot({ kind: "raised_crosswalk", status: "proposed",
+                             location: [42.42, -71.06] });
+  const spots = [built, later, anytime];
+  assert.deepEqual(spotsAsOfPhase(spots, 0), [built]);
+  assert.deepEqual(spotsAsOfPhase(spots, 1), [built, anytime]);
+  assert.deepEqual(spotsAsOfPhase(spots, 2), spots);
+});
+
+test("clipSpots drops spots outside the city", () => {
+  const inside = makeSpot({ kind: "speed_hump", location: [42.42, -71.06] });
+  const outside = makeSpot({ kind: "speed_hump", location: [42.60, -71.06] });
+  assert.deepEqual(clipSpots([inside, outside], BOUNDARY_RING), [inside]);
 });

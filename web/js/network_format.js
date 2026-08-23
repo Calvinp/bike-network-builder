@@ -15,10 +15,27 @@ export const PATH_TYPES = [
   "shared_use_path",        // off-street path (e.g. trail spur)
   "buffered_painted",       // painted + buffer (interim only)
   "neighborway",            // traffic-calmed shared street
+  "pedestrianized",         // car-free / car-light street conversion
 ];
 
 export const STATUSES = ["proposed", "funded", "existing"];
 export const JURISDICTIONS = ["city", "state"];
+
+// Point ("spot") improvements — single-location infrastructure that isn't a
+// path: traffic calming, crossings, parking, greening.
+export const SPOT_KINDS = [
+  "speed_hump",
+  "raised_crosswalk",
+  "raised_intersection",
+  "curb_extension",
+  "bike_parking",
+  "street_trees",
+  "other",
+];
+
+// Spots are either on the ground or proposed — there's no funded pipeline
+// tracking for small interventions.
+export const SPOT_STATUSES = ["existing", "proposed"];
 
 export function makePhase(number, label = "", deadline = "") {
   return { number, label, deadline };
@@ -30,6 +47,13 @@ export function makePath(over = {}) {
     type: "quick_build_separated",
     status: "proposed",
     jurisdiction: "city",
+    // Optional stable identity ("" = none). Only needed when another path
+    // upgrades this one; editors assign one lazily so plain files stay clean.
+    id: "",
+    // Id of the path this one replaces in a later phase (e.g. quick-build now,
+    // concrete rebuild later). The upgraded path's corridor is counted once in
+    // full-buildout mileage, but every phase's work still costs money.
+    upgrades: "",
     phase: null,           // required for proposed; null for existing/funded
     directions: 2,         // 2 = one facility each way; 1 = one-way
     on_street: "",
@@ -42,6 +66,20 @@ export function makePath(over = {}) {
   };
 }
 
+export function makeSpot(over = {}) {
+  return {
+    name: "",
+    kind: "other",
+    status: "proposed",
+    // Optional even for proposed spots — small interventions often aren't
+    // tied to a network phase.
+    phase: null,
+    location: null,        // [lat, lon]; null = malformed/missing
+    notes: "",
+    ...over,
+  };
+}
+
 export function makeNetwork(over = {}) {
   return {
     city: "Malden",
@@ -49,6 +87,7 @@ export function makeNetwork(over = {}) {
     ordinance_chapter: "",
     phases: [],
     paths: [],
+    spots: [],
     format_id: FORMAT_ID,
     format_version: FORMAT_VERSION,
     ...over,
@@ -57,6 +96,16 @@ export function makeNetwork(over = {}) {
 
 export function phaseMap(net) {
   return new Map(net.phases.map((p) => [p.number, p]));
+}
+
+// Ids of paths that some other path upgrades (replaces in a later phase).
+// Used to count an upgraded corridor once in full-buildout mileage while
+// still costing every phase's work. A dangling reference supersedes nothing
+// (validation reports it separately).
+export function supersededIds(paths) {
+  const ids = new Set(paths.map((p) => p.id).filter(Boolean));
+  return new Set(paths.filter((p) => p.upgrades && ids.has(p.upgrades))
+                      .map((p) => p.upgrades));
 }
 
 /* ------------------------------- Parsing -------------------------------- */
@@ -123,6 +172,8 @@ export function networkFromDict(raw) {
       type: str(item.type ?? item.treatment).trim(),
       status: str(item.status, "proposed").trim() || "proposed",
       jurisdiction: str(item.jurisdiction, "city").trim() || "city",
+      id: str(item.id).trim(),
+      upgrades: str(item.upgrades).trim(),
       phase: toInt(item.phase, null),
       directions: toInt(item.directions, 2) || 2,
       on_street: str(item.on_street).trim(),
@@ -133,12 +184,29 @@ export function networkFromDict(raw) {
     }));
   }
 
+  const spots = [];
+  for (const item of raw.spots || []) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    const loc = item.location;
+    const ok = Array.isArray(loc) && loc.length === 2
+      && loc.every((v) => typeof v === "number" && Number.isFinite(v));
+    spots.push(makeSpot({
+      name: str(item.name).trim(),
+      kind: str(item.kind, "other").trim() || "other",
+      status: str(item.status, "proposed").trim() || "proposed",
+      phase: toInt(item.phase, null),
+      location: ok ? [Number(loc[0]), Number(loc[1])] : null,
+      notes: str(item.notes).trim(),
+    }));
+  }
+
   return makeNetwork({
     city: str(raw.city, "Malden") || "Malden",
     state: str(raw.state, "Massachusetts") || "Massachusetts",
     ordinance_chapter: str(raw.ordinance_chapter),
     phases,
     paths,
+    spots,
     format_id: str(raw.format, FORMAT_ID) || FORMAT_ID,
     format_version: toInt(raw.format_version, FORMAT_VERSION),
   });
@@ -174,6 +242,13 @@ export function validateNetwork(net) {
     (n) => phaseNumbers.filter((m) => m === n).length > 1))].sort((a, b) => a - b);
   if (dupes.length) errors.push(`duplicate phase number(s): [${dupes.join(", ")}].`);
 
+  const pathIds = net.paths.map((p) => p.id).filter(Boolean);
+  const dupeIds = [...new Set(pathIds.filter(
+    (i) => pathIds.filter((j) => j === i).length > 1))].sort();
+  if (dupeIds.length) {
+    errors.push(`duplicate path id(s): [${dupeIds.map(repr).join(", ")}].`);
+  }
+
   net.paths.forEach((path, i) => {
     const label = path.name || `path #${i + 1}`;
     if (!path.name) errors.push(`path #${i + 1}: missing required field 'name'.`);
@@ -192,6 +267,32 @@ export function validateNetwork(net) {
     if (path.directions !== 1 && path.directions !== 2) {
       errors.push(`${label}: 'directions' must be 1 or 2 (got ${repr(path.directions)}).`);
     }
+    if (path.upgrades) {
+      if (path.status !== "proposed") {
+        errors.push(`${label}: only a proposed path can have `
+          + `'upgrades' (status is ${repr(path.status)}).`);
+      }
+      if (path.upgrades === path.id) {
+        errors.push(`${label}: a path cannot upgrade itself.`);
+      } else if (!pathIds.includes(path.upgrades)) {
+        errors.push(`${label}: 'upgrades' references unknown path `
+          + `id ${repr(path.upgrades)}.`);
+      } else {
+        // Walk the chain to catch loops (a upgrades b upgrades a).
+        const byId = new Map(net.paths.filter((p) => p.id).map((p) => [p.id, p]));
+        const seen = new Set(path.id ? [path.id] : []);
+        let cur = path.upgrades;
+        while (cur) {
+          if (seen.has(cur)) {
+            errors.push(`${label}: 'upgrades' chain forms a loop.`);
+            break;
+          }
+          seen.add(cur);
+          cur = byId.get(cur)?.upgrades || "";
+        }
+      }
+    }
+
     if (path.status === "proposed") {
       if (path.phase === null || path.phase === undefined || path.phase < 1) {
         errors.push(`${label}: a proposed path needs a positive integer `
@@ -222,6 +323,32 @@ export function validateNetwork(net) {
         }
       });
     });
+  });
+
+  (net.spots || []).forEach((spot, i) => {
+    const label = `spot #${i + 1}` + (spot.name ? ` (${spot.name})` : "");
+    if (!SPOT_KINDS.includes(spot.kind)) {
+      errors.push(`${label}: unknown kind ${repr(spot.kind)}; `
+        + `must be one of ${SPOT_KINDS.join(", ")}.`);
+    }
+    if (!SPOT_STATUSES.includes(spot.status)) {
+      errors.push(`${label}: unknown status ${repr(spot.status)}; `
+        + `must be one of ${SPOT_STATUSES.join(", ")}.`);
+    }
+    if (spot.location === null || spot.location === undefined) {
+      errors.push(`${label}: needs a 'location' — one [lat, lon] `
+        + `pair of numbers.`);
+    } else if (!(spot.location[0] >= -90 && spot.location[0] <= 90
+                 && spot.location[1] >= -180 && spot.location[1] <= 180)) {
+      errors.push(`${label}: location (${spot.location[0]}, `
+        + `${spot.location[1]}) is out of range — it is `
+        + `[lat, lon], in degrees.`);
+    }
+    if (spot.phase !== null && spot.phase !== undefined
+        && phaseNumbers.length && !phaseNumbers.includes(spot.phase)) {
+      errors.push(`${label}: phase ${spot.phase} is not declared in `
+        + `the top-level 'phases' list.`);
+    }
   });
   return errors;
 }
@@ -264,6 +391,10 @@ function geometryYaml(segments, indentCol) {
 function pathDict(p, token) {
   const out = { name: p.name, type: p.type, status: p.status,
                 jurisdiction: p.jurisdiction };
+  // Optional identity/upgrade fields are omitted when unset so files that
+  // never use them serialize exactly as they did before the fields existed.
+  if (p.id) out.id = p.id;
+  if (p.upgrades) out.upgrades = p.upgrades;
   if (p.phase !== null && p.phase !== undefined) out.phase = p.phase;
   out.directions = p.directions;
   for (const [key, value] of [["on_street", p.on_street], ["from", p.from],
@@ -274,6 +405,17 @@ function pathDict(p, token) {
   return out;
 }
 
+function spotDict(s, token) {
+  const out = {};
+  if (s.name) out.name = s.name;
+  out.kind = s.kind;
+  out.status = s.status;
+  if (s.phase !== null && s.phase !== undefined) out.phase = s.phase;
+  if (s.location !== null && s.location !== undefined) out.location = token;
+  if (s.notes) out.notes = s.notes;
+  return out;
+}
+
 // Serialize a network to YAML text (stable key order; geometry points in
 // compact [lat, lon] flow style). The geometry arrays are formatted by hand
 // (via placeholder tokens) so they always come out flow-style regardless of
@@ -281,6 +423,7 @@ function pathDict(p, token) {
 export function serializeNetwork(net) {
   const salt = Math.random().toString(36).slice(2, 8);
   const tokenFor = (i) => `ZZGEOMZZ${salt}ZZ${i}ZZ`;
+  const locTokenFor = (i) => `ZZLOCZZ${salt}ZZ${i}ZZ`;
 
   const doc = {
     format: FORMAT_ID,
@@ -292,6 +435,10 @@ export function serializeNetwork(net) {
   doc.phases = [...net.phases].sort((a, b) => a.number - b.number)
     .map((p) => ({ phase: p.number, label: p.label, deadline: p.deadline }));
   doc.paths = net.paths.map((p, i) => pathDict(p, tokenFor(i)));
+  // Spot improvements are optional; files that don't use them keep
+  // serializing exactly as they did before the key existed.
+  const spots = net.spots || [];
+  if (spots.length) doc.spots = spots.map((s, i) => spotDict(s, locTokenFor(i)));
 
   let body = YAML.dump(doc, { lineWidth: 100, noRefs: true });
   body = body.replace(
@@ -300,6 +447,12 @@ export function serializeNetwork(net) {
       const p = net.paths[Number(idx)];
       const startCol = indent.length + "geometry: ".length;
       return `${indent}geometry: ${geometryYaml(p.segments, startCol)}`;
+    });
+  body = body.replace(
+    new RegExp(`^([ ]*)location: ZZLOCZZ${salt}ZZ(\\d+)ZZ$`, "gm"),
+    (whole, indent, idx) => {
+      const loc = spots[Number(idx)].location;
+      return `${indent}location: [${round6(loc[0])}, ${round6(loc[1])}]`;
     });
 
   const header = "# Bike network — written by bike-network-builder; re-importable there and\n"

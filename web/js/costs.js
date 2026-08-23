@@ -7,4 +7,7 @@ export const COST_PER_MILE = {
   shared_use_path: [1_000_000, 3_000_000],
   buffered_painted: [50_000, 150_000],
   neighborway: [50_000, 250_000],
+  // Car-free / car-light street conversion. Low: bollards, planters, signage
+  // over existing pavement. High: full plaza-grade rebuild. VERIFY the rates.
+  pedestrianized: [250_000, 2_000_000],
 };
