@@ -55,8 +55,8 @@ python editor.py             # -> http://127.0.0.1:5000
   state-road miles, and a planning-grade **cost estimate** (city builds and
   MassDOT requests separately; rates in `bikenetwork/costs.py`). Paths still
   carrying a default name get a warning chip that jumps you to them.
-- **Help** (header link) renders `editor/help.md` — edit that file to change
-  the user manual.
+- **Help** (header link) renders `web/help.md` — the single copy of the user
+  manual, shared by this editor and the static one. Edit that file to change it.
 - Works on phones: the layout stacks (map above the cards) below ~760 px.
 
 A first-time user starts from `data/base_network.yaml` — the existing +
