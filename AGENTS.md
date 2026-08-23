@@ -224,6 +224,11 @@ maldensafestreets.org; also servable from any static host). Key facts:
   city polygon ring to `web/data/malden_boundary_polygon.json` (a test fails if stale).
 - `web/data/` holds byte-identical copies of the data assets (test-enforced; identical
   blobs are free in git). The street graph (~4 MB) is fetched lazily on first snap.
+- `web/serve.py` serves with **caching disabled** on purpose. Browsers cache ES
+  modules hard, and a plain reload revalidates the HTML but not always its module
+  graph — so after an edit the page can keep running the previous `app.js` and look
+  like it ignored the change. If you serve `web/` some other way, disable caching
+  there too or you will chase ghosts.
 - **Tests:** `cd web && node --test` — 111 offline tests mirroring the pytest suite.
   Serialization parity is real: Python parses JS-written YAML with zero errors and
   identical fields/geometry; clip/summarize totals match Python to 4 decimals on the
