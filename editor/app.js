@@ -27,7 +27,7 @@ const SPOT_GLYPHS = {
 const SPOT_LABELS = {
   speed_hump:"Speed hump", raised_crosswalk:"Raised crosswalk",
   raised_intersection:"Raised intersection", curb_extension:"Curb extension",
-  bike_parking:"Bike parking", street_trees:"Street trees", other:"Other spot improvement"
+  bike_parking:"Bike parking", street_trees:"Street trees", other:"Spot improvement"
 };
 const SPOT_PROPOSED="#1a1a1a", SPOT_EXISTING="#707070";
 
