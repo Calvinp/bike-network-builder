@@ -8,7 +8,7 @@ You can select which paths are built and funded by the city vs the state, and yo
 You can create an implementation plan with phases.
 You can export your network in several ways - as a .png image file for sharing on social media, .html interactive web page, .geojson map file, or .yaml file for future import by yourself or others.
 
-**Your work is not saved until you export either a .zip or a .yaml file!**
+**Your work is not saved until you export either a .zip or a .yaml file!** (See Import & export below)
 
 ## Drawing paths
 
@@ -19,6 +19,7 @@ You can export your network in several ways - as a .png image file for sharing o
 - **Add existing path**: Works the same way as add path, but marks the path as already being in existence or funded.
   - This path will not add to the cost estimate.
   - This path will appear as dashed lines on the map and in exports.
+- **Add spot**: Create new proposed spot infrastructure. Click where you want the infrastructure to be built.
 - **Edit shapes**: Edits the route of a path that is alrerady on the map.
 
 ## Path properties
@@ -27,19 +28,44 @@ Properties of a path can be modified by clicking the path. These will show up vi
 - **Name**: The name of the path. This will show up on the exported map if possible.
 - **Status**: Proposed (your idea), funded (approved but not built), or
   existing (already on the ground).
-- **Type**: Quick-build separated lane, concrete-protected lane, shared-use
-  path, buffered painted lane, or neighborway (a traffic-calmed shared
-  street).
+- **Type**: The kind of path you'd like to build.
+  - **Quick-build separated lane**: A lane that doesn't require construction to build. Usually separated from traffic by repainting the street to move parking between car traffic and the bike lane, and/or by using flex posts.
+  - **Concrete-protected lane**: A lane that is separated from traffic by physical infrastructure. This can be a concrete divider or a sidewalk level bike lane.
+  - **Shared-use path**: A path that is shared between pedestrians and bikes. Rail trails are usually built this way, but they can be on street and separated by flex posts or concrete too. 
+  - **Buffered painted lane (interim)**: A bike lane that is only separated from traffic with paint. Advocates often consider these to be low quality. They're used because they're cheap and can still help where other higher quality infrastructure is nearby. Useful as a temporary measure.
+  - **Neighborway (calm shared street)**: A street that is shared between bikes and cars, but measures are taken to make it more comfortable for bikes. Often these are used on narrow neighborhood streets that were already designed for low car speeds. These measures can include (but are not limited to): making it one way for cars but two ways for bikes; making small intersections into tiny roundabouts; modal filters; curb extensions; navigational signage; bright paint; street trees.
+  - **Pedestrianized street**: A city street that cars are entirely or almost entirely banned from using. This differs from a shared-use path because the entire street is pedestrian/bike only, and usually there are buildings facing the street. Generally provisions (such as retractable bollards) are made to allow emergency vehicles to still access the street. Sometimes the same provisions allow vehicles such as delivery trucks and personal vehicles of people who require handicap access to also use the street. Even in the cases where limited vehicle access is required, the design of the street keeps vehicle speeds low. An exception is that a street can count as pedestrianized and still have active streetcar tracks.
 - **Phase**: If you want to make an implementation plan, this represents the phase this path gets built in (see Phases & Dates below to edit the options here).
 - **Directions**: Choose whether this is a one way or two way path.
 - **Jurisdiction**: Choose whether the city or the state is expected to build this path. The cost estimate for this path will be added to the selected entity.
 - **Length**: A calculated value that shows the length of the path. For two-way paths, this is not doubled. This is not modifyable directly.
 - **Notes**: Any notes about the path you would like to write. Write as much or as little detail as you would like.
+- **Plan an upgrade**: Click this to stage upgrades to a path across phases, or upgrade an already-existing path. 
 - **Reverse direction**: Only appears for one way paths, and reverses the direction of travel for the path.
-- **Combine...**: Click this then click another path to merge them. This currently can't be undone directly, so be careful with this.
+- **Combine...**: Click this then click another path to merge them. This can't be undone, so be careful with this.
 - **Delete path**: Deletes the path. This can't be undone, so be careful with this.
 
 You can also add details such as the street the path is on and the from and to intersection in More details, but these are just for your notes and do not affect the visuals.
+
+## Spot infrastructure properties
+
+Properties of a piece of spot infrastructure can be modified by clicking it. These will show up visually as an icon in the exported map.
+- **Type**: The kind of infrastructure proposed.
+  - **Speed hump**: A small raised section of the street. This forces cars to slow down.
+  - **Raised crosswalk**: A crosswalk that is raised to sidewalk level. This feels like a speed bump to occupants of cars, so it forces them to slow down, but it simultaneously provides an inviting and accessible place for pedestrians to cross the street.
+  - **Raised intersection**: Similar to a raised crosswalk, but this time the entire intersection is raised rather than just the crosswalks. This forces cars to take the whole intersection slowly, massively improving safety.
+  - **Crub extension**: A place where the curb extends into the street. This is used to force cars to slow down, improving safety.
+  - **Bike parking**: A secure place to park bicycles. There are many types of bike parking. If you would like to specify which type or how much, use the notes field.
+  - **Street trees**: A tree planted in the street to provide shade.
+  - **Modal filter**: A treatment, often (but not always) applied at intersections, that prevents certain types of traffic from going through while allowing others. Generally this is used to allow pedestrians, bikes, and sometimes streetcars to go through while blocking personal vehicles. This massively reduces vehicle traffic on the street while preserving access for vehicles whose destination is nearby. It is therefore popular in places where a street that is meant to be quiet is being used as a cut-through. Depending on implementation, emergency vehicles may or may not be able to drive over the modal filter if needed.
+  - **Bollard**: A pole that is securely fixed to the ground (often via concrete). This is often used to protect sidewalks around high speed traffic. A well implemented bollard can block even a fully loaded speeding semitruck. Note that poorly implemented bollards are fairly common. Those offer the illusion of protection while folding to the slightest crash. Care needs to be taken to ensure that it is implemented well.
+  - **Retractable bollard**: A bollard that can automatically retract when needed. This is a subclass of modal filter that can let some personal vehicles through but not others. This is often used to block through traffic from using a neighborhood street as a cut-throguh, while still allowing residents, deliveries, and emergency vehicles through. Often permited vehicles are issued a transponder that causes the bollard to retract for easy entry.
+  - **Spot improvement**: A custom spot improvement. Use the Notes field to describe what the improvement is.
+- **Name**: The name of this piece of infrastructure. Unlike for paths, naming spot infrastructure is optional.
+- **Status**: Proposed (your idea) or existing (already on the ground).
+- **Phase**: If you want to make an implementation plan, this represents the phase this path gets built in (see Phases & Dates below to edit the options here).
+- **Jurisdiction**: Choose whether the city or the state is expected to build this infrastructure. The cost estimate for this infrastructure will be added to the selected entity.
+- **Notes**: Any notes about the path you would like to write. Write as much or as little detail as you would like.
 
 ## Color modes
 
@@ -50,6 +76,14 @@ Change **Color by** to change how the network is colored. This will affect both 
 
 All colors are color blind friendly.
 
+## Map Layers
+
+You can select additional layers to display on the map to help you design your bike network. These are for reference only and may be out of date if their data sources are out of date.
+- **Bike Parking (existing)**: Bike parking that already exists. Imported from OSM.
+- **Street trees**: Existing trees in the street. Imported from OSM.
+- **Bike & pedestrian crashes**: Locations of crashes involving a bicycle or pedestrian. Imported from MassDOT.
+- **Fatal & serious-injury crashes**: Locations of crashes that caused a fatality or a serious injury. Imported from MassDOT.
+
 ## Import & export
 
 **Your work is not saved until you export either a .zip or a .yaml file!**
@@ -57,10 +91,10 @@ All colors are color blind friendly.
 Exporting allows you to share your work with others. Import allows you to load your previously exported work or build on someone else's work.
 
 - **Export**: Exports the network for sharing. There are five ways you can export:
-  - **Everything (.zip)**: Exports a .zip file containing the other four files together.
+  - **Everything (.zip)**: Exports a .zip file containing the other four files together. Also includes extra .png files of each phase, and an animated gif of the phases.
   - **Network file (.yaml)**: Exports the network as a file importable by this map or other tools. Use this to save your work for later modification, or to share your work so that others can build on it.
   - **Map image (.png)**: Exports the network as an image file. Use this to save your work for sharing on social media or in presentations. This cannot be imported later, so it does not save your work.
-  - **Interactive map (.html)**: Exports the network as a webpage that can be interacted with.
+  - **Interactive map (.html)**: Exports the network as a webpage that can be interacted with, including with a slider showing each phase.
   - **GeoJSON (.geojson)**: Exports the network as a .geojson file that other tools can import.
 - **Import**: Import a previously generated map to build on it. **Importing deletes all existing work**, so make sure you export your work if you have any. You can import either a .yaml file or a .zip file that contains the .yaml file.
 
