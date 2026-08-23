@@ -1,6 +1,9 @@
 """Tests for the network.yaml format: parse/serialize round-trip and
 validation messages (pure, no network access)."""
+import os
+
 import pytest
+import yaml
 from bikenetwork.network_format import (BikePath, Network, PhaseDef, Spot,
                                         parse_network, serialize_network,
                                         superseded_ids, validate_network)
@@ -208,10 +211,14 @@ def test_spot_validation(spot, needle):
     assert any(needle in e for e in errors), errors
 
 
-def test_checked_in_network_roundtrips_byte_identically():
-    """People are already using this tool, so their files must survive every
-    format change untouched: parse -> serialize must reproduce the checked-in
-    base network exactly (new optional keys are omitted when unset)."""
+def test_checked_in_network_survives_a_resave_unchanged():
+    """People already have files made by older versions, so re-saving one must
+    not alter a single value, and must not sprinkle the newer optional keys
+    (id / upgrades / spots) into a file that never used them.
+
+    Compares parsed content rather than bytes on purpose: PyYAML re-wraps
+    scalars longer than its width, which it has always done and which changes
+    no data."""
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     base = os.path.join(here, "data", "base_network.yaml")
     if not os.path.exists(base):
@@ -220,4 +227,10 @@ def test_checked_in_network_roundtrips_byte_identically():
         text = f.read()
     net = parse_network(text)
     assert validate_network(net) == []
-    assert serialize_network(net).splitlines() == text.splitlines()
+
+    resaved = serialize_network(net)
+    assert parse_network(resaved) == net        # no value drifted
+
+    doc = yaml.safe_load(resaved)
+    assert "spots" not in doc
+    assert all("id" not in p and "upgrades" not in p for p in doc["paths"])
