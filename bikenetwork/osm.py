@@ -26,13 +26,26 @@ from typing import Dict, List, Optional, Tuple
 
 from .geometry import haversine_miles, shortest_path
 
-# Bounding box for Malden, MA: (south, west, north, east). Padded slightly beyond
-# the city's true extent (lat ~42.412-42.445, lon ~-71.089 to -71.020) so border
-# intersections still resolve, but tight enough to avoid pulling in neighboring
-# cities' same-named streets. Final geometry is clipped to the boundary anyway.
-MALDEN_BBOX = (42.405, -71.098, 42.452, -71.012)
+# This module names no city. The query bounding box is DERIVED from the
+# deployment's boundary (see bikenetwork/place.py) and passed in by the caller,
+# so pointing data/place.json at another town needs no change here.
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-USER_AGENT = "MaldenBikeNetworkBuilder/0.2 (Malden Safe Streets; email@maldensafestreets.org)"
+# Overpass etiquette wants a REACHABLE CONTACT for whoever is generating the
+# load. This is the default for the MSS deployment; a fork that runs its own
+# should set `fetch.user_agent` in data/place.json rather than inherit someone
+# else's inbox.
+DEFAULT_USER_AGENT = ("BikeNetworkBuilder/0.2 "
+                      "(Malden Safe Streets; email@maldensafestreets.org)")
+
+
+def user_agent() -> str:
+    """The deployment's Overpass contact string."""
+    from .place import load_place
+    return load_place().fetch.get("user_agent") or DEFAULT_USER_AGENT
+
+
+# Back-compat alias for callers that imported the constant directly.
+USER_AGENT = DEFAULT_USER_AGENT
 
 Point = Tuple[float, float]
 
@@ -83,7 +96,15 @@ def build_graph_from_overpass(elements: list) -> Tuple[Dict[int, List[Tuple[int,
 # Networked functions (throttled, cached)
 # --------------------------------------------------------------------------- #
 class OverpassClient:
-    def __init__(self, bbox=MALDEN_BBOX, min_interval: float = 2.0, max_retries: int = 4):
+    def __init__(self, bbox=None, min_interval: float = 2.0, max_retries: int = 4):
+        # (south, west, north, east). None means "ask the deployment's place",
+        # which derives it from the boundary file.
+        if bbox is None:
+            from .place import load_place
+            bbox = load_place().bbox()
+        if bbox is None:
+            raise ValueError("no bounding box: pass one, or give data/place.json "
+                             "a boundary asset to derive it from.")
         self.bbox = bbox
         self.min_interval = min_interval
         self.max_retries = max_retries
@@ -118,7 +139,7 @@ class OverpassClient:
     def intersection_nodes(self, on_street: str, cross_street: str):
         """Return ALL OSM nodes where on_street meets cross_street, as
         [(node_id, lat, lon), ...]. There can be several when the same pair of
-        street names crosses in more than one city (e.g. Malden AND Melrose)."""
+        street names crosses in more than one town (e.g. Malden AND Melrose)."""
         b = self._bbox_str()
         ql = (
             f'[out:json][timeout:90];'
@@ -142,7 +163,7 @@ class OverpassClient:
                      "tertiary_link|cycleway|path|pedestrian|busway")
 
     def full_street_graph(self):
-        """Fetch the whole Malden street/path network in the bbox as (adj, coord).
+        """Fetch the whole street/path network in the bbox as (adj, coord).
         Used for snap-to-road routing; fetched once and cached by the caller."""
         b = self._bbox_str()
         ql = (f'[out:json][timeout:180];'
@@ -164,8 +185,9 @@ def resolve_network(
     """Resolve every corridor to geometry + length, using a JSON cache.
 
     `inside`, if given, is a predicate inside(lat, lon) -> bool that is True for
-    points within (a small buffer of) the Malden boundary. When the same street
-    names intersect in more than one city, we pick the node inside Malden — this
+    points within (a small buffer of) the deployment's boundary. When the same
+    street names intersect in more than one town, we pick the node inside the
+    area — this
     avoids silently locking onto a Melrose/Everett junction. If a pair only crosses
     at/over the border, the corridor is kept (and later clipped to the city line)
     but reported as a NOTICE so the user can verify intent.
@@ -182,10 +204,10 @@ def resolve_network(
         if not cands:
             return None, "missing"
         if inside is not None:
-            in_malden = [c for c in cands if inside(c[1], c[2])]
-            if in_malden:
-                return in_malden[0][0], None
-            # No in-Malden node: the pair only crosses at/over the border. Use it
+            in_area = [c for c in cands if inside(c[1], c[2])]
+            if in_area:
+                return in_area[0][0], None
+            # No in-area node: the pair only crosses at/over the border. Use it
             # anyway (the segment will be clipped to the city line) but flag it.
             return cands[0][0], "outside"
         return cands[0][0], None
@@ -235,13 +257,13 @@ def resolve_network(
             continue
 
         # One or both endpoints only exist at/over the border: keep the corridor
-        # (it gets clipped to Malden), but tell the user to confirm intent — this
+        # (it gets clipped to the area), but tell the user to confirm intent — this
         # is where an unintended out-of-city junction would otherwise slip in.
         outside = [cx for cx, e in ((cross_from, err_from), (cross_to, err_to))
                    if e == "outside"]
         if outside:
             notices.append(
-                f"{c.name}: intersection with {' & '.join(outside)} sits OUTSIDE Malden "
+                f"{c.name}: intersection with {' & '.join(outside)} sits OUTSIDE the area "
                 f"(likely Melrose/Everett); the in-city portion was kept — verify this is "
                 f"the segment you meant, or repoint the endpoint."
             )

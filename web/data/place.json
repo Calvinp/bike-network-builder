@@ -1,0 +1,36 @@
+{
+  "id": "census:2510-0038805",
+  "name": "Malden",
+  "context": "Massachusetts",
+  "kind": "municipality",
+  "authorities": [
+    {
+      "id": "malden",
+      "name": "City of Malden",
+      "level": "municipal"
+    },
+    {
+      "id": "massdot",
+      "name": "MassDOT",
+      "level": "state"
+    }
+  ],
+  "default_authority": "malden",
+  "assets": {
+    "boundary": "data/malden_boundary.geojson",
+    "street_graph": "data/street_graph.json",
+    "layers": "data/layers/layers.json",
+    "treatments": "data/treatments.json"
+  },
+  "map": {
+    "center": [
+      42.4251,
+      -71.0662
+    ],
+    "zoom": 14
+  },
+  "fetch": {
+    "crash_city_name": "Malden"
+  },
+  "_comment": "No seed_network is shipped: the repo carries no network data. A deployment that wants to open on its existing conditions adds one here and drops the file beside it."
+}

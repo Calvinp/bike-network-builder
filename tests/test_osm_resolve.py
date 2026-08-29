@@ -1,7 +1,7 @@
-"""Offline test of resolve_network's in-Malden node preference (the wrong-town
+"""Offline test of resolve_network's in-area node preference (the wrong-town
 intersection problem), using a fake Overpass client."""
 from bikenetwork.geometry import haversine_miles
-from bikenetwork.network_format import BikePath
+from bikenetwork.model import Corridor
 from bikenetwork.osm import resolve_network
 
 
@@ -34,7 +34,7 @@ def inside_malden(lat, lon):
 
 
 def _corr(name, frm, to):
-    return BikePath(name=name, on_street="Main Street", frm=frm, to=to, phase=1,
+    return Corridor(name=name, on_street="Main Street", frm=frm, to=to, phase=1,
                     type="quick_build_separated", status="proposed", notes="")
 
 
@@ -62,4 +62,4 @@ def test_border_only_intersection_kept_with_notice(tmp_path):
     )
     assert "Main A-C" in resolved          # kept, not dropped
     assert warnings == []                   # not a failure
-    assert any("outside malden" in n.lower() for n in notices)
+    assert any("outside the area" in n.lower() for n in notices)

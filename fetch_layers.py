@@ -19,7 +19,7 @@ If the MassDOT endpoint moves (it has before), pass --crash-url with the new
 per-year MapServer query URL, or export manually from the IMPACT portal
 (apps.impact.dot.state.ma.us) and drop the GeoJSON into data/layers/.
 
-The bounding box is derived from data/malden_boundary.geojson, so pointing
+The bounding box is derived from the boundary named in data/place.json, so pointing
 this script (and the boundary file) at another city needs no code changes.
 """
 from __future__ import annotations
@@ -33,11 +33,12 @@ import urllib.request
 from pathlib import Path
 
 from bikenetwork.osm import USER_AGENT, OverpassClient
+from bikenetwork.place import BBOX_PAD_LAYERS, load_place
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 LAYERS = DATA / "layers"
-BOUNDARY_FILE = DATA / "malden_boundary.geojson"
+PLACE = load_place(ROOT)
 
 # Per-year MassDOT crash MapServers (f=geojson supported on layer 0 "Crash").
 # {year} is substituted; some years carry a suffix (2023 is "...2023v"), so
@@ -49,17 +50,18 @@ CRASH_FIELDS = ("CRASH_DATETIME,CRASH_SEVERITY_DESCR,MAX_INJR_SVRTY_CL,"
                 "NON_MTRST_TYPE_CL,NUMB_FATAL_INJR,NUMB_NONFATAL_INJR,YEAR")
 
 
-def boundary_bbox(pad: float = 0.004):
-    """(south, west, north, east) around the city boundary, slightly padded."""
-    fc = json.loads(BOUNDARY_FILE.read_text(encoding="utf-8"))
-    lons, lats = [], []
-    for feat in fc.get("features", []):
-        for lon, lat in feat.get("geometry", {}).get("coordinates", []):
-            lons.append(lon)
-            lats.append(lat)
-    if not lats:
-        raise SystemExit(f"no boundary coordinates in {BOUNDARY_FILE}")
-    return (min(lats) - pad, min(lons) - pad, max(lats) + pad, max(lons) + pad)
+def boundary_bbox(pad: float = BBOX_PAD_LAYERS):
+    """(south, west, north, east) around the deployment's boundary.
+
+    Derived from data/place.json, so another town needs no code change. The
+    layer padding is deliberately tighter than the one OSM street resolution
+    uses — a tree layer shouldn't drag in a thousand trees from next door.
+    """
+    bbox = PLACE.bbox(pad=pad)
+    if bbox is None:
+        raise SystemExit("no boundary to derive a bounding box from — check "
+                         "the 'boundary' asset in data/place.json")
+    return bbox
 
 
 def overpass_point_features(result: dict, keep_tags: dict) -> list:
@@ -267,8 +269,10 @@ def main(argv=None) -> int:
                     help="don't refresh the OpenStreetMap layers")
     ap.add_argument("--skip-crashes", action="store_true",
                     help="don't refresh the MassDOT crash layers")
-    ap.add_argument("--city-name", default="Malden",
-                    help="city name in the crash data (default: Malden)")
+    ap.add_argument("--city-name",
+                    default=PLACE.fetch.get("crash_city_name") or PLACE.name,
+                    help="city name in the crash data "
+                         f"(default: {PLACE.fetch.get('crash_city_name') or PLACE.name})")
     ap.add_argument("--crash-url", default=None,
                     help="override the per-year crash query URL "
                          "({year} is substituted)")
