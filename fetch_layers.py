@@ -214,11 +214,43 @@ def is_fatal_or_serious(props: dict) -> bool:
     return "Fatal" in severity or "Serious" in severity
 
 
+def features_extent(features: list):
+    """(south, west, north, east) covering a layer's features, or None.
+
+    Recorded in the manifest so the app can HIDE a layer that has nothing to
+    say about the area on screen. MassDOT crash data is meaningless outside
+    Massachusetts; showing an empty layer there is a small lie, and a layer
+    list full of them is a useless one.
+    """
+    lats, lons = [], []
+
+    def walk(coords):
+        if (isinstance(coords, (list, tuple)) and len(coords) == 2
+                and all(isinstance(v, (int, float)) for v in coords)):
+            lons.append(coords[0])
+            lats.append(coords[1])
+            return
+        for c in coords if isinstance(coords, (list, tuple)) else []:
+            walk(c)
+
+    for feat in features:
+        walk((feat.get("geometry") or {}).get("coordinates") or [])
+    if not lats:
+        return None
+    return [min(lats), min(lons), max(lats), max(lons)]
+
+
+_EXTENTS: dict = {}
+
+
 def write_layer(layer_id: str, features: list) -> None:
     LAYERS.mkdir(parents=True, exist_ok=True)
     out = LAYERS / f"{layer_id}.geojson"
     out.write_text(json.dumps({"type": "FeatureCollection", "features": features},
                               separators=(",", ":")), encoding="utf-8")
+    extent = features_extent(features)
+    if extent:
+        _EXTENTS[layer_id] = extent
     print(f"  wrote {out.relative_to(ROOT)} ({len(features)} features, "
           f"{out.stat().st_size / 1024:.0f} KB)")
 
@@ -247,17 +279,48 @@ LAYER_MANIFEST = [
      "style": {"color": "#D55E00", "radius": 5},
      "attribution": "MassDOT IMPACT crash data",
      "source": "https://gis.crashdata.dot.mass.gov"},
+    # The national floor. Serious-injury data is state by state, but FATAL
+    # crashes are published for the whole country with coordinates, so an area
+    # outside Massachusetts still has something honest to show.
+    {"id": "crashes-fatal-nationwide",
+     "label": "Fatal crashes (nationwide)",
+     "description": "Bicyclist and pedestrian deaths from NHTSA FARS. "
+                    "Nationwide, but fatalities only — serious-injury data is "
+                    "published state by state.",
+     "style": {"color": "#D55E00", "radius": 5},
+     "attribution": "NHTSA FARS",
+     "source": "https://www.nhtsa.gov/file-downloads?p=nhtsa/downloads/FARS/"},
 ]
 
 
 def write_manifest() -> None:
     """Manifest lists only layers whose .geojson actually exists, so a failed
-    fetch never advertises a broken layer."""
+    fetch never advertises a broken layer.
+
+    Existing extents are preserved for layers this run didn't refresh, so
+    `--skip-crashes` doesn't quietly strip them.
+    """
+    existing = {}
+    manifest_path = LAYERS / "layers.json"
+    if manifest_path.exists():
+        try:
+            for old in json.loads(manifest_path.read_text(encoding="utf-8")).get("layers", []):
+                if old.get("extent"):
+                    existing[old["id"]] = old["extent"]
+        except (ValueError, OSError):
+            pass
+    for layer_id, extent in existing.items():
+        _EXTENTS.setdefault(layer_id, extent)
     today = _dt.date.today().isoformat()
     entries = []
     for entry in LAYER_MANIFEST:
         if (LAYERS / f"{entry['id']}.geojson").exists():
-            entries.append(dict(entry, fetched=today))
+            item = dict(entry, fetched=today)
+            # The app hides a layer whose extent misses the area on screen.
+            extent = _EXTENTS.get(entry["id"])
+            if extent:
+                item["extent"] = [round(v, 4) for v in extent]
+            entries.append(item)
     (LAYERS / "layers.json").write_text(
         json.dumps({"layers": entries}, indent=2), encoding="utf-8")
     print(f"  manifest: {len(entries)} layer(s)")

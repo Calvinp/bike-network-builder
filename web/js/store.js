@@ -20,6 +20,11 @@ import { zipRead } from "./zip.js";
 export { COLOR_MODES };
 const LS_KEY = "bike-network-builder/network.yaml";
 
+// Do two [south, west, north, east] boxes touch at all?
+export function boxesOverlap(a, b) {
+  return !(a[2] < b[0] || b[2] < a[0] || a[3] < b[1] || b[3] < a[1]);
+}
+
 // What the UI needs about the network besides its features: the areas it
 // covers, who builds things, and the phase plan.
 export function configForBrowser(net) {
@@ -348,6 +353,23 @@ export class Store {
       }
     }
     return this._layers;
+  }
+
+  // The layers that have something to say about this deployment's area.
+  //
+  // A layer declares an `extent`; one that misses the area is hidden rather
+  // than shown empty. MassDOT crash data is meaningless outside Massachusetts,
+  // and a layer list full of empty entries is worse than a short one. A layer
+  // with no declared extent is always offered — we can't prove it's irrelevant.
+  async layersForArea() {
+    const entries = await this.layersManifest();
+    const ways = await this.boundaryRings();
+    if (!ways.length) return entries;
+    const lats = ways.flat().map((p) => p[0]);
+    const lons = ways.flat().map((p) => p[1]);
+    const area = [Math.min(...lats), Math.min(...lons),
+                  Math.max(...lats), Math.max(...lons)];
+    return entries.filter((e) => !e.extent || boxesOverlap(area, e.extent));
   }
 
   // Layer data sits beside its manifest, wherever the place put it.

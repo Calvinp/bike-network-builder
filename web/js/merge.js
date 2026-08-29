@@ -85,7 +85,15 @@ export function planMerge(mine, theirs) {
     }
   }
 
-  return { areas, seamCrossing, phases: phasePlan(mine, theirs),
+  // An ADDITIVE file proposes nothing — it is a record of what is already on
+  // the ground (an existing-conditions pack, or candidates pulled from OSM),
+  // not a rival plan for the same town. Replacing an area with it would be
+  // absurd: you want to ADD what you agree with. So the sheet drops the
+  // keep-mine/use-theirs question entirely and just asks which ones to take.
+  const additive = theirs.features.length > 0 && !theirs.features.some(
+    (f) => f.treatments.some((t) => t.status === "proposed"));
+
+  return { areas, seamCrossing, additive, phases: phasePlan(mine, theirs),
            theirsBy, mineBy, allAreas };
 }
 
@@ -166,9 +174,12 @@ function cloneFeature(f, idMap, phaseFor) {
  * `featureChoices` is the ADVANCED escape hatch: feature id -> boolean. It is
  * per-feature SELECTION, not per-feature merging — a different and much
  * simpler thing.
+ * `additive` appends everything chosen without replacing anything, which is
+ * what an existing-conditions file wants.
  */
 export function applyMerge(mine, theirs, {
   areaChoices = {}, phaseMapping = null, featureChoices = null,
+  additive = false,
 } = {}) {
   const plan = planMerge(mine, theirs);
   const choiceFor = (id) => areaChoices[String(id)]
@@ -218,12 +229,13 @@ export function applyMerge(mine, theirs, {
   const features = [];
   for (const f of mine.features) {
     const area = plan.mineBy.get(f.id);
-    // My features survive unless I asked for theirs in that area.
-    if (choiceFor(area) !== "theirs") features.push(f);
+    // My features survive unless I asked for theirs in that area — and always,
+    // in additive mode, which adds without replacing.
+    if (additive || choiceFor(area) !== "theirs") features.push(f);
   }
   for (const f of theirs.features) {
     const area = plan.theirsBy.get(f.id);
-    if (choiceFor(area) !== "theirs") continue;
+    if (!additive && choiceFor(area) !== "theirs") continue;
     if (featureChoices && featureChoices[f.id] === false) continue;
     features.push(cloneFeature(f, idMap, phaseFor));
   }
@@ -262,8 +274,17 @@ function uniqueId(wanted, used) {
 // --------------------------------------------------------------------------
 // Plain-language summary of what an import did.
 // --------------------------------------------------------------------------
-export function describeMerge(plan, areaChoices = {}) {
+export function describeMerge(plan, areaChoices = {},
+                              { additive = false, added = null } = {}) {
   const lines = [];
+  if (additive) {
+    // `added` is what actually came in after the review list, not what the
+    // file offered — saying "added 3" when one was unticked is a small lie
+    // about the thing the user just did.
+    const n = added ?? plan.areas.reduce((sum, a) => sum + a.theirsCount, 0);
+    lines.push(`Added ${n} from the file; nothing of yours was replaced.`);
+    return lines;
+  }
   for (const a of plan.areas) {
     const choice = areaChoices[String(a.id)] ?? a.choice;
     if (a.untouched) {

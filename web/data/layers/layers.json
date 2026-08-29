@@ -10,7 +10,13 @@
       },
       "attribution": "\u00a9 OpenStreetMap contributors",
       "source": "https://overpass-api.de",
-      "fetched": "2026-08-22"
+      "fetched": "2026-08-22",
+      "extent": [
+        42.409,
+        -71.0894,
+        42.4443,
+        -71.0204
+      ]
     },
     {
       "id": "street-trees",
@@ -22,7 +28,13 @@
       },
       "attribution": "\u00a9 OpenStreetMap contributors",
       "source": "https://overpass-api.de",
-      "fetched": "2026-08-22"
+      "fetched": "2026-08-22",
+      "extent": [
+        42.4088,
+        -71.077,
+        42.4458,
+        -71.0291
+      ]
     },
     {
       "id": "crashes-bike-ped",
@@ -34,7 +46,13 @@
       },
       "attribution": "MassDOT IMPACT crash data",
       "source": "https://gis.crashdata.dot.mass.gov",
-      "fetched": "2026-08-22"
+      "fetched": "2026-08-22",
+      "extent": [
+        42.4153,
+        -71.0874,
+        42.4433,
+        -71.0215
+      ]
     },
     {
       "id": "crashes-fatal-serious",
@@ -46,7 +64,13 @@
       },
       "attribution": "MassDOT IMPACT crash data",
       "source": "https://gis.crashdata.dot.mass.gov",
-      "fetched": "2026-08-22"
+      "fetched": "2026-08-22",
+      "extent": [
+        42.4177,
+        -71.0865,
+        42.4342,
+        -71.0234
+      ]
     }
   ]
 }

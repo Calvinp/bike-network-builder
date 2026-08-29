@@ -17,7 +17,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  applyMerge, assignAreas, phasePlan, planMerge,
+  applyMerge, assignAreas, describeMerge, phasePlan, planMerge,
 } from "../js/merge.js";
 import { makeArea, makeFeature, makeNetwork, makePhase, makeTreatment }
   from "../js/network_format.js";
@@ -319,4 +319,67 @@ test("advanced mode can take individual features", () => {
   });
   const names = out.features.map((f) => f.name).sort();
   assert.deepEqual(names, ["Main Street", "Wanted"]);
+});
+
+// --------------------------------------------------------------------------
+// Additive files: a record of what exists, not a rival plan
+// --------------------------------------------------------------------------
+const existingOnly = (id, name, geometry) => makeFeature({
+  id, name, geometry,
+  treatments: [makeTreatment({ id: `t-${id}`, type: "shared_use_path",
+                               status: "existing" })],
+});
+
+test("a file that proposes nothing is additive", () => {
+  // An existing-conditions pack (or OSM candidates) is not a competing plan
+  // for the same town, so replacing an area with it would be absurd.
+  const theirs = net({ features: [existingOnly("g1", "Trail",
+                                               [[[0.5, 0.2], [0.5, 0.8]]])] });
+  assert.equal(planMerge(net(), theirs).additive, true);
+});
+
+test("a file with any proposal is NOT additive", () => {
+  assert.equal(planMerge(net(), net()).additive, false);
+});
+
+test("an additive import adds without replacing anything", () => {
+  const theirs = net({ features: [existingOnly("g1", "Trail",
+                                               [[[0.5, 0.2], [0.5, 0.8]]])] });
+  const out = applyMerge(net(), theirs, { additive: true });
+  const names = out.features.map((f) => f.name).sort();
+  assert.deepEqual(names, ["Main Street", "Trail"]);   // mine survived
+});
+
+test("an additive import still honours the per-feature review", () => {
+  // The review list is the whole point for an OSM pull: you see the
+  // candidates and untick the ones you would not call infrastructure.
+  const theirs = net({ features: [
+    existingOnly("g1", "Real trail", [[[0.5, 0.2], [0.5, 0.4]]]),
+    existingOnly("g2", "Paint between a bus lane and traffic",
+                 [[[0.5, 0.5], [0.5, 0.7]]]),
+  ] });
+  const out = applyMerge(net(), theirs, {
+    additive: true, featureChoices: { g1: true, g2: false } });
+  const names = out.features.map((f) => f.name).sort();
+  assert.deepEqual(names, ["Main Street", "Real trail"]);
+});
+
+test("the additive summary says nothing was replaced", async () => {
+  const { describeMerge } = await import("../js/merge.js");
+  const theirs = net({ features: [existingOnly("g1", "Trail",
+                                               [[[0.5, 0.2], [0.5, 0.8]]])] });
+  const lines = describeMerge(planMerge(net(), theirs), {}, { additive: true });
+  assert.ok(lines.some((l) => /nothing of yours was replaced/.test(l)));
+});
+
+test("the additive summary counts what was actually taken, not what was offered", () => {
+  // Saying "added 3" when one was unticked is a small lie about the thing the
+  // user just did.
+  const theirs = net({ features: [
+    existingOnly("g1", "Kept", [[[0.5, 0.2], [0.5, 0.4]]]),
+    existingOnly("g2", "Unticked", [[[0.5, 0.5], [0.5, 0.7]]]),
+  ] });
+  const plan = planMerge(net(), theirs);
+  const lines = describeMerge(plan, {}, { additive: true, added: 1 });
+  assert.ok(lines[0].startsWith("Added 1 "), lines[0]);
 });

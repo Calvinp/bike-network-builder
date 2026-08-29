@@ -341,3 +341,39 @@ test("a bundled graph still works, and comes with an index", async () => {
   assert.ok(res.graph.coord.size > 1000);
   assert.ok(res.index);
 });
+
+// --------------------------------------------------------------------------
+// Context layers: hidden when they have nothing to say about the area
+// --------------------------------------------------------------------------
+test("boxesOverlap is true only when two boxes actually touch", async () => {
+  const { boxesOverlap } = await import("../js/store.js");
+  assert.ok(boxesOverlap([0, 0, 1, 1], [0.5, 0.5, 2, 2]));
+  assert.ok(boxesOverlap([0, 0, 1, 1], [1, 1, 2, 2]));      // touching counts
+  assert.ok(!boxesOverlap([0, 0, 1, 1], [2, 2, 3, 3]));
+});
+
+test("a layer whose extent misses the area is hidden, not shown empty", () => {
+  // MassDOT crash data is meaningless outside Massachusetts. Showing it empty
+  // is a small lie; a layer list full of them is a useless one.
+  const layersFor = async (extents) => {
+    const store = new Store({
+      storage: { getItem: () => null, setItem: () => {} },
+      fetchText: async (url) => {
+        if (url.endsWith("place.json")) {
+          return JSON.stringify({ name: "T", assets: {
+            boundary: "data/b.geojson", layers: "data/layers/layers.json" } });
+        }
+        if (url.endsWith("b.geojson")) return BOUNDARY_FC;    // ~42.40..42.45
+        return JSON.stringify({ layers: extents });
+      },
+    });
+    return (await store.layersForArea()).map((l) => l.id);
+  };
+  return Promise.all([
+    layersFor([{ id: "near", extent: [42.41, -71.08, 42.44, -71.03] },
+               { id: "far", extent: [30.0, -100.0, 31.0, -99.0] }])
+      .then((ids) => assert.deepEqual(ids, ["near"])),
+    // No declared extent: always offered, because we can't prove it's irrelevant.
+    layersFor([{ id: "unknown" }]).then((ids) => assert.deepEqual(ids, ["unknown"])),
+  ]);
+});

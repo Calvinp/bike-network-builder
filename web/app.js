@@ -860,7 +860,8 @@ async function toggleContextLayer(entry, on) {
 }
 async function initContextLayers() {
   let entries = [];
-  try { entries = await store.layersManifest(); } catch (e) { return; }
+  // Only the layers with something to say about this area.
+  try { entries = await store.layersForArea(); } catch (e) { return; }
   if (!entries.length) return;
   document.getElementById("layers-card").style.display = "";
   const box = document.getElementById("layers-list");
@@ -1080,6 +1081,33 @@ function openImportSheet(j) {
   const decided = plan.areas.filter((a) => !a.untouched).length;
   document.getElementById("import-title").textContent =
     `This file covers ${decided} area${decided === 1 ? "" : "s"}.`;
+
+  // A file pulled from OpenStreetMap gets its review list OPEN, not tucked
+  // behind "Advanced". OSM's idea of a bike lane is not always yours — a
+  // painted strip between a bus lane and a traffic lane is tagged as a
+  // cycleway and is not a facility anyone would call protected. You see the
+  // candidates, you untick what you don't want, nothing lands blind.
+  const fromOsm = theirs.features.some((f) => (f.tags || {}).source === "osm");
+  const advanced = document.getElementById("import-advanced");
+  advanced.open = fromOsm || plan.additive;
+  advanced.querySelector("summary").textContent = fromOsm
+    ? "Review each one — this came from OpenStreetMap"
+    : "Advanced: choose individual features";
+  document.getElementById("import-sub").textContent = fromOsm
+    ? "OpenStreetMap's idea of a bike lane may not be yours. Untick anything "
+      + "you wouldn't call existing infrastructure."
+    : plan.additive
+      ? "This file records what's already on the ground, so it's added to "
+        + "your network — nothing of yours is replaced."
+      : "Choose what to bring in. Nothing is replaced unless you say so.";
+  // An additive file has no keep-mine/use-theirs question to ask.
+  document.getElementById("import-areas").hidden = plan.additive;
+  document.getElementById("import-all").hidden = plan.additive;
+  if (plan.additive) {
+    document.getElementById("import-title").textContent =
+      `${theirs.features.length} thing`
+      + `${theirs.features.length === 1 ? "" : "s"} already on the ground.`;
+  }
   renderImportAreas();
   renderImportSeam();
   renderImportFeatures();
@@ -1153,7 +1181,7 @@ function renderImportFeatures() {
   const box = document.getElementById("import-features");
   box.innerHTML = "";
   const { plan, theirs, areaChoices, featureChoices } = importState;
-  const incoming = theirs.features.filter(
+  const incoming = plan.additive ? theirs.features : theirs.features.filter(
     (f) => areaChoices[String(plan.theirsBy.get(f.id))] === "theirs");
   if (!incoming.length) {
     box.innerHTML = '<p class="hint">Nothing is coming in right now.</p>';
@@ -1252,15 +1280,33 @@ function doImport() {
   const { theirs, mine, plan, areaChoices, phaseMapping, featureChoices }
     = importState;
   const merged = applyMerge(mine, theirs,
-    { areaChoices, phaseMapping, featureChoices });
-  const notes = describeMerge(plan, areaChoices);
+    { areaChoices, phaseMapping, featureChoices, additive: plan.additive });
+  const notes = describeMerge(plan, areaChoices, {
+    additive: plan.additive,
+    added: merged.features.length - mine.features.length });
+  // OSM is ODbL: extracting geometry into a file you then share makes a
+  // derivative database, which carries share-alike and attribution. Adopt the
+  // licence rather than routing around it — a community-built map staying open
+  // to the community that built it is what this project wants anyway.
+  if (merged.features.some((f) => (f.tags || {}).source === "osm")) {
+    merged.meta = { ...merged.meta,
+      license: merged.meta.license || theirs.meta.license || "ODbL-1.0" };
+    if (!(merged.meta.contributors || []).some(
+      (c) => /openstreetmap/i.test(c.name || ""))) {
+      merged.meta.contributors = [...(merged.meta.contributors || []),
+        { name: "OpenStreetMap contributors", kind: "organization" }];
+    }
+    notes.push("This network now contains OpenStreetMap data, so it is "
+      + "ODbL-1.0 and credits OpenStreetMap contributors. Keep that "
+      + "attribution on anything you share or publish.");
+  }
   const j = importState.j;
   closeImportSheet();
 
   clearFeatures();
   config = { ...config,
              areas: merged.areas, authorities: merged.authorities,
-             phases: merged.phases };
+             phases: merged.phases, meta: merged.meta };
   loadFeatureCollection(featuresToGeojson(merged.features));
   afterImport(j, notes);
 }
