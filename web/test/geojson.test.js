@@ -1,120 +1,132 @@
-// Tests for path <-> GeoJSON conversion — mirrors tests/test_geojson.py.
+// The GeoJSON wire format — the editor's internal payload AND the exported
+// network.geojson, which makes it a second public artifact.
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  pathsFromGeojson, pathsToGeojson, spotsFromGeojson, spotsToGeojson,
-} from "../js/geojson.js";
-import { makePath, makeSpot } from "../js/network_format.js";
+import { featuresFromGeojson, featuresToGeojson, geojsonGeometry,
+         partsFromGeojson } from "../js/geojson.js";
+import { FORMAT_ID, FORMAT_VERSION, makeFeature, makeTreatment }
+  from "../js/network_format.js";
 
-function p(name, { phase = 1, status = "proposed", ...kw } = {}) {
-  return makePath({
-    name, on_street: name, from: `${name} & A`, to: `${name} & B`,
-    phase, status, type: "quick_build_separated", notes: "hi",
-    segments: [[[42.42, -71.07], [42.43, -71.06]]], ...kw,
+const line = (f = {}) => makeFeature({
+  id: "f1", name: "Main Street",
+  treatments: [makeTreatment({ id: "t1", type: "quick_build_separated",
+                               status: "proposed", phase: "core" })],
+  geometry: [[[42.1, -71.1], [42.2, -71.2]]],
+  ...f,
+});
+
+test("the collection declares what format it is", () => {
+  const fc = featuresToGeojson([line()]);
+  assert.equal(fc.format, FORMAT_ID);
+  assert.equal(fc.format_version, FORMAT_VERSION);
+});
+
+test("a single line part becomes a LineString", () => {
+  const [gf] = featuresToGeojson([line()]).features;
+  assert.equal(gf.geometry.type, "LineString");
+  assert.deepEqual(gf.geometry.coordinates[0], [-71.1, 42.1]);   // [lon, lat]
+});
+
+test("several line parts become a MultiLineString", () => {
+  const f = line({ geometry: [[[42.1, -71.1], [42.2, -71.2]],
+                              [[42.3, -71.3], [42.4, -71.4]]] });
+  assert.equal(featuresToGeojson([f]).features[0].geometry.type, "MultiLineString");
+});
+
+test("a single point part becomes a Point", () => {
+  const f = line({ geometry: [[[42.1, -71.1]]] });
+  const [gf] = featuresToGeojson([f]).features;
+  assert.equal(gf.geometry.type, "Point");
+  assert.deepEqual(gf.geometry.coordinates, [-71.1, 42.1]);
+});
+
+test("several point parts become a MultiPoint", () => {
+  const f = line({ geometry: [[[42.1, -71.1]], [[42.2, -71.2]]] });
+  assert.equal(featuresToGeojson([f]).features[0].geometry.type, "MultiPoint");
+});
+
+test("a mix of points and lines becomes a GeometryCollection", () => {
+  // Scattered trees plus a continuous row is ONE feature; splitting it here
+  // would undo the reason features and spots were unified.
+  const f = line({ geometry: [[[42.1, -71.1]], [[42.2, -71.2], [42.3, -71.3]]] });
+  const [gf] = featuresToGeojson([f]).features;
+  assert.equal(gf.geometry.type, "GeometryCollection");
+  assert.deepEqual(gf.geometry.geometries.map((g) => g.type),
+                   ["LineString", "Point"]);
+});
+
+test("treatments ride along as a nested array, not one feature each", () => {
+  // Flattening would duplicate the geometry — exactly what unifying features
+  // and treatments was meant to stop.
+  const f = line({ treatments: [
+    makeTreatment({ id: "t1", type: "shared_use_path", status: "existing" }),
+    makeTreatment({ id: "t2", type: "streetcar", status: "proposed", phase: "p4" }),
+  ] });
+  const fc = featuresToGeojson([f]);
+  assert.equal(fc.features.length, 1);
+  assert.equal(fc.features[0].properties.treatments.length, 2);
+});
+
+test("round trip preserves treatments, geometry and identity", () => {
+  const f = line({
+    on_street: "Main Street", start: "A & B", end: "C & D", notes: "spine",
+    tags: { source: "osm" },
+    treatments: [
+      makeTreatment({ id: "t1", type: "quick_build_separated",
+                      status: "proposed", phase: "core", authority: "local",
+                      travel: "one_way", sides: 1, side: "right", quantity: 12,
+                      upgrades: ["t0"], tags: { width_m: 2.4 } }),
+    ],
   });
-}
-
-test("roundtrip preserves properties and geometry", () => {
-  const paths = [
-    p("Main"),
-    p("Broadway", { phase: 3, jurisdiction: "state", directions: 1 }),
-    p("Trail", { phase: null, status: "existing" }),
-  ];
-  const out = pathsFromGeojson(pathsToGeojson(paths));
-  assert.deepEqual(out.map(x => x.name), ["Main", "Broadway", "Trail"]);
-  assert.equal(out[1].jurisdiction, "state");
-  assert.equal(out[1].directions, 1);
-  assert.equal(out[0].type, "quick_build_separated");
-  assert.equal(out[0].notes, "hi");
-  assert.equal(out[2].status, "existing");
-  assert.equal(out[2].phase, null);
-  assert.deepEqual(out[0].segments[0][0], [42.42, -71.07]);
-  assert.ok(out[0].length_miles > 0);
+  const [back] = featuresFromGeojson(featuresToGeojson([f]));
+  assert.equal(back.id, "f1");
+  assert.equal(back.on_street, "Main Street");
+  assert.equal(back.start, "A & B");
+  assert.deepEqual(back.tags, { source: "osm" });
+  assert.deepEqual(back.geometry, f.geometry);
+  const t = back.treatments[0];
+  assert.equal(t.type, "quick_build_separated");
+  assert.equal(t.phase, "core");
+  assert.equal(t.authority, "local");
+  assert.equal(t.travel, "one_way");
+  assert.equal(t.sides, 1);
+  assert.equal(t.side, "right");
+  assert.equal(t.quantity, 12);
+  assert.deepEqual(t.upgrades, ["t0"]);
+  assert.deepEqual(t.tags, { width_m: 2.4 });
 });
 
-test("duplicate names survive roundtrip", () => {
-  const paths = Array.from({ length: 6 }, () => p("New corridor"));
-  paths.forEach((x, i) => {
-    x.segments = [[[42.40 + i / 100, -71.07], [42.41 + i / 100, -71.06]]];
-  });
-  const out = pathsFromGeojson(pathsToGeojson(paths));
-  assert.equal(out.length, 6);
-  assert.equal(new Set(out.map(x => String(x.segments[0][0]))).size, 6);
+test("a mixed-geometry round trip keeps both kinds of part", () => {
+  const f = line({ geometry: [[[42.1, -71.1]], [[42.2, -71.2], [42.3, -71.3]]] });
+  const [back] = featuresFromGeojson(featuresToGeojson([f]));
+  assert.equal(back.geometryKind, "mixed");
+  assert.equal(back.points().length, 1);
+  assert.equal(back.lines().length, 1);
 });
 
-test("combined path roundtrips as MultiLineString", () => {
-  const one = p("Northern Strand");
-  one.segments = [[[42.41, -71.05], [42.42, -71.04]],
-                  [[42.43, -71.03], [42.44, -71.02]]];
-  const fc = pathsToGeojson([one]);
-  assert.equal(fc.features[0].geometry.type, "MultiLineString");
-  const out = pathsFromGeojson(fc);
-  assert.equal(out.length, 1);
-  assert.deepEqual(out[0].segments, one.segments);
+test("defaults are restored rather than lost when a property is absent", () => {
+  // travel/sides/side are omitted when they are the default, so reading has to
+  // put the defaults back — otherwise a round trip would blank them.
+  const [back] = featuresFromGeojson(featuresToGeojson([line()]));
+  assert.equal(back.treatments[0].travel, "two_way");
+  assert.equal(back.treatments[0].sides, 2);
+  assert.equal(back.treatments[0].side, "");
+  assert.equal(back.treatments[0].quantity, null);
+  assert.deepEqual(back.treatments[0].upgrades, []);
 });
 
-test("geojson features carry full property set", () => {
-  const fc = pathsToGeojson([p("Main")]);
-  const props = fc.features[0].properties;
-  assert.equal(props.name, "Main");
-  assert.equal(props.type, "quick_build_separated");
-  assert.equal(props.from, "Main & A");
-  assert.ok(props.miles > 0);
-  assert.deepEqual(fc.features[0].geometry.coordinates[0], [-71.07, 42.42]);
+test("a feature with no usable geometry is skipped", () => {
+  const f = line({ geometry: [] });
+  assert.equal(featuresToGeojson([f]).features.length, 0);
 });
 
-test("from geojson skips degenerate features", () => {
-  const fc = { type: "FeatureCollection", features: [
-    { type: "Feature", properties: { name: "Stub" },
-      geometry: { type: "LineString", coordinates: [[-71.0, 42.4]] } },
-  ] };
-  assert.deepEqual(pathsFromGeojson(fc), []);
+test("geojsonGeometry and partsFromGeojson are inverses", () => {
+  const parts = [[[42.1, -71.1], [42.2, -71.2]], [[42.5, -71.5]]];
+  assert.deepEqual(partsFromGeojson(geojsonGeometry(parts)).sort(),
+                   parts.sort());
 });
 
-test("from geojson accepts legacy treatment property", () => {
-  const fc = { type: "FeatureCollection", features: [
-    { type: "Feature",
-      properties: { name: "Old", treatment: "concrete_separated" },
-      geometry: { type: "LineString",
-                  coordinates: [[-71.0, 42.4], [-71.1, 42.5]] } },
-  ] };
-  assert.equal(pathsFromGeojson(fc)[0].type, "concrete_separated");
-});
-
-test("upgrade fields survive the wire round-trip", () => {
-  // The editor round-trips every path through this module on save, so a
-  // missing property would silently wipe upgrade links.
-  const a = p("Main", { id: "main-1" });
-  const b = p("Main rebuild", { phase: 2, upgrades: "main-1" });
-  const out = pathsFromGeojson(pathsToGeojson([a, b]));
-  assert.equal(out[0].id, "main-1");
-  assert.equal(out[0].upgrades, "");
-  assert.equal(out[1].upgrades, "main-1");
-});
-
-test("spots round-trip as Point features", () => {
-  const spots = [
-    makeSpot({ name: "Square racks", type: "bike_parking", status: "existing",
-               location: [42.43, -71.06], notes: "12 spaces" }),
-    makeSpot({ type: "speed_hump", phase: 2, location: [42.42, -71.07] }),
-  ];
-  const fc = spotsToGeojson(spots);
-  // GeoJSON coordinate order is [lon, lat].
-  assert.deepEqual(fc.features[0].geometry,
-                   { type: "Point", coordinates: [-71.06, 42.43] });
-  const out = spotsFromGeojson(fc);
-  assert.deepEqual(out.map((s) => s.type), ["bike_parking", "speed_hump"]);
-  assert.equal(out[0].status, "existing");
-  assert.equal(out[1].phase, 2);
-  assert.deepEqual(out[1].location, [42.42, -71.07]);
-});
-
-test("spotsFromGeojson skips non-point and degenerate features", () => {
-  const fc = { type: "FeatureCollection", features: [
-    { type: "Feature", properties: { type: "speed_hump" },
-      geometry: { type: "LineString", coordinates: [[-71, 42.4], [-71.1, 42.5]] } },
-    { type: "Feature", properties: { type: "speed_hump" },
-      geometry: { type: "Point", coordinates: [] } },
-  ] };
-  assert.deepEqual(spotsFromGeojson(fc), []);
+test("an unrecognised geometry type yields no parts rather than throwing", () => {
+  assert.deepEqual(partsFromGeojson({ type: "Polygon", coordinates: [] }), []);
+  assert.deepEqual(partsFromGeojson(null), []);
 });

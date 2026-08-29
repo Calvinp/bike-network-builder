@@ -1,480 +1,621 @@
-// The shared bike-network YAML format (`network.yaml`) — port of
-// bikenetwork/network_format.py (the canonical Python copy). Keep the two in
-// step: same defaults, same leniency, same validation messages. Paths and
-// networks are plain objects (see makePath / makeNetwork for the fields).
-import * as yamlMod from "../vendor/js-yaml.mjs";
+// The bike-network file format, v2 (`network.yaml`).
+//
+// Port of bikenetwork/network_format.py — the two implementations must agree,
+// and parity tests pin them. Read that module's docstring for the full spec;
+// the rules that bite hardest here:
+//
+//  * A FEATURE is a place; a TREATMENT is a facility built there. Treatment
+//    fields may be defaulted on the feature and overridden per treatment.
+//  * `geometry` is a list of PARTS. One coordinate is a point, two or more a
+//    line. One feature may mix both. No polymorphism, no sniffing.
+//  * Treatment list order is INSIGNIFICANT — renderers order by the registry's
+//    stack_rank. Nothing may read treatments[0] as primary.
+//  * ONE shared id namespace, always assigned.
+//  * Strict about structure, lenient-with-notice about vocabulary — except
+//    where an unknown value would change the arithmetic (`status`, `level`).
+//  * `target_date` is ALWAYS a string. YAML's implicit timestamp type turns an
+//    unquoted date into a Date at UTC midnight in js-yaml, which renders a day
+//    early anywhere west of UTC.
+import yaml from "../vendor/js-yaml.mjs";
+import { registry } from "./registry.js";
 
-const YAML = yamlMod.default ?? yamlMod;
+export const FORMAT_ID = "bike-network";
+export const LEGACY_FORMAT_ID = "malden-bike-network";   // v1; read only
+export const FORMAT_VERSION = 2;
 
-export const FORMAT_ID = "malden-bike-network";
-export const FORMAT_VERSION = 1;
+export const CRS = "EPSG:4326";
+export const UNITS = ["metric"];
 
-export const PATH_TYPES = [
-  "quick_build_separated",  // flex posts / paint / precast curb — cheap, fast
-  "concrete_separated",     // permanent raised/concrete-protected lane
-  "shared_use_path",        // off-street path (e.g. trail spur)
-  "buffered_painted",       // painted + buffer (interim only)
-  "neighborway",            // traffic-calmed shared street
-  "pedestrianized",         // car-free / car-light street conversion
-];
+export const STATUSES = ["existing", "under_construction", "funded", "proposed"];
+export const CONTEXT_STATUSES = ["existing", "under_construction", "funded"];
+export const AUTHORITY_LEVELS = ["municipal", "county", "state", "federal",
+                                 "special", "private"];
+export const TRAVEL = ["one_way", "two_way"];
+export const SIDES = [1, 2];
+export const SIDE_VALUES = ["", "left", "right", "both", "median", "off_street"];
 
-export const STATUSES = ["proposed", "funded", "existing"];
-export const JURISDICTIONS = ["city", "state"];
+const ID_ALPHABET = "abcdefghijkmnopqrstuvwxyz23456789";   // no l/1/0/o
 
-// Point ("spot") improvements — single-location infrastructure that isn't a
-// path: traffic calming, access control, crossings, parking, greening. The
-// field is `type`, matching what a path calls the same idea; files written
-// before the rename say `kind` and still parse.
-export const SPOT_TYPES = [
-  // Traffic calming
-  "speed_hump",
-  "raised_crosswalk",
-  "raised_intersection",
-  "curb_extension",
-  // Access control — keeps motor traffic out while bikes pass through
-  "modal_filter",
-  "bollards",
-  "retractable_bollards",   // drop for deliveries / emergency access
-  // Amenities
-  "bike_parking",
-  "street_trees",
-  "other",
-];
-
-// Spots are either on the ground or proposed — there's no funded pipeline
-// tracking for small interventions.
-export const SPOT_STATUSES = ["existing", "proposed"];
-
-export function makePhase(number, label = "", deadline = "") {
-  return { number, label, deadline };
-}
-
-export function makePath(over = {}) {
-  return {
-    name: "",
-    type: "quick_build_separated",
-    status: "proposed",
-    jurisdiction: "city",
-    // Optional stable identity ("" = none). Only needed when another path
-    // upgrades this one; editors assign one lazily so plain files stay clean.
-    id: "",
-    // Id of the path this one replaces in a later phase (e.g. quick-build now,
-    // concrete rebuild later). The upgraded path's corridor is counted once in
-    // full-buildout mileage, but every phase's work still costs money.
-    upgrades: "",
-    phase: null,           // required for proposed; null for existing/funded
-    directions: 2,         // 2 = one facility each way; 1 = one-way
-    on_street: "",
-    from: "",
-    to: "",
-    notes: "",
-    segments: [],          // [[[lat, lon], ...], ...] — 1+ polylines
-    length_miles: 0.0,     // derived; never serialized
-    ...over,
-  };
-}
-
-export function makeSpot(over = {}) {
-  return {
-    name: "",
-    type: "other",
-    status: "proposed",
-    // Who would build it — the City, or MassDOT on a state road. Mirrors a
-    // path so the cost of a spot can be attributed to the right body.
-    jurisdiction: "city",
-    // Optional even for proposed spots — small interventions often aren't
-    // tied to a network phase.
-    phase: null,
-    location: null,        // [lat, lon]; null = malformed/missing
-    notes: "",
-    ...over,
-  };
-}
-
-export function makeNetwork(over = {}) {
-  return {
-    city: "Malden",
-    state: "Massachusetts",
-    ordinance_chapter: "",
-    phases: [],
-    paths: [],
-    spots: [],
-    format_id: FORMAT_ID,
-    format_version: FORMAT_VERSION,
-    ...over,
-  };
-}
-
-export function phaseMap(net) {
-  return new Map(net.phases.map((p) => [p.number, p]));
-}
-
-// Ids of paths that some other path upgrades (replaces in a later phase).
-// Used to count an upgraded corridor once in full-buildout mileage while
-// still costing every phase's work. A dangling reference supersedes nothing
-// (validation reports it separately).
-export function supersededIds(paths) {
-  const ids = new Set(paths.map((p) => p.id).filter(Boolean));
-  return new Set(paths.filter((p) => p.upgrades && ids.has(p.upgrades))
-                      .map((p) => p.upgrades));
-}
-
-/* ------------------------------- Parsing -------------------------------- */
-
-function toInt(value, dflt = null) {
-  if (typeof value === "boolean") return dflt;
-  if (typeof value === "number" && Number.isFinite(value)) return Math.trunc(value);
-  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
-    return parseInt(value, 10);
+// A collision-resistant id. Always assigned, never lazy: a feature has to keep
+// its identity across export -> edit -> re-import.
+export function newId(prefix = "") {
+  let body = "";
+  for (let i = 0; i < 10; i++) {
+    body += ID_ALPHABET[Math.floor(Math.random() * ID_ALPHABET.length)];
   }
-  return dflt;
+  return prefix ? prefix + body : body;
 }
 
-const str = (v, dflt = "") => String((v ?? dflt) || dflt);
+// --------------------------------------------------------------------------
+// Value coercion
+// --------------------------------------------------------------------------
+const str = (v, fallback = "") => {
+  if (v === null || v === undefined || typeof v === "boolean") return fallback;
+  const s = String(v).trim();
+  return s || fallback;
+};
 
-// Normalize the YAML `geometry` value into a list of segments. A flat list of
-// [lat, lon] pairs is one segment; a list of such lists is several. Malformed
-// points become null so validation can point at them.
-function parseSegments(rawGeom) {
-  const isList = Array.isArray;
-  let segLists;
-  if (isList(rawGeom) && rawGeom.length
-      && rawGeom.every((el) => isList(el) && el.length && isList(el[0]))) {
-    segLists = rawGeom;             // nested: several segments
-  } else {
-    segLists = [rawGeom || []];     // flat: a single segment
+function toInt(v, fallback = null) {
+  if (typeof v === "boolean") return fallback;
+  const n = parseInt(v, 10);
+  return Number.isNaN(n) ? fallback : n;
+}
+
+// Normalize whatever YAML produced back to `YYYY[-MM[-DD]]`. An unquoted
+// `2029-12-31` is a Date and an unquoted `2029` is a number; the model only
+// ever holds a string and the serializer only ever writes one.
+export function toDateString(v) {
+  if (v === null || v === undefined || v === false) return "";
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === "number") return String(v);
+  return str(v);
+}
+
+const tagsOf = (v) => (v && typeof v === "object" && !Array.isArray(v))
+  ? { ...v } : {};
+
+// `geometry` is a list of parts; a part is a list of [lat, lon] pairs.
+// A malformed coordinate becomes null so validation can point at it.
+function parseGeometry(raw) {
+  const parts = [];
+  for (const rawPart of Array.isArray(raw) ? raw : []) {
+    if (!Array.isArray(rawPart)) continue;
+    parts.push(rawPart.map((pt) => (
+      Array.isArray(pt) && pt.length === 2
+      && typeof pt[0] === "number" && typeof pt[1] === "number"
+        ? [pt[0], pt[1]] : null)));
   }
-  return segLists.map((seg) => (isList(seg) ? seg : []).map((pt) => {
-    if (isList(pt) && pt.length === 2
-        && pt.every((v) => typeof v === "number" && Number.isFinite(v))) {
-      return [Number(pt[0]), Number(pt[1])];
+  return parts;
+}
+
+// --------------------------------------------------------------------------
+// Model factories
+// --------------------------------------------------------------------------
+export function makeAuthority(f = {}) {
+  return { id: "", name: "", level: "municipal", note: "", ...f };
+}
+
+export function makeArea(f = {}) {
+  const a = {
+    id: "", name: "", kind: "municipality", context: "", default_authority: "",
+    updated: "", boundary: [], contributors: [], tags: {}, ...f,
+  };
+  Object.defineProperty(a, "displayName", {
+    get() { return this.context ? `${this.name}, ${this.context}` : this.name; },
+  });
+  return a;
+}
+
+export function makePhase(f = {}) {
+  return { id: "", number: 1, label: "", target_date: "", tags: {}, ...f };
+}
+
+export function makeTreatment(f = {}) {
+  return {
+    id: "", type: "other", status: "proposed", phase: null, authority: "",
+    travel: "two_way", sides: 2, side: "", quantity: null, upgrades: [],
+    proposed_by: "", notes: "", tags: {}, ...f,
+  };
+}
+
+export function makeFeature(f = {}) {
+  const feature = {
+    id: "", name: "", on_street: "", start: "", end: "", notes: "",
+    treatments: [], geometry: [], tags: {}, length_km: 0, ...f,
+  };
+  feature.points = function points() {
+    return this.geometry.filter((p) => p.length === 1 && p[0]).map((p) => p[0]);
+  };
+  feature.lines = function lines() {
+    return this.geometry.filter((p) => p.length >= 2);
+  };
+  Object.defineProperty(feature, "geometryKind", {
+    get() {
+      const hasPt = this.points().length > 0;
+      const hasLine = this.lines().length > 0;
+      if (hasPt && hasLine) return "mixed";
+      if (hasPt) return "point";
+      return hasLine ? "line" : "empty";
+    },
+  });
+  Object.defineProperty(feature, "isPoint", {
+    get() { return this.geometryKind === "point"; },
+  });
+  return feature;
+}
+
+export function makeNetwork(f = {}) {
+  const net = {
+    areas: [], authorities: [], phases: [], features: [],
+    meta: {}, costs: {}, units: "metric", crs: CRS,
+    format_id: FORMAT_ID, format_version: FORMAT_VERSION, extra: {}, ...f,
+  };
+  net.phaseMap = function phaseMap() {
+    return new Map(this.phases.map((p) => [p.id, p]));
+  };
+  net.area = function area(id) {
+    return this.areas.find((a) => a.id === id) || null;
+  };
+  // Always returns something: an undeclared id renders as itself rather than
+  // as a blank in the UI.
+  net.authority = function authority(id) {
+    return this.authorities.find((a) => a.id === id)
+      || makeAuthority({ id, name: id || "" });
+  };
+  net.allTreatments = function allTreatments() {
+    const out = [];
+    for (const f2 of this.features) for (const t of f2.treatments) out.push([f2, t]);
+    return out;
+  };
+  net.treatment = function treatmentById(id) {
+    const hit = this.allTreatments().find(([, t]) => t.id === id);
+    return hit ? hit[1] : null;
+  };
+  net.allIds = function allIds() {
+    const ids = [...this.areas.map((a) => a.id),
+                 ...this.authorities.map((a) => a.id),
+                 ...this.phases.map((p) => p.id)];
+    for (const f2 of this.features) {
+      ids.push(f2.id, ...f2.treatments.map((t) => t.id));
     }
-    return null;
-  }));
+    return ids.filter(Boolean);
+  };
+  // Treatment types this build doesn't know. Not an error — the UI says so,
+  // draws them neutrally and leaves them out of the totals.
+  net.unknownTreatmentTypes = function unknownTreatmentTypes(reg) {
+    return (reg || registry()).unknownIds(this.allTreatments().map(([, t]) => t.type));
+  };
+  Object.defineProperty(net, "displayName", {
+    get() {
+      if (!this.areas.length) return this.meta.title || "";
+      if (this.areas.length === 1) return this.areas[0].displayName;
+      return this.areas.map((a) => a.name).join(" + ");
+    },
+  });
+  return net;
 }
 
-// Parse network.yaml text into a network object. Lenient: missing fields get
-// defaults and malformed values become null/empty — run validateNetwork()
-// afterwards to get human-readable errors before trusting the result.
+// Treatment ids that some other treatment replaces in a later phase.
+// Full-buildout totals count an upgraded corridor ONCE; per-phase rows and
+// cost still include every phase's work. A dangling reference supersedes
+// nothing — validation reports it separately.
+export function supersededIds(net) {
+  const known = new Set(net.allTreatments().map(([, t]) => t.id).filter(Boolean));
+  const out = new Set();
+  for (const [, t] of net.allTreatments()) {
+    for (const u of t.upgrades) if (known.has(u)) out.add(u);
+  }
+  return out;
+}
+
+// --------------------------------------------------------------------------
+// Parsing
+// --------------------------------------------------------------------------
+const KNOWN_TOP_LEVEL = new Set(["format", "format_version", "crs", "units",
+                                 "meta", "areas", "authorities", "phases",
+                                 "costs", "features"]);
+
+const INHERITABLE = ["status", "phase", "authority", "travel", "sides", "side",
+                     "proposed_by"];
+
+// Normalize to a multipolygon, accepting a bare ring or a single polygon as a
+// convenience for hand-written files.
+function parseBoundary(raw) {
+  const ring = (r) => (Array.isArray(r) ? r : []).filter(
+    (p) => Array.isArray(p) && p.length === 2).map((p) => [p[0], p[1]]);
+  if (!Array.isArray(raw) || !raw.length) return [];
+  const first = raw[0];
+  if (Array.isArray(first) && first.length === 2 && typeof first[0] === "number") {
+    return [[ring(raw)]];                                   // a bare ring
+  }
+  if (Array.isArray(first) && first.length && Array.isArray(first[0])
+      && typeof first[0][0] === "number") {
+    return [[...raw.map(ring)]];                            // one polygon
+  }
+  return raw.map((poly) => (Array.isArray(poly) ? poly.map(ring) : []));
+}
+
+function parseTreatment(raw, defaults) {
+  const take = (key, fallback) => (
+    (key in raw && raw[key] !== null && raw[key] !== undefined)
+      ? raw[key] : (key in defaults ? defaults[key] : fallback));
+
+  let upgrades = raw.upgrades;
+  if (typeof upgrades === "string") upgrades = [upgrades];
+  else if (!Array.isArray(upgrades)) upgrades = [];
+
+  return makeTreatment({
+    id: str(raw.id) || newId("t-"),
+    type: str(raw.type, "other"),
+    status: str(take("status", "proposed"), "proposed"),
+    phase: str(take("phase", "")) || null,
+    authority: str(take("authority", "")),
+    travel: str(take("travel", "two_way"), "two_way"),
+    sides: toInt(take("sides", 2), 2) || 2,
+    side: str(take("side", "")),
+    quantity: toInt(raw.quantity, null),
+    upgrades: upgrades.map((u) => str(u)).filter(Boolean),
+    proposed_by: str(take("proposed_by", "")),
+    notes: str(raw.notes),
+    tags: tagsOf(raw.tags),
+  });
+}
+
+function parseFeature(raw) {
+  const defaults = {};
+  for (const key of INHERITABLE) {
+    if (key in raw && raw[key] !== null && raw[key] !== undefined) {
+      defaults[key] = raw[key];
+    }
+  }
+  return makeFeature({
+    id: str(raw.id) || newId("f-"),
+    name: str(raw.name),
+    on_street: str(raw.on_street),
+    start: str(raw.start),
+    end: str(raw.end),
+    notes: str(raw.notes),
+    treatments: (raw.treatments || []).filter((t) => t && typeof t === "object")
+      .map((t) => parseTreatment(t, defaults)),
+    geometry: parseGeometry(raw.geometry),
+    tags: tagsOf(raw.tags),
+  });
+}
+
+export function networkFromDict(raw) {
+  const doc = (raw && typeof raw === "object") ? raw : {};
+
+  const areas = (doc.areas || []).filter((a) => a && typeof a === "object")
+    .map((item) => makeArea({
+      id: str(item.id) || newId("a-"),
+      name: str(item.name),
+      kind: str(item.kind, "municipality"),
+      context: str(item.context),
+      default_authority: str(item.default_authority),
+      updated: toDateString(item.updated),
+      boundary: parseBoundary(item.boundary),
+      contributors: Array.isArray(item.contributors) ? item.contributors : [],
+      tags: tagsOf(item.tags),
+    }));
+
+  const authorities = (doc.authorities || [])
+    .filter((a) => a && typeof a === "object").map((item) => makeAuthority({
+      id: str(item.id) || newId("auth-"),
+      name: str(item.name),
+      level: str(item.level, "municipal"),
+      note: str(item.note),
+    }));
+
+  const phases = [];
+  for (const item of doc.phases || []) {
+    if (!item || typeof item !== "object") continue;
+    phases.push(makePhase({
+      id: str(item.id) || newId("p-"),
+      number: toInt(item.number, phases.length + 1) || 1,
+      label: str(item.label),
+      target_date: toDateString(item.target_date),
+      tags: tagsOf(item.tags),
+    }));
+  }
+
+  const features = (doc.features || []).filter((f) => f && typeof f === "object")
+    .map(parseFeature);
+
+  const extra = {};
+  for (const [k, v] of Object.entries(doc)) {
+    if (!KNOWN_TOP_LEVEL.has(k)) extra[k] = v;
+  }
+
+  return makeNetwork({
+    areas, authorities, phases, features,
+    meta: (doc.meta && typeof doc.meta === "object") ? { ...doc.meta } : {},
+    costs: (doc.costs && typeof doc.costs === "object") ? { ...doc.costs } : {},
+    units: str(doc.units, "metric"),
+    crs: str(doc.crs, CRS),
+    format_id: str(doc.format, FORMAT_ID),
+    format_version: toInt(doc.format_version, FORMAT_VERSION),
+    extra,
+  });
+}
+
 export function parseNetwork(text) {
-  let raw = YAML.load(text);
+  let raw = yaml.load(text);
   if (raw === null || raw === undefined) raw = {};
   if (typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error("network.yaml must be a YAML mapping at the top level "
-      + `(got a ${Array.isArray(raw) ? "list" : typeof raw}).`);
+    throw new Error("network.yaml must be a YAML mapping at the top level.");
+  }
+  if (str(raw.format) === LEGACY_FORMAT_ID
+      || toInt(raw.format_version, FORMAT_VERSION) < 2) {
+    // Imported synchronously: migrate.js imports newId from here, and a
+    // circular static import would be a load-order hazard in the browser.
+    raw = upgradeIfV1(raw);
   }
   return networkFromDict(raw);
 }
 
-export function networkFromDict(raw) {
-  const phases = [];
-  for (const item of raw.phases || []) {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
-    phases.push(makePhase(toInt(item.phase, 0) || 0,
-                          str(item.label), str(item.deadline)));
+// Set by migrate.js at import time; kept as a hook so parseNetwork stays
+// synchronous without a circular static dependency.
+let _upgradeV1 = null;
+export function registerV1Upgrade(fn) { _upgradeV1 = fn; }
+function upgradeIfV1(raw) {
+  if (!_upgradeV1) {
+    throw new Error("this file is in the older format; the upgrader is not "
+                    + "loaded (import ./migrate.js first).");
   }
-
-  const paths = [];
-  for (const item of raw.paths || []) {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
-    paths.push(makePath({
-      name: str(item.name).trim(),
-      // `treatment` is the pre-split name for `type`; accept it on read.
-      type: str(item.type ?? item.treatment).trim(),
-      status: str(item.status, "proposed").trim() || "proposed",
-      jurisdiction: str(item.jurisdiction, "city").trim() || "city",
-      id: str(item.id).trim(),
-      upgrades: str(item.upgrades).trim(),
-      phase: toInt(item.phase, null),
-      directions: toInt(item.directions, 2) || 2,
-      on_street: str(item.on_street).trim(),
-      from: str(item.from).trim(),
-      to: str(item.to).trim(),
-      notes: str(item.notes).trim(),
-      segments: parseSegments(item.geometry),
-    }));
-  }
-
-  const spots = [];
-  for (const item of raw.spots || []) {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
-    const loc = item.location;
-    const ok = Array.isArray(loc) && loc.length === 2
-      && loc.every((v) => typeof v === "number" && Number.isFinite(v));
-    spots.push(makeSpot({
-      name: str(item.name).trim(),
-      // `kind` is the pre-rename name for `type`; accept it on read.
-      type: str(item.type ?? item.kind, "other").trim() || "other",
-      status: str(item.status, "proposed").trim() || "proposed",
-      jurisdiction: str(item.jurisdiction, "city").trim() || "city",
-      phase: toInt(item.phase, null),
-      location: ok ? [Number(loc[0]), Number(loc[1])] : null,
-      notes: str(item.notes).trim(),
-    }));
-  }
-
-  return makeNetwork({
-    city: str(raw.city, "Malden") || "Malden",
-    state: str(raw.state, "Massachusetts") || "Massachusetts",
-    ordinance_chapter: str(raw.ordinance_chapter),
-    phases,
-    paths,
-    spots,
-    format_id: str(raw.format, FORMAT_ID) || FORMAT_ID,
-    format_version: toInt(raw.format_version, FORMAT_VERSION),
-  });
+  return _upgradeV1(raw);
 }
 
-/* ------------------------------ Validation ------------------------------ */
-
-// Python's repr() look-alike, so error text matches the desktop tool's.
-const repr = (v) => (typeof v === "string" ? `'${v}'`
-  : v === null || v === undefined ? "None" : String(v));
-
-// Return a list of human-readable errors (empty == valid). Import UIs show
-// these verbatim, so every message says which path/field is wrong and why.
+// --------------------------------------------------------------------------
+// Validation
+// --------------------------------------------------------------------------
 export function validateNetwork(net) {
   const errors = [];
 
-  if (net.format_id !== FORMAT_ID) {
-    errors.push(`unrecognized format ${repr(net.format_id)}; expected ${repr(FORMAT_ID)}.`);
+  if (net.format_id !== FORMAT_ID && net.format_id !== LEGACY_FORMAT_ID) {
+    errors.push(`unrecognized format ${JSON.stringify(net.format_id)}; `
+                + `expected ${JSON.stringify(FORMAT_ID)}.`);
   }
-  if (net.format_version === null || net.format_version === undefined
-      || net.format_version > FORMAT_VERSION) {
-    errors.push(`format_version ${repr(net.format_version)} is newer than this `
-      + `tool understands (max ${FORMAT_VERSION}). Update the tool.`);
+  if (net.format_version === null || net.format_version > FORMAT_VERSION) {
+    errors.push(`format_version ${net.format_version} is newer than this tool `
+                + `understands (max ${FORMAT_VERSION}). Update the tool.`);
+  }
+  if (!UNITS.includes(net.units)) {
+    errors.push(`unknown units ${JSON.stringify(net.units)}; this version `
+                + `stores ${UNITS.join(", ")} (imperial is a display preference).`);
   }
 
-  const phaseNumbers = net.phases.map((p) => p.number);
+  const ids = net.allIds();
+  const dupes = [...new Set(ids.filter((i, n) => ids.indexOf(i) !== n))].sort();
+  if (dupes.length) {
+    errors.push(`duplicate id(s): ${dupes.join(", ")}. Areas, authorities, `
+                + `phases, features and treatments share one namespace.`);
+  }
+
+  for (const a of net.authorities) {
+    if (!AUTHORITY_LEVELS.includes(a.level)) {
+      errors.push(`authority ${JSON.stringify(a.id)}: unknown level `
+                  + `${JSON.stringify(a.level)}; must be one of `
+                  + `${AUTHORITY_LEVELS.join(", ")}.`);
+    }
+  }
+
+  const phaseIds = new Set(net.phases.map((p) => p.id));
   for (const p of net.phases) {
     if (p.number < 1) {
-      errors.push(`phase ${repr(p.number)}: 'phase' must be a positive integer.`);
+      errors.push(`phase ${JSON.stringify(p.id)}: 'number' must be a positive integer.`);
     }
   }
-  const dupes = [...new Set(phaseNumbers.filter(
-    (n) => phaseNumbers.filter((m) => m === n).length > 1))].sort((a, b) => a - b);
-  if (dupes.length) errors.push(`duplicate phase number(s): [${dupes.join(", ")}].`);
 
-  const pathIds = net.paths.map((p) => p.id).filter(Boolean);
-  const dupeIds = [...new Set(pathIds.filter(
-    (i) => pathIds.filter((j) => j === i).length > 1))].sort();
-  if (dupeIds.length) {
-    errors.push(`duplicate path id(s): [${dupeIds.map(repr).join(", ")}].`);
-  }
+  const treatmentIds = new Set(
+    net.allTreatments().map(([, t]) => t.id).filter(Boolean));
 
-  net.paths.forEach((path, i) => {
-    const label = path.name || `path #${i + 1}`;
-    if (!path.name) errors.push(`path #${i + 1}: missing required field 'name'.`);
-    if (!PATH_TYPES.includes(path.type)) {
-      errors.push(`${label}: unknown type ${repr(path.type)}; `
-        + `must be one of ${PATH_TYPES.join(", ")}.`);
+  net.features.forEach((f, i) => {
+    const label = f.name || f.id || `feature #${i + 1}`;
+    if (!f.name) errors.push(`feature #${i + 1}: missing required field 'name'.`);
+    if (!f.treatments.length) {
+      errors.push(`${label}: has no treatments — a place with nothing built or `
+                  + `proposed there isn't part of the network.`);
     }
-    if (!STATUSES.includes(path.status)) {
-      errors.push(`${label}: unknown status ${repr(path.status)}; `
-        + `must be one of ${STATUSES.join(", ")}.`);
+    if (!f.geometry.length || f.geometry.every((part) => !part.length)) {
+      errors.push(`${label}: 'geometry' needs at least one part with at least `
+                  + `one [lat, lon] coordinate.`);
     }
-    if (!JURISDICTIONS.includes(path.jurisdiction)) {
-      errors.push(`${label}: unknown jurisdiction ${repr(path.jurisdiction)}; `
-        + `must be one of ${JURISDICTIONS.join(", ")}.`);
-    }
-    if (path.directions !== 1 && path.directions !== 2) {
-      errors.push(`${label}: 'directions' must be 1 or 2 (got ${repr(path.directions)}).`);
-    }
-    if (path.upgrades) {
-      if (path.status !== "proposed") {
-        errors.push(`${label}: only a proposed path can have `
-          + `'upgrades' (status is ${repr(path.status)}).`);
-      }
-      if (path.upgrades === path.id) {
-        errors.push(`${label}: a path cannot upgrade itself.`);
-      } else if (!pathIds.includes(path.upgrades)) {
-        errors.push(`${label}: 'upgrades' references unknown path `
-          + `id ${repr(path.upgrades)}.`);
-      } else {
-        // Walk the chain to catch loops (a upgrades b upgrades a).
-        const byId = new Map(net.paths.filter((p) => p.id).map((p) => [p.id, p]));
-        const seen = new Set(path.id ? [path.id] : []);
-        let cur = path.upgrades;
-        while (cur) {
-          if (seen.has(cur)) {
-            errors.push(`${label}: 'upgrades' chain forms a loop.`);
-            break;
-          }
-          seen.add(cur);
-          cur = byId.get(cur)?.upgrades || "";
-        }
-      }
-    }
-
-    if (path.status === "proposed") {
-      if (path.phase === null || path.phase === undefined || path.phase < 1) {
-        errors.push(`${label}: a proposed path needs a positive integer `
-          + `'phase' (got ${repr(path.phase)}).`);
-      } else if (phaseNumbers.length && !phaseNumbers.includes(path.phase)) {
-        errors.push(`${label}: phase ${path.phase} is not declared in `
-          + `the top-level 'phases' list.`);
-      }
-    }
-
-    if (!path.segments.length || path.segments.every((s) => s.length < 2)) {
-      errors.push(`${label}: 'geometry' needs at least 2 [lat, lon] points.`);
-    }
-    path.segments.forEach((seg, si) => {
-      const where = path.segments.length > 1 ? `segment #${si + 1} ` : "";
-      if (path.segments.length > 1 && seg.length < 2) {
-        errors.push(`${label}: geometry ${where.trim()} needs at `
-          + `least 2 [lat, lon] points.`);
-      }
-      seg.forEach((pt, j) => {
+    f.geometry.forEach((part, pi) => {
+      const where = f.geometry.length > 1 ? `part #${pi + 1} ` : "";
+      part.forEach((pt, j) => {
         if (pt === null) {
-          errors.push(`${label}: geometry ${where}point #${j + 1} is `
-            + `not a [lat, lon] pair of numbers.`);
-        } else if (!(pt[0] >= -90 && pt[0] <= 90 && pt[1] >= -180 && pt[1] <= 180)) {
-          errors.push(`${label}: geometry ${where}point #${j + 1} `
-            + `(${pt[0]}, ${pt[1]}) is out of range — points `
-            + `are [lat, lon], in degrees.`);
+          errors.push(`${label}: geometry ${where}point #${j + 1} is not a `
+                      + `[lat, lon] pair of numbers.`);
         }
       });
     });
+
+    const pointOnly = f.geometryKind === "point";
+    for (const t of f.treatments) {
+      const tl = `${label} / ${t.type}`;
+      if (!STATUSES.includes(t.status)) {
+        errors.push(`${tl}: unknown status ${JSON.stringify(t.status)}; must be `
+                    + `one of ${STATUSES.join(", ")}.`);
+      }
+      if (!TRAVEL.includes(t.travel)) {
+        errors.push(`${tl}: 'travel' must be one of ${TRAVEL.join(", ")} `
+                    + `(got ${JSON.stringify(t.travel)}).`);
+      }
+      if (!SIDES.includes(t.sides)) {
+        errors.push(`${tl}: 'sides' must be 1 or 2 (got ${t.sides}).`);
+      }
+      if (!SIDE_VALUES.includes(t.side)) {
+        errors.push(`${tl}: unknown side ${JSON.stringify(t.side)}; must be one `
+                    + `of ${SIDE_VALUES.filter(Boolean).join(", ")}.`);
+      }
+      if (t.quantity !== null && t.quantity < 0) {
+        errors.push(`${tl}: 'quantity' cannot be negative — removal is its own `
+                    + `treatment type, not a negative count.`);
+      }
+      if (pointOnly) {
+        if (t.travel !== "two_way") {
+          errors.push(`${tl}: 'travel' only applies to a line; this feature is `
+                      + `a point.`);
+        }
+        if (t.sides !== 2) {
+          errors.push(`${tl}: 'sides' only applies to a line; this feature is `
+                      + `a point.`);
+        }
+      }
+      if (t.status === "proposed") {
+        if (!t.phase) {
+          errors.push(`${tl}: a proposed treatment needs a 'phase'.`);
+        } else if (phaseIds.size && !phaseIds.has(t.phase)) {
+          errors.push(`${tl}: phase ${JSON.stringify(t.phase)} is not declared `
+                      + `in the top-level 'phases' list.`);
+        }
+      } else if (t.phase && !phaseIds.has(t.phase)) {
+        errors.push(`${tl}: phase ${JSON.stringify(t.phase)} is not declared in `
+                    + `the top-level 'phases' list.`);
+      }
+      for (const u of t.upgrades) {
+        if (u === t.id) errors.push(`${tl}: a treatment cannot upgrade itself.`);
+        else if (!treatmentIds.has(u)) {
+          errors.push(`${tl}: 'upgrades' references unknown treatment id `
+                      + `${JSON.stringify(u)}.`);
+        }
+      }
+    }
   });
 
-  (net.spots || []).forEach((spot, i) => {
-    const label = `spot #${i + 1}` + (spot.name ? ` (${spot.name})` : "");
-    if (!SPOT_TYPES.includes(spot.type)) {
-      errors.push(`${label}: unknown type ${repr(spot.type)}; `
-        + `must be one of ${SPOT_TYPES.join(", ")}.`);
-    }
-    if (!JURISDICTIONS.includes(spot.jurisdiction)) {
-      errors.push(`${label}: unknown jurisdiction ${repr(spot.jurisdiction)}; `
-        + `must be one of ${JURISDICTIONS.join(", ")}.`);
-    }
-    if (!SPOT_STATUSES.includes(spot.status)) {
-      errors.push(`${label}: unknown status ${repr(spot.status)}; `
-        + `must be one of ${SPOT_STATUSES.join(", ")}.`);
-    }
-    if (spot.location === null || spot.location === undefined) {
-      errors.push(`${label}: needs a 'location' — one [lat, lon] `
-        + `pair of numbers.`);
-    } else if (!(spot.location[0] >= -90 && spot.location[0] <= 90
-                 && spot.location[1] >= -180 && spot.location[1] <= 180)) {
-      errors.push(`${label}: location (${spot.location[0]}, `
-        + `${spot.location[1]}) is out of range — it is `
-        + `[lat, lon], in degrees.`);
-    }
-    if (spot.phase !== null && spot.phase !== undefined
-        && phaseNumbers.length && !phaseNumbers.includes(spot.phase)) {
-      errors.push(`${label}: phase ${spot.phase} is not declared in `
-        + `the top-level 'phases' list.`);
-    }
-  });
+  errors.push(...upgradeLoopErrors(net));
   return errors;
 }
 
-/* ----------------------------- Serialization ---------------------------- */
-
-const round6 = (v) => Number(v.toFixed(6));
-
-// Format one segment's points as compact YAML flow style ("[[lat, lon], ...]"),
-// greedily wrapped near `width` columns with `contIndent` continuation indent
-// (PyYAML's default_flow_style=None look).
-function formatFlow(items, startCol, contIndent, width = 100) {
-  const lines = [];
-  let line = "[";
-  let col = startCol + 1;
-  items.forEach((item, i) => {
-    const piece = item + (i < items.length - 1 ? ", " : "");
-    if (col + piece.length > width && line.trim() !== "[" && line.trim() !== "") {
-      lines.push(line.trimEnd());
-      line = " ".repeat(contIndent);
-      col = contIndent;
+function upgradeLoopErrors(net) {
+  const byId = new Map(net.allTreatments().map(([, t]) => [t.id, t]));
+  const out = [];
+  for (const [f, t] of net.allTreatments()) {
+    const seen = new Set([t.id]);
+    const stack = [...t.upgrades];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (seen.has(cur)) {
+        out.push(`${f.name || f.id} / ${t.type}: 'upgrades' chain forms a loop.`);
+        break;
+      }
+      seen.add(cur);
+      const nxt = byId.get(cur);
+      if (nxt) stack.push(...nxt.upgrades);
     }
-    line += piece;
-    col += piece.length;
-  });
-  lines.push(line + "]");
-  return lines.join("\n");
-}
-
-function geometryYaml(segments, indentCol) {
-  const pointStr = (pt) => `[${round6(pt[0])}, ${round6(pt[1])}]`;
-  if (segments.length === 1) {
-    return formatFlow(segments[0].map(pointStr), indentCol, indentCol + 2);
   }
-  const segStrs = segments.map(
-    (seg) => `[${seg.map(pointStr).join(", ")}]`);
-  return formatFlow(segStrs, indentCol, indentCol + 2);
+  return out;
 }
 
-function pathDict(p, token) {
-  const out = { name: p.name, type: p.type, status: p.status,
-                jurisdiction: p.jurisdiction };
-  // Optional identity/upgrade fields are omitted when unset so files that
-  // never use them serialize exactly as they did before the fields existed.
-  if (p.id) out.id = p.id;
-  if (p.upgrades) out.upgrades = p.upgrades;
-  if (p.phase !== null && p.phase !== undefined) out.phase = p.phase;
-  out.directions = p.directions;
-  for (const [key, value] of [["on_street", p.on_street], ["from", p.from],
-                              ["to", p.to], ["notes", p.notes]]) {
+// --------------------------------------------------------------------------
+// Serialization
+// --------------------------------------------------------------------------
+function treatmentDict(t, defaults) {
+  const out = { id: t.id, type: t.type };
+  if (t.status !== defaults.status) out.status = t.status;
+  if (t.phase && t.phase !== defaults.phase) out.phase = t.phase;
+  if (t.authority && t.authority !== defaults.authority) out.authority = t.authority;
+  if (t.travel !== "two_way") out.travel = t.travel;
+  if (t.sides !== 2) out.sides = t.sides;
+  if (t.side) out.side = t.side;
+  if (t.quantity !== null && t.quantity !== undefined) out.quantity = t.quantity;
+  if (t.upgrades.length) out.upgrades = [...t.upgrades];
+  if (t.proposed_by) out.proposed_by = t.proposed_by;
+  if (t.notes) out.notes = t.notes;
+  if (Object.keys(t.tags).length) out.tags = { ...t.tags };
+  return out;
+}
+
+function featureDict(f) {
+  const out = { id: f.id, name: f.name };
+  for (const [key, value] of [["on_street", f.on_street], ["start", f.start],
+                              ["end", f.end], ["notes", f.notes]]) {
     if (value) out[key] = value;
   }
-  out.geometry = token;
+  // Hoist a field to the feature when EVERY treatment agrees on it, so a
+  // single-treatment feature reads as it did in v1.
+  const defaults = {};
+  if (f.treatments.length) {
+    for (const key of ["status", "phase", "authority"]) {
+      const values = new Set(f.treatments.map((t) => t[key]));
+      if (values.size === 1) {
+        const only = [...values][0];
+        if (only) defaults[key] = only;
+      }
+    }
+  }
+  Object.assign(out, defaults);
+  out.treatments = f.treatments.map((t) => treatmentDict(t, defaults));
+  if (Object.keys(f.tags).length) out.tags = { ...f.tags };
+  out.geometry = f.geometry.map(
+    (part) => part.map(([lat, lon]) => [round6(lat), round6(lon)]));
   return out;
 }
 
-function spotDict(s, token) {
-  const out = {};
-  if (s.name) out.name = s.name;
-  out.type = s.type;
-  out.status = s.status;
-  out.jurisdiction = s.jurisdiction;
-  if (s.phase !== null && s.phase !== undefined) out.phase = s.phase;
-  if (s.location !== null && s.location !== undefined) out.location = token;
-  if (s.notes) out.notes = s.notes;
+const round6 = (v) => Math.round(v * 1e6) / 1e6;
+
+function areaDict(a) {
+  const out = { id: a.id, name: a.name, kind: a.kind };
+  if (a.context) out.context = a.context;
+  if (a.default_authority) out.default_authority = a.default_authority;
+  if (a.updated) out.updated = a.updated;
+  if (a.contributors.length) out.contributors = [...a.contributors];
+  if (Object.keys(a.tags).length) out.tags = { ...a.tags };
+  if (a.boundary.length) {
+    out.boundary = a.boundary.map((poly) => poly.map(
+      (ring) => ring.map(([lat, lon]) => [round6(lat), round6(lon)])));
+  }
   return out;
 }
 
-// Serialize a network to YAML text (stable key order; geometry points in
-// compact [lat, lon] flow style). The geometry arrays are formatted by hand
-// (via placeholder tokens) so they always come out flow-style regardless of
-// nesting depth — js-yaml has no per-node style control.
+function phaseDict(p) {
+  const out = { id: p.id, number: p.number };
+  if (p.label) out.label = p.label;
+  if (p.target_date) out.target_date = p.target_date;
+  if (Object.keys(p.tags).length) out.tags = { ...p.tags };
+  return out;
+}
+
+// Dates must round-trip as STRINGS. js-yaml quotes a string that would
+// otherwise parse as a timestamp or a number, so marking them is enough —
+// but only if they really are strings by the time they get here.
+const DATE_KEYS = ["target_date", "updated", "created"];
+
 export function serializeNetwork(net) {
-  const salt = Math.random().toString(36).slice(2, 8);
-  const tokenFor = (i) => `ZZGEOMZZ${salt}ZZ${i}ZZ`;
-  const locTokenFor = (i) => `ZZLOCZZ${salt}ZZ${i}ZZ`;
-
   const doc = {
     format: FORMAT_ID,
     format_version: FORMAT_VERSION,
-    city: net.city,
-    state: net.state,
+    crs: net.crs || CRS,
+    units: net.units || "metric",
   };
-  if (net.ordinance_chapter) doc.ordinance_chapter = net.ordinance_chapter;
-  doc.phases = [...net.phases].sort((a, b) => a.number - b.number)
-    .map((p) => ({ phase: p.number, label: p.label, deadline: p.deadline }));
-  doc.paths = net.paths.map((p, i) => pathDict(p, tokenFor(i)));
-  // Spot improvements are optional; files that don't use them keep
-  // serializing exactly as they did before the key existed.
-  const spots = net.spots || [];
-  if (spots.length) doc.spots = spots.map((s, i) => spotDict(s, locTokenFor(i)));
-
-  let body = YAML.dump(doc, { lineWidth: 100, noRefs: true });
-  body = body.replace(
-    new RegExp(`^([ ]*)geometry: ZZGEOMZZ${salt}ZZ(\\d+)ZZ$`, "gm"),
-    (whole, indent, idx) => {
-      const p = net.paths[Number(idx)];
-      const startCol = indent.length + "geometry: ".length;
-      return `${indent}geometry: ${geometryYaml(p.segments, startCol)}`;
+  if (Object.keys(net.meta).length) {
+    doc.meta = { ...net.meta };
+    for (const key of DATE_KEYS) {
+      if (doc.meta[key]) doc.meta[key] = toDateString(doc.meta[key]);
+    }
+  }
+  doc.areas = net.areas.map(areaDict);
+  if (net.authorities.length) {
+    doc.authorities = net.authorities.map((a) => {
+      const o = {};
+      for (const [k, v] of [["id", a.id], ["name", a.name], ["level", a.level],
+                            ["note", a.note]]) if (v) o[k] = v;
+      return o;
     });
-  body = body.replace(
-    new RegExp(`^([ ]*)location: ZZLOCZZ${salt}ZZ(\\d+)ZZ$`, "gm"),
-    (whole, indent, idx) => {
-      const loc = spots[Number(idx)].location;
-      return `${indent}location: [${round6(loc[0])}, ${round6(loc[1])}]`;
-    });
+  }
+  if (net.phases.length) {
+    doc.phases = [...net.phases].sort((a, b) => a.number - b.number).map(phaseDict);
+  }
+  if (Object.keys(net.costs).length) doc.costs = { ...net.costs };
+  doc.features = net.features.map(featureDict);
+  for (const [k, v] of Object.entries(net.extra)) {
+    if (!(k in doc)) doc[k] = v;
+  }
 
-  const header = "# Bike network — written by bike-network-builder; re-importable there and\n"
-    + "# readable by any YAML tool. Geometry points are [latitude, longitude]\n"
-    + "# in degrees. See NETWORK_FORMAT.md.\n";
-  return header + body;
+  const header = "# Bike network — written by bike-network-builder; re-importable there\n"
+    + "# and readable by any YAML tool. Geometry points are [latitude,\n"
+    + "# longitude] in degrees (WGS84). See NETWORK_FORMAT.md.\n";
+  return header + yaml.dump(doc, {
+    sortKeys: false, lineWidth: 100, noRefs: true, quotingType: "'",
+  });
 }

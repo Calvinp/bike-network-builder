@@ -10,17 +10,26 @@ is a portable, human-readable file: share it, keep versions of it, or import
 someone else's and build on their plan. The format is deliberately simple so
 other software can read it too.
 
-The tool exists in two equivalent forms: a local Flask app (`editor.py`), and
-a fully **static browser version** (`web/`) with no server at all — that's the
-one embedded on the MSS website.
+The tool is a fully **static browser app** (`web/`) — no server, no build step,
+no account. It runs from any static host and is what's embedded on the MSS
+website. Alongside it, `build.py` is a headless path into the same file format,
+for scripts and agents.
 
 ## Quick start
 
 ```bash
+cd web && python serve.py            # --no-browser to skip opening a tab
+```
+
+That's the whole app — nothing needs installing, and it opens at
+http://127.0.0.1:8613. For the Python side (the headless build path, the
+reference validator, and the tests):
+
+```bash
 python -m venv .venv && .venv\Scripts\activate     # Windows; source .venv/bin/activate elsewhere
-pip install -r requirements.txt
-python -m pytest -q          # offline + deterministic
-python editor.py             # -> http://127.0.0.1:5000
+pip install -r requirements.txt                    # PyYAML + requests + pytest
+python -m pytest -q                                # offline + deterministic
+python build.py --offline -o out.yaml              # build from the OSM cache
 ```
 
 ## The editor
@@ -53,21 +62,24 @@ python editor.py             # -> http://127.0.0.1:5000
 - **Phases & dates** — edit phase labels and deadlines.
 - Live totals update as you edit: corridor-miles, bicycle-lane-miles,
   state-road miles, and a planning-grade **cost estimate** (city builds and
-  MassDOT requests separately; rates in `bikenetwork/costs.py`). Paths still
+  MassDOT requests separately; rates in `web/js/costs.js`). Paths still
   carrying a default name get a warning chip that jumps you to them.
 - **Help** (header link) renders `web/help.md` — the single copy of the user
-  manual, shared by this editor and the static one. Edit that file to change it.
+  manual. Edit that file to change it.
 - Works on phones: the layout stacks (map above the cards) below ~760 px.
 
-A first-time user starts from `data/base_network.yaml` — the existing +
-funded infrastructure with no proposed paths — rather than an empty map.
+**Where "here" comes from.** Nothing in the code names a city. `data/place.json`
+declares the deployment's default area — its name, boundary, street graph, map
+layers, road authorities and opening map view — and everything follows from it.
+Point it somewhere else, drop in that town's boundary GeoJSON, and the whole
+tool moves. A first-time user starts from whatever seed network that place
+configures (for this deployment: Malden's existing + funded infrastructure).
 
-There is no Save button: the editor **autosaves** to `network.yaml` (the
-editable source of truth) about a second after every edit, and flushes once
-more when the tab closes — a crash or power loss costs at most a moment of
-work. Everything under `output/` is a regenerable export. Editing is instant
-(all client-side); PNG export takes a few seconds (it fetches map tiles).
-Needs internet for the basemap and CDN libraries.
+There is no Save button: the app **autosaves** to your browser's local storage
+about a second after every edit, and flushes once more when the tab closes — a
+crash or power loss costs at most a moment of work. Editing is instant (all
+client-side); PNG export takes a few seconds (it fetches map tiles). Needs
+internet for the basemap and CDN libraries.
 
 ## Seeding a network from street names (`build.py`)
 
@@ -75,23 +87,26 @@ The original bootstrap path, useful for starting a network without drawing:
 list corridors by their cross-street endpoints in `corridors.yaml` and run
 
 ```bash
-python build.py              # cached OSM geometry; offline OK
-python build.py --refresh    # re-resolve geometry from OpenStreetMap
-python build.py --offline    # never touch the network
-python build.py --color-mode type   # phase (default) | type | single
+python build.py                     # cached OSM geometry; offline OK
+python build.py --refresh           # re-resolve geometry from OpenStreetMap
+python build.py --offline           # never touch the network
+python build.py -o somewhere.yaml   # default: output/network.yaml
 ```
 
-It resolves real geometry from OpenStreetMap (cached in
-`data/osm_cache.json`), merges the existing/committed infrastructure from
-`data/*.geojson`, and writes `output/network.yaml` + maps. The editor seeds
-its own `network.yaml` from that output on first run; from then on the editor
-file is authoritative.
+It resolves real geometry from OpenStreetMap (cached in `data/osm_cache.json`),
+merges the existing/committed infrastructure from `data/*.geojson`, and writes
+one network file. Open or import it in the app to draw, phase and export —
+build.py renders nothing itself, and reports no mileage, because lengths are
+derived and boundary-clipped by whoever consumes the file.
+
+Because it turns a written description of a corridor into real geometry, it is
+also the most convenient entry point for scripts and agents.
 
 Rules for `corridors.yaml` (validated, with clear errors): `from`/`to` must be
 precise intersections **on** `on_street` ("Main Street & Salem Street", never
 "Malden Center"), and names must be unique. When the same street names cross
-in both Malden and a neighbor (Melrose/Everett), the resolver picks the Malden
-node; border-only crossings are kept, clipped to the city line, and flagged.
+in the area and a neighbour (Melrose/Everett), the resolver picks the in-area
+node; border-only crossings are kept and flagged.
 
 ## Refreshing the map layers (`fetch_layers.py`)
 
@@ -113,27 +128,28 @@ entry to `layers.json` — no code change.
 ## How it works
 
 ```
-network.yaml  ─►  editor.py (Flask + Leaflet/Geoman UI)
-                     │ regenerate / export
-                     ▼
-              bikenetwork/pipeline.render_all()
-                     ├─► output/map.png        (matplotlib + contextily basemap)
-                     ├─► output/map.html       (folium interactive)
-                     └─► output/network.geojson
-corridors.yaml ─► build.py ─► OSM resolve ─► output/network.yaml (seed)
+                 ┌─ web/ (Leaflet + Geoman, ES modules, no build step)
+network.yaml ────┤     draw / phase / import / export, all in the browser
+                 └─► map.png · map.html · network.geojson · phases.gif
+
+corridors.yaml ─► build.py ─► OSM resolve ─► network.yaml
 ```
 
-`bikenetwork/` is small, pure, tested pieces with network I/O isolated:
+Everything the user sees happens in `web/`. `web/js/` mirrors the format and
+geometry modules and adds the browser-only pieces: `store.js` (localStorage +
+static assets), `render_png.js` (a canvas map renderer), `render_html.js`,
+`export.js`, `zip.js`, `gif.js`, and `render_common.js` — the one copy of the
+colorblind-safe palette.
 
-- `network_format.py` — the YAML format: parse / validate / serialize. Treat
-  the format as a stable contract (see NETWORK_FORMAT.md).
-- `geometry.py` — haversine length, bbox, Dijkstra, Web Mercator (pure).
+`bikenetwork/` is the **headless** side: small, pure, tested, stdlib + PyYAML.
+
+- `network_format.py` — the YAML format: parse / validate / serialize. The
+  reference implementation, and a second independent reading of the spec that
+  keeps it honest (parity tests pin it against the JS one).
+- `geometry.py` — haversine length, bbox, Dijkstra (pure).
+- `boundary.py` — assemble an area polygon from raw ways; containment (pure
+  Python, no shapely).
 - `osm.py` — the **only** networked module: Overpass lookups, throttled + cached.
-- `routing.py` — snap-to-road over the street graph (pure).
-- `boundary.py` — build the city polygon; clip paths to it (shapely).
-- `geojson.py` — BikePath ⇄ GeoJSON (the browser wire format).
-- `render_map.py` / `render_html.py` — the two map renderers + color modes.
-- `pipeline.py` — clip + render everything; shared by editor and build.py.
 - `model.py` — parse/validate the `corridors.yaml` seed.
 
 Every path carries its own geometry (nothing is keyed by name), so duplicate
@@ -145,8 +161,15 @@ names — six paths all called "New path" — are harmless everywhere.
 python -m pytest -q
 ```
 
-Written red/green test-first; the whole suite runs **offline** (map renders
-use `basemap=False`, OSM calls are stubbed).
+Plus the app's own suite:
+
+```bash
+cd web && node --test
+```
+
+Written red/green test-first; **both** suites run offline (OSM calls are
+stubbed, no test touches the network). The pytest suite also shells out to node
+for the Python↔JS parity checks, and skips them if node isn't installed.
 
 ## The static web version (`web/`)
 

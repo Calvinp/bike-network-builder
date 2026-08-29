@@ -1,4 +1,4 @@
-// Source-structure guards for the two editor files.
+// Source-structure guards for app.js.
 //
 // app.js drives a live Leaflet map, so it has no unit coverage here — and a
 // chevron bug slipped through precisely because the fix lived only in the
@@ -9,10 +9,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+// Once there were two app.js files to keep in step; the Flask editor is
+// retired, so this is now a single-entry loop kept in shape rather than
+// flattened — it costs nothing and the assertions read the same.
 const FILES = {
   "web/app.js": readFileSync(new URL("../app.js", import.meta.url), "utf8"),
-  "editor/app.js": readFileSync(
-    new URL("../../editor/app.js", import.meta.url), "utf8"),
 };
 
 for (const [name, src] of Object.entries(FILES)) {
@@ -36,7 +37,7 @@ for (const [name, src] of Object.entries(FILES)) {
                  + "listener, so the first paint already honours upgrades");
   });
 
-  test(`${name}: the legend is rebuilt when the set of types can change`, () => {
+  test(`${name}: the legend is rebuilt when the set of treatments can change`, () => {
     for (const fn of ["function addFeature", "function removeFeature"]) {
       const start = src.indexOf(fn);
       assert.ok(start > 0, `${fn} not found`);

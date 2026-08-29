@@ -212,3 +212,11 @@ input.warn-field { border-color: #f59e0b; background: #fffbeb; }
     min-width: 0; }
   .dropdown .menu button { padding: 12px; }   /* comfortable touch targets */
 }
+
+/* Treatment chips: one per thing built at the selected place. The active one
+   is what the fields below are editing. */
+.treatment-tabs{display:flex;flex-wrap:wrap;gap:4px;margin:2px 0 6px}
+.treatment-tab{border:1px solid #ccc;background:#f6f6f6;border-radius:12px;
+  padding:2px 9px;font-size:12px;cursor:pointer;line-height:1.6}
+.treatment-tab.active{background:#0072B2;border-color:#0072B2;color:#fff}
+button.small{padding:2px 8px;font-size:12px}

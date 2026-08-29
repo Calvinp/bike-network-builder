@@ -1,125 +1,240 @@
-// Tests for clipping + summarizing — mirrors tests/test_pipeline.py (minus the
-// render_all file outputs, which in the web port are exercised as exports).
+// Clipping and rollups over v2 features and treatments.
+//
+// The arithmetic here is the tool's most public output, so the rules get
+// pinned explicitly: only bike treatments count toward lane distance, an
+// upgraded corridor counts once but costs twice, and an unknown treatment
+// contributes nothing rather than being quietly counted as something else.
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  clipPaths, clipSpots, pathsAsOfPhase, spotsAsOfPhase, summarize,
-} from "../js/pipeline.js";
-import {
-  makeNetwork, makePath, makePhase, makeSpot,
-} from "../js/network_format.js";
+import { readFileSync } from "node:fs";
+import { clipFeatures, featuresAsOfPhase, partsKm, summarize,
+         treatmentsAsOfPhase } from "../js/pipeline.js";
+import { makeFeature, makeNetwork, makePhase, makeTreatment }
+  from "../js/network_format.js";
+import { Registry, setRegistry } from "../js/registry.js";
 
-const approx = (got, want, abs = 1e-6) =>
-  assert.ok(Math.abs(got - want) <= abs, `${got} !~ ${want}`);
+setRegistry(JSON.parse(readFileSync(
+  new URL("../data/treatments.json", import.meta.url), "utf8")));
 
-const BOUNDARY_RING = [[42.40, -71.09], [42.45, -71.09], [42.45, -71.02],
-                       [42.40, -71.02], [42.40, -71.09]];
+// A big square area: lat 0..1, lon 0..1.
+const SQUARE = [[[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]];
 
-function p(name, phase = 1, { status = "proposed", geometry = null, ...kw } = {}) {
-  return makePath({
-    name, on_street: name, phase, status, type: "quick_build_separated",
-    segments: [geometry || [[42.42, -71.07], [42.43, -71.06]]], ...kw,
-  });
-}
-
-function net(paths) {
-  return makeNetwork({
-    city: "Malden",
-    phases: [makePhase(1, "Core", "2029"), makePhase(2, "More", "2032")],
-    paths,
-  });
-}
-
-test("clip drops outside and trims crossing", () => {
-  const inside = p("In");
-  const outside = p("Out", 1, { geometry: [[42.50, -71.07], [42.52, -71.06]] });
-  const crossing = p("Cross", 1, { geometry: [[42.42, -71.05], [42.48, -71.05]] });
-  const warnings = [], notices = [];
-  const out = clipPaths([inside, outside, crossing], BOUNDARY_RING, warnings, notices);
-  const names = out.map(x => x.name);
-  assert.ok(names.includes("In"));
-  assert.ok(!names.includes("Out"));
-  assert.ok(names.includes("Cross"));
-  assert.ok(warnings.some(w => w.includes("Out")));
-  const clipped = out.find(x => x.name === "Cross");
-  const maxLat = Math.max(...clipped.segments.flat().map(([lat]) => lat));
-  assert.ok(maxLat <= 42.45 + 1e-6);
-  assert.ok(notices.some(n => n.includes("Cross")));
+const feat = (f = {}) => makeFeature({
+  id: "f1", name: "Main Street",
+  treatments: [makeTreatment({ id: "t1", type: "quick_build_separated",
+                               status: "proposed", phase: "p1",
+                               authority: "local" })],
+  geometry: [[[0.5, 0.2], [0.5, 0.4]]],
+  ...f,
 });
 
-test("clip handles duplicate names independently", () => {
-  const a = p("New corridor", 1, { geometry: [[42.41, -71.07], [42.42, -71.06]] });
-  const b = p("New corridor", 1, { geometry: [[42.43, -71.05], [42.44, -71.04]] });
-  const out = clipPaths([a, b], BOUNDARY_RING, [], []);
-  assert.equal(out.length, 2);
-  assert.notDeepEqual(out[0].segments, out[1].segments);
+const net = (f = {}) => makeNetwork({
+  areas: [{ id: "a1", name: "Testville", displayName: "Testville" }],
+  authorities: [{ id: "local", name: "Town of Testville", level: "municipal" },
+                { id: "statedot", name: "State DOT", level: "state" }],
+  phases: [makePhase({ id: "p1", number: 1, label: "Core" }),
+           makePhase({ id: "p2", number: 2, label: "Later" })],
+  features: [feat()],
+  ...f,
 });
 
-test("clip does not mutate the source paths", () => {
-  const crossing = p("Cross", 1, { geometry: [[42.42, -71.05], [42.48, -71.05]] });
-  clipPaths([crossing], BOUNDARY_RING, [], []);
-  assert.deepEqual(crossing.segments, [[[42.42, -71.05], [42.48, -71.05]]]);
+// --------------------------------------------------------------------------
+// Clipping
+// --------------------------------------------------------------------------
+test("a feature fully inside keeps its geometry and gains a length", () => {
+  const [out] = clipFeatures([feat()], SQUARE);
+  assert.equal(out.lines().length, 1);
+  assert.ok(out.length_km > 0);
 });
 
-test("summarize buckets statuses and state", () => {
-  const paths = [
-    p("A", 1), p("B", 2),
-    p("State Rd", 1, { jurisdiction: "state" }),
-    p("Trail", null, { status: "existing" }),
-    p("Greenway", null, { status: "funded" }),
-  ];
-  for (const x of paths) x.length_miles = 1.0;
-  const s = summarize(paths, net(paths));
-  approx(s.total_build_miles, 2.0);
-  approx(s.total_lane_miles, 4.0);
-  approx(s.state_miles, 1.0);
-  approx(s.existing_miles, 1.0);
-  approx(s.committed_miles, 1.0);
-  assert.deepEqual(s.phases.map(ph => ph.phase), [1, 2]);
+test("a proposed feature entirely outside is dropped with a warning", () => {
+  const warnings = [];
+  const out = clipFeatures([feat({ geometry: [[[5, 5], [6, 6]]] })], SQUARE,
+                           warnings);
+  assert.equal(out.length, 0);
+  assert.match(warnings[0], /entirely outside/);
+});
+
+test("a feature trimmed at the line gets a notice naming the kept length", () => {
+  const notices = [];
+  clipFeatures([feat({ geometry: [[[0.5, -0.5], [0.5, 0.5]]] })], SQUARE,
+               [], notices);
+  assert.match(notices[0], /clipped to the area line/);
+  assert.match(notices[0], /km/);
+});
+
+test("point parts survive clipping only when they are inside", () => {
+  const f = feat({ geometry: [[[0.5, 0.5]], [[9, 9]]] });
+  const [out] = clipFeatures([f], SQUARE);
+  assert.deepEqual(out.points(), [[0.5, 0.5]]);
+});
+
+test("a point feature outside the area is dropped, not kept at zero length", () => {
+  const out = clipFeatures([feat({ geometry: [[[9, 9]]] })], SQUARE, []);
+  assert.equal(out.length, 0);
+});
+
+// --------------------------------------------------------------------------
+// Lane distance: category gating
+// --------------------------------------------------------------------------
+test("only bike treatments count toward lane distance", () => {
+  // A bus lane and a row of trees on the same corridor must not inflate the
+  // headline number.
+  const f = feat({ treatments: [
+    makeTreatment({ id: "t1", type: "quick_build_separated", status: "proposed",
+                    phase: "p1", authority: "local" }),
+    makeTreatment({ id: "t2", type: "street_trees", status: "proposed",
+                    phase: "p1", authority: "local", quantity: 30 }),
+  ] });
+  const n = net({ features: [f] });
+  const s = summarize(clipFeatures([f], SQUARE), n);
+  assert.equal(s.total_features, 1);              // the bike treatment only
+  assert.ok(s.total_build_km > 0);
+});
+
+test("an unknown treatment contributes nothing and is reported", () => {
+  const f = feat({ treatments: [makeTreatment({
+    id: "t1", type: "transit:bus_lane", status: "proposed", phase: "p1" })] });
+  const n = net({ features: [f] });
+  const s = summarize(clipFeatures([f], SQUARE), n);
+  assert.equal(s.total_build_km, 0);
+  assert.equal(s.total_lane_km, 0);
+  assert.deepEqual(s.unknown_types, ["transit:bus_lane"]);
+});
+
+test("lane distance multiplies by sides, not by travel", () => {
+  // A two-way track on ONE side is one facility: sides drives the total, and
+  // travel only drives the map arrow. v1 could not express this at all.
+  const oneSide = feat({ treatments: [makeTreatment({
+    id: "t1", type: "shared_use_path", status: "proposed", phase: "p1",
+    travel: "two_way", sides: 1 })] });
+  const bothSides = feat({ treatments: [makeTreatment({
+    id: "t1", type: "shared_use_path", status: "proposed", phase: "p1",
+    travel: "two_way", sides: 2 })] });
+  const a = summarize(clipFeatures([oneSide], SQUARE), net({ features: [oneSide] }));
+  const b = summarize(clipFeatures([bothSides], SQUARE), net({ features: [bothSides] }));
+  assert.ok(Math.abs(a.total_build_km - b.total_build_km) < 1e-9);
+  assert.ok(Math.abs(b.total_lane_km - 2 * a.total_lane_km) < 1e-9);
+});
+
+// --------------------------------------------------------------------------
+// Upgrades: counted once, costed twice
+// --------------------------------------------------------------------------
+test("an upgraded corridor counts once but costs every phase's work", () => {
+  const f = feat({ treatments: [
+    makeTreatment({ id: "qb", type: "quick_build_separated", status: "proposed",
+                    phase: "p1", authority: "local" }),
+    makeTreatment({ id: "cc", type: "concrete_separated", status: "proposed",
+                    phase: "p2", authority: "local", upgrades: ["qb"] }),
+  ] });
+  const n = net({ features: [f] });
+  const clipped = clipFeatures([f], SQUARE);
+  const s = summarize(clipped, n);
+
+  const single = feat({ treatments: [makeTreatment({
+    id: "cc", type: "concrete_separated", status: "proposed", phase: "p2",
+    authority: "local" })] });
+  const s1 = summarize(clipFeatures([single], SQUARE), net({ features: [single] }));
+
+  // Same corridor distance...
+  assert.ok(Math.abs(s.total_build_km - s1.total_build_km) < 1e-9);
+  // ...but more money, because it is built and then rebuilt.
+  assert.ok(s.cost_low > s1.cost_low);
+});
+
+// --------------------------------------------------------------------------
+// Phase views
+// --------------------------------------------------------------------------
+test("phase 0 shows context treatments only", () => {
+  const f = feat({ treatments: [
+    makeTreatment({ id: "e", type: "shared_use_path", status: "existing" }),
+    makeTreatment({ id: "p", type: "quick_build_separated", status: "proposed",
+                    phase: "p1" }),
+  ] });
+  const n = net({ features: [f] });
+  assert.deepEqual(treatmentsAsOfPhase(n, 0).map(([, t]) => t.id), ["e"]);
+  assert.deepEqual(treatmentsAsOfPhase(n, 1).map(([, t]) => t.id).sort(),
+                   ["e", "p"]);
+});
+
+test("under_construction and funded read as context, not as the ask", () => {
+  const f = feat({ treatments: [
+    makeTreatment({ id: "u", type: "shared_use_path", status: "under_construction" }),
+    makeTreatment({ id: "fu", type: "shared_use_path", status: "funded" }),
+  ] });
+  const n = net({ features: [f] });
+  assert.equal(treatmentsAsOfPhase(n, 0).length, 2);
+  const s = summarize(clipFeatures([f], SQUARE), n);
+  assert.equal(s.total_build_km, 0);            // neither is an ask
+  assert.ok(s.under_construction_km > 0 && s.funded_km > 0);
+});
+
+test("a superseded treatment hides once its replacement is in view", () => {
+  const f = feat({ treatments: [
+    makeTreatment({ id: "qb", type: "quick_build_separated", status: "proposed",
+                    phase: "p1" }),
+    makeTreatment({ id: "cc", type: "concrete_separated", status: "proposed",
+                    phase: "p2", upgrades: ["qb"] }),
+  ] });
+  const n = net({ features: [f] });
+  assert.deepEqual(treatmentsAsOfPhase(n, 1).map(([, t]) => t.id), ["qb"]);
+  assert.deepEqual(treatmentsAsOfPhase(n, 2).map(([, t]) => t.id), ["cc"]);
+});
+
+test("a feature whose treatments are all hidden disappears with them", () => {
+  const f = feat({ treatments: [makeTreatment({
+    id: "p", type: "quick_build_separated", status: "proposed", phase: "p2" })] });
+  const n = net({ features: [f] });
+  assert.equal(featuresAsOfPhase(n, 1).length, 0);
+  assert.equal(featuresAsOfPhase(n, 2).length, 1);
+});
+
+// --------------------------------------------------------------------------
+// Rollups
+// --------------------------------------------------------------------------
+test("totals group by authority so 'who has to say yes' is answerable", () => {
+  const a = feat({ id: "f1", treatments: [makeTreatment({
+    id: "t1", type: "quick_build_separated", status: "proposed", phase: "p1",
+    authority: "local" })] });
+  const b = feat({ id: "f2", geometry: [[[0.6, 0.2], [0.6, 0.5]]],
+    treatments: [makeTreatment({ id: "t2", type: "quick_build_separated",
+      status: "proposed", phase: "p1", authority: "statedot" })] });
+  const n = net({ features: [a, b] });
+  const s = summarize(clipFeatures([a, b], SQUARE), n);
+  const names = s.by_authority.map((x) => x.name);
+  assert.ok(names.includes("Town of Testville"));
+  assert.ok(names.includes("State DOT"));
+});
+
+test("counted treatments roll up into the sentence a council hears", () => {
+  const f = feat({ treatments: [
+    makeTreatment({ id: "t1", type: "street_trees", status: "proposed",
+                    phase: "p1", quantity: 34 }),
+    makeTreatment({ id: "t2", type: "parking_removal", status: "proposed",
+                    phase: "p1", quantity: 12 }),
+  ] });
+  const s = summarize(clipFeatures([f], SQUARE), net({ features: [f] }));
+  const byLabel = Object.fromEntries(s.quantities.map((q) => [q.label, q]));
+  assert.equal(byLabel["Street trees"].n, 34);
+  assert.equal(byLabel["Street trees"].unit, "trees");
+  assert.equal(byLabel["Parking removal"].n, 12);
+});
+
+test("per-phase rows carry the phase label and date, not just a number", () => {
+  const s = summarize(clipFeatures([feat()], SQUARE), net());
+  assert.equal(s.phases.length, 1);
   assert.equal(s.phases[0].label, "Core");
+  assert.ok(s.phases[0].km > 0);
 });
 
-test("summarize counts an upgraded corridor once but keeps both phases", () => {
-  // Quick-build in phase 1, full rebuild of the same corridor in phase 2: the
-  // corridor counts ONCE at full buildout, but each phase still shows its own
-  // work (you pay to build twice).
-  const a = p("Main quick-build", 1, { id: "a" });
-  const b = p("Main rebuild", 2, { upgrades: "a" });
-  a.length_miles = 1.0;
-  b.length_miles = 1.0;
-  const s = summarize([a, b], net([a, b]));
-  approx(s.total_build_miles, 1.0);
-  approx(s.total_lane_miles, 2.0);
-  assert.equal(s.total_paths, 1);
-  assert.deepEqual(s.phases.map((ph) => ph.miles), [1.0, 1.0]);
+test("a per-area cost multiplier scales the estimate", () => {
+  const base = summarize(clipFeatures([feat()], SQUARE), net());
+  const scaled = summarize(clipFeatures([feat()], SQUARE),
+                           net({ costs: { by_area: { a1: { multiplier: 2 } } } }));
+  assert.ok(Math.abs(scaled.cost_low - 2 * base.cost_low) < 1e-6);
 });
 
-test("pathsAsOfPhase is cumulative and hides superseded paths", () => {
-  const a = p("Quick", 1, { id: "a" });
-  const b = p("Rebuild", 2, { upgrades: "a" });
-  const e = p("Trail", null, { status: "existing" });
-  const names = (n) => pathsAsOfPhase([a, b, e], n).map((x) => x.name);
-  assert.deepEqual(names(0), ["Trail"]);
-  assert.deepEqual(names(1), ["Quick", "Trail"]);
-  // Once the rebuild's phase arrives it replaces the quick-build.
-  assert.deepEqual(names(2), ["Rebuild", "Trail"]);
-});
-
-test("spotsAsOfPhase shows existing always and proposed on schedule", () => {
-  const built = makeSpot({ type: "bike_parking", status: "existing",
-                           location: [42.42, -71.06] });
-  const later = makeSpot({ type: "speed_hump", status: "proposed", phase: 2,
-                           location: [42.42, -71.06] });
-  const anytime = makeSpot({ type: "raised_crosswalk", status: "proposed",
-                             location: [42.42, -71.06] });
-  const spots = [built, later, anytime];
-  assert.deepEqual(spotsAsOfPhase(spots, 0), [built]);
-  assert.deepEqual(spotsAsOfPhase(spots, 1), [built, anytime]);
-  assert.deepEqual(spotsAsOfPhase(spots, 2), spots);
-});
-
-test("clipSpots drops spots outside the city", () => {
-  const inside = makeSpot({ type: "speed_hump", location: [42.42, -71.06] });
-  const outside = makeSpot({ type: "speed_hump", location: [42.60, -71.06] });
-  assert.deepEqual(clipSpots([inside, outside], BOUNDARY_RING), [inside]);
+test("partsKm ignores point parts", () => {
+  assert.equal(partsKm([[[0.5, 0.5]]]), 0);
+  assert.ok(partsKm([[[0.5, 0.2], [0.5, 0.4]]]) > 0);
 });

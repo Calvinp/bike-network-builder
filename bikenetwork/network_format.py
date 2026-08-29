@@ -1,157 +1,113 @@
-"""The bike-network YAML format (`network.yaml`).
+"""The bike-network file format, v2 (`network.yaml`).
 
-One YAML file describes the whole network: city metadata, the implementation
-phases, and EVERY path — existing, funded, and proposed — with its type, phase,
-and exact geometry. The file is the tool's portable interchange format: exports
-can be re-imported here, and the format is deliberately simple so that other
-software can read it too.
+One YAML file describes a whole network: the areas it covers, who builds what,
+the phases, and every FEATURE — a place — with its TREATMENTS — the facilities
+built there. It is the tool's portable interchange format, and the contract
+between the app, `build.py`, and anything else that reads it.
 
-This module is intentionally self-contained (stdlib + PyYAML only). Treat the
-format as a STABLE CONTRACT: files written by older versions must keep parsing,
-and a change old readers can't understand must bump FORMAT_VERSION. The format
-is documented for humans in NETWORK_FORMAT.md.
+This module is self-contained (stdlib + PyYAML only) and is the reference
+reader/validator. `web/js/network_format.js` is the other implementation;
+parity tests keep them honest.
+
+## The shape
+
+    format: bike-network
+    format_version: 2
+    crs: 'EPSG:4326'          # WGS84 lat/lon degrees
+    units: metric             # storage unit; display is a UI preference
+    meta:        { title, description, created, updated, license, source_url,
+                   contributors: [...], generated_by: {...} }
+    areas:       [ {id, name, kind, context, default_authority, boundary, tags} ]
+    authorities: [ {id, name, level, note} ]
+    phases:      [ {id, number, label, target_date, tags} ]
+    costs:       { currency, per_km, per_unit, by_area }
+    features:    [ {id, name, on_street, start, end, notes, tags,
+                    treatments: [...], geometry: [...] } ]
+
+## The dividing rule
+
+**Anything describing the PLACE lives on the feature. Anything describing the
+FACILITY lives on the treatment.** Treatment fields may be defaulted at the
+feature level and overridden per treatment, so the common single-treatment case
+stays short.
+
+## Invariants every consumer relies on
+
+* **Lengths are derived, never stored.** Consumers measure and boundary-clip
+  the geometry themselves, so a hand-edited file cannot disagree with itself.
+* **Geometry is a list of PARTS.** A part with one coordinate is a point, two
+  or more is a line. One feature may mix both. No polymorphism, no sniffing.
+* **Treatment list order is INSIGNIFICANT.** Renderers order by the registry's
+  `stack_rank`; nothing may treat `treatments[0]` as primary. This is what
+  keeps a future `arrangement:` key reachable without another break.
+* **One shared id namespace**, always assigned, so a reference never has to say
+  what kind of thing it points at.
+* **Strict about structure, lenient-with-notice about vocabulary** — but only
+  where an unknown value can't change the arithmetic. An unknown treatment type
+  is fine (reported, drawn neutrally, uncosted); an unknown `status` is an
+  error, because it can't be bucketed as built-or-asked-for.
+* **`target_date` is always a STRING.** YAML's implicit timestamp type turns an
+  unquoted date into a date object in PyYAML and a UTC-midnight Date in
+  js-yaml, which renders a day early west of UTC.
 """
 from __future__ import annotations
 
+import datetime as _dt
+import secrets
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import yaml
 
-FORMAT_ID = "malden-bike-network"
-FORMAT_VERSION = 1
+FORMAT_ID = "bike-network"
+LEGACY_FORMAT_ID = "malden-bike-network"      # v1; accepted on read only
+FORMAT_VERSION = 2
 
-# Types of path and their rough build character ($/mile lives in each tool's
-# costs.py).
-PATH_TYPES = (
-    "quick_build_separated",  # flex posts / paint / precast curb — cheap, fast
-    "concrete_separated",     # permanent raised/concrete-protected lane
-    "shared_use_path",        # off-street path (e.g. trail spur)
-    "buffered_painted",       # painted + buffer (interim only)
-    "neighborway",            # traffic-calmed shared street (signs/humps/diverters)
-    "pedestrianized",         # car-free / car-light street conversion (bikes welcome)
-)
+CRS = "EPSG:4326"          # WGS84 lat/lon degrees, what GPS and GeoJSON use
+UNITS = ("metric",)        # imperial is a DISPLAY preference, not a storage one
 
-STATUSES = (
-    "proposed",   # in the plan, not built
-    "funded",     # funded/under design
-    "existing",   # already on the ground (shown for context)
-)
+# Closed vocabulary: an unknown status can't be bucketed as built-or-asked-for
+# without silently corrupting the totals.
+STATUSES = ("existing", "under_construction", "funded", "proposed")
+# Statuses that describe the ground today rather than the ask.
+CONTEXT_STATUSES = ("existing", "under_construction", "funded")
 
-JURISDICTIONS = (
-    "city",   # Malden controls the street — the City can build it directly
-    "state",  # MassDOT-controlled (a numbered state route) — needs state approval
-)
+# Closed: used for rollups and defaults. The displayed name is always the
+# free-text one, so nothing is mistranslated.
+AUTHORITY_LEVELS = ("municipal", "county", "state", "federal", "special", "private")
 
-# Point ("spot") improvements — single-location infrastructure that isn't a
-# path: traffic calming, access control, crossings, parking, greening. The
-# field is `type`, matching what a path calls the same idea; files written
-# before the rename say `kind` and still parse.
-SPOT_TYPES = (
-    # Traffic calming
-    "speed_hump",
-    "raised_crosswalk",
-    "raised_intersection",
-    "curb_extension",
-    # Access control — keeps motor traffic out while bikes pass through
-    "modal_filter",
-    "bollards",
-    "retractable_bollards",   # drop for deliveries / emergency access
-    # Amenities
-    "bike_parking",
-    "street_trees",
-    "other",
-)
+TRAVEL = ("one_way", "two_way")
+SIDES = (1, 2)
+SIDE_VALUES = ("", "left", "right", "both", "median", "off_street")
 
-# Spots are either on the ground or proposed — there's no funded pipeline
-# tracking for small interventions.
-SPOT_STATUSES = ("existing", "proposed")
+# Fields that only mean something on a line. `side` is deliberately NOT here:
+# on a point it is descriptive, recorded and shown but never used to move the
+# drawn position, because the coordinates already say where the thing is.
+LINE_ONLY_FIELDS = ("travel", "sides")
 
-Point = Tuple[float, float]  # (lat, lon) degrees
+Point = Tuple[float, float]
+
+_ID_ALPHABET = "abcdefghijkmnopqrstuvwxyz23456789"   # no l/1/0/o
 
 
-@dataclass
-class PhaseDef:
-    number: int
-    label: str = ""
-    deadline: str = ""
-
-
-@dataclass
-class BikePath:
-    name: str
-    type: str = "quick_build_separated"
-    status: str = "proposed"
-    jurisdiction: str = "city"
-    # Optional stable identity ("" = none). Only needed when another path
-    # upgrades this one; editors assign one lazily so plain files stay clean.
-    id: str = ""
-    # Id of the path this one replaces in a later phase (e.g. quick-build now,
-    # concrete rebuild later). The upgraded path's corridor is counted once in
-    # full-buildout mileage, but every phase's work still costs money.
-    upgrades: str = ""
-    # Implementation phase. Required for proposed paths; None for existing /
-    # funded ones (they aren't part of the phased build).
-    phase: Optional[int] = None
-    # Number of separated bike facilities on the corridor: 2 = one each
-    # direction (the usual two-way street case), 1 = a single one-way facility.
-    # Drives "bicycle lane miles" (Cambridge/Somerville convention).
-    directions: int = 2
-    on_street: str = ""
-    frm: str = ""       # "from" is a Python keyword; the YAML key is `from`
-    to: str = ""
-    notes: str = ""
-    # One path can have several disjoint polylines (e.g. a trail interrupted
-    # by street crossings, kept as ONE entry). Each segment is [(lat, lon)...].
-    # The YAML key is `geometry`: a flat point list for one segment, or a list
-    # of point lists for several.
-    segments: List[List[Point]] = field(default_factory=list)
-    # Derived (never serialized): set by whoever measures/clips the geometry.
-    length_miles: float = 0.0
-
-
-@dataclass
-class Spot:
-    name: str = ""
-    type: str = "other"
-    status: str = "proposed"
-    # Who would build it — the City, or MassDOT on a state road. Mirrors
-    # BikePath so the cost of a spot can be attributed to the right body.
-    jurisdiction: str = "city"
-    # Optional even for proposed spots — small interventions often aren't
-    # tied to a network phase.
-    phase: Optional[int] = None
-    location: Optional[Point] = None   # (lat, lon); None = malformed/missing
-    notes: str = ""
-
-
-@dataclass
-class Network:
-    city: str = "Malden"
-    state: str = "Massachusetts"
-    ordinance_chapter: str = ""
-    phases: List[PhaseDef] = field(default_factory=list)
-    paths: List[BikePath] = field(default_factory=list)
-    spots: List[Spot] = field(default_factory=list)
-    format_id: str = FORMAT_ID
-    format_version: int = FORMAT_VERSION
-
-    def phase_map(self) -> Dict[int, PhaseDef]:
-        return {p.number: p for p in self.phases}
-
-
-def superseded_ids(paths: List[BikePath]) -> set:
-    """Ids of paths that some other path upgrades (replaces in a later phase).
-    Both tools use this to count an upgraded corridor once in full-buildout
-    mileage while still costing every phase's work. A dangling reference
-    supersedes nothing (validation reports it separately)."""
-    ids = {p.id for p in paths if p.id}
-    return {p.upgrades for p in paths if p.upgrades and p.upgrades in ids}
+def new_id(prefix: str = "") -> str:
+    """A collision-resistant id. Always assigned, never lazy: a feature has to
+    keep its identity across export -> edit -> re-import."""
+    body = "".join(secrets.choice(_ID_ALPHABET) for _ in range(10))
+    return f"{prefix}{body}" if prefix else body
 
 
 # --------------------------------------------------------------------------- #
-# Parsing
+# Value coercion
 # --------------------------------------------------------------------------- #
+def _s(value, default: str = "") -> str:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return default
+    return str(value).strip() or default
+
+
 def _to_int(value, default=None):
     try:
         if isinstance(value, bool):
@@ -161,288 +117,641 @@ def _to_int(value, default=None):
         return default
 
 
-def _parse_segments(raw_geom) -> List[List]:
-    """Normalize the YAML `geometry` value into a list of segments. A flat
-    list of [lat, lon] pairs is one segment; a list of such lists is several.
-    Malformed points become None so validation can point at them."""
-    if (isinstance(raw_geom, list) and raw_geom
-            and all(isinstance(el, (list, tuple)) and el
-                    and isinstance(el[0], (list, tuple)) for el in raw_geom)):
-        seg_lists = raw_geom            # nested: several segments
-    else:
-        seg_lists = [raw_geom or []]    # flat: a single segment
-    segments = []
-    for seg in seg_lists:
-        pts = []
-        for pt in (seg if isinstance(seg, (list, tuple)) else []):
+def _to_date_string(value) -> str:
+    """Normalize whatever YAML produced back to `YYYY[-MM[-DD]]`.
+
+    An unquoted `2029-12-31` parses as a date and an unquoted `2029` as an int,
+    and the two YAML implementations disagree about the former's timezone. The
+    model only ever holds a string, and the serializer only ever writes one.
+    """
+    if value is None or value is False:
+        return ""
+    if isinstance(value, _dt.datetime):
+        return value.date().isoformat()
+    if isinstance(value, _dt.date):
+        return value.isoformat()
+    if isinstance(value, int):
+        return str(value)
+    return _s(value)
+
+
+def _tags(value) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _parse_geometry(raw) -> List[List[Point]]:
+    """`geometry` is a list of parts; a part is a list of [lat, lon] pairs.
+    A malformed coordinate becomes None so validation can point at it."""
+    parts: List[List[Point]] = []
+    for raw_part in (raw if isinstance(raw, (list, tuple)) else []):
+        if not isinstance(raw_part, (list, tuple)):
+            continue
+        pts: List[Point] = []
+        for pt in raw_part:
             if (isinstance(pt, (list, tuple)) and len(pt) == 2
                     and all(isinstance(v, (int, float)) and not isinstance(v, bool)
                             for v in pt)):
                 pts.append((float(pt[0]), float(pt[1])))
             else:
                 pts.append(None)
-        segments.append(pts)
-    return segments
+        parts.append(pts)
+    return parts
+
+
+# --------------------------------------------------------------------------- #
+# Model
+# --------------------------------------------------------------------------- #
+@dataclass
+class Authority:
+    id: str = ""
+    name: str = ""
+    level: str = "municipal"
+    note: str = ""
+
+
+@dataclass
+class Area:
+    id: str = ""
+    name: str = ""
+    kind: str = "municipality"
+    context: str = ""
+    default_authority: str = ""
+    updated: str = ""
+    # A multipolygon: [polygon, ...]; polygon = [outer_ring, hole, ...].
+    boundary: List[List[List[Point]]] = field(default_factory=list)
+    contributors: List[dict] = field(default_factory=list)
+    tags: dict = field(default_factory=dict)
+
+    @property
+    def display_name(self) -> str:
+        return f"{self.name}, {self.context}" if self.context else self.name
+
+
+@dataclass
+class PhaseDef:
+    id: str = ""
+    number: int = 1
+    label: str = ""
+    target_date: str = ""        # 'YYYY' | 'YYYY-MM' | 'YYYY-MM-DD' | ''
+    tags: dict = field(default_factory=dict)
+
+
+@dataclass
+class Treatment:
+    """What is being built. Fields omitted here inherit from the feature."""
+    id: str = ""
+    type: str = "other"
+    status: str = "proposed"
+    phase: Optional[str] = None          # a phase ID, not a number
+    authority: str = ""
+    travel: str = "two_way"
+    sides: int = 2
+    side: str = ""
+    quantity: Optional[int] = None       # for `counted` treatments
+    upgrades: List[str] = field(default_factory=list)   # treatment ids
+    proposed_by: str = ""
+    notes: str = ""
+    tags: dict = field(default_factory=dict)
+
+    @property
+    def is_proposed(self) -> bool:
+        return self.status == "proposed"
+
+
+@dataclass
+class Feature:
+    """Where it is. One entry per place, however many treatments it carries."""
+    id: str = ""
+    name: str = ""
+    on_street: str = ""
+    start: str = ""
+    end: str = ""
+    notes: str = ""
+    treatments: List[Treatment] = field(default_factory=list)
+    # A list of parts; a part with 1 point is a point, 2+ is a line.
+    geometry: List[List[Point]] = field(default_factory=list)
+    tags: dict = field(default_factory=dict)
+    # Derived (never serialized): set by whoever measures/clips the geometry.
+    length_km: float = 0.0
+
+    def points(self) -> List[Point]:
+        return [p[0] for p in self.geometry if len(p) == 1 and p[0] is not None]
+
+    def lines(self) -> List[List[Point]]:
+        return [p for p in self.geometry if len(p) >= 2]
+
+    @property
+    def geometry_kind(self) -> str:
+        has_pt, has_line = bool(self.points()), bool(self.lines())
+        if has_pt and has_line:
+            return "mixed"
+        if has_pt:
+            return "point"
+        return "line" if has_line else "empty"
+
+    @property
+    def is_point(self) -> bool:
+        return self.geometry_kind == "point"
+
+
+@dataclass
+class Network:
+    areas: List[Area] = field(default_factory=list)
+    authorities: List[Authority] = field(default_factory=list)
+    phases: List[PhaseDef] = field(default_factory=list)
+    features: List[Feature] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)
+    costs: dict = field(default_factory=dict)
+    units: str = "metric"
+    crs: str = CRS
+    format_id: str = FORMAT_ID
+    format_version: int = FORMAT_VERSION
+    # Top-level keys this version doesn't interpret, carried through untouched
+    # (`ordinance_chapter` is the motivating case).
+    extra: dict = field(default_factory=dict)
+
+    # -- lookups ----------------------------------------------------------
+    def phase_map(self) -> Dict[str, PhaseDef]:
+        return {p.id: p for p in self.phases}
+
+    def area(self, area_id: str) -> Optional[Area]:
+        return next((a for a in self.areas if a.id == area_id), None)
+
+    def authority(self, authority_id: str) -> Authority:
+        """Always returns something: an undeclared id renders as itself rather
+        than as a blank in the UI."""
+        found = next((a for a in self.authorities if a.id == authority_id), None)
+        return found or Authority(id=authority_id, name=authority_id or "")
+
+    def treatments(self):
+        for f in self.features:
+            for t in f.treatments:
+                yield f, t
+
+    def treatment(self, treatment_id: str) -> Optional[Treatment]:
+        return next((t for _, t in self.treatments() if t.id == treatment_id), None)
+
+    def all_ids(self) -> List[str]:
+        ids = [a.id for a in self.areas] + [a.id for a in self.authorities]
+        ids += [p.id for p in self.phases]
+        for f in self.features:
+            ids.append(f.id)
+            ids += [t.id for t in f.treatments]
+        return [i for i in ids if i]
+
+    def unknown_treatment_types(self, registry=None) -> List[str]:
+        """Treatment types this build doesn't know. Not an error — the UI says
+        "this file uses N kinds of improvement this version doesn't know
+        about", draws them neutrally, and leaves them out of the totals."""
+        from .registry import load_registry
+        reg = registry or load_registry()
+        return reg.unknown_ids([t.type for _, t in self.treatments()])
+
+    @property
+    def display_name(self) -> str:
+        if not self.areas:
+            return self.meta.get("title", "") or ""
+        if len(self.areas) == 1:
+            return self.areas[0].display_name
+        return " + ".join(a.name for a in self.areas)
+
+
+def superseded_ids(net: Network) -> Set[str]:
+    """Treatment ids that some other treatment replaces in a later phase.
+
+    Full-buildout totals count an upgraded corridor ONCE (the final facility),
+    while per-phase rows and cost still include every phase's work — building
+    in 2028 and rebuilding in 2040 is two projects. A dangling reference
+    supersedes nothing; validation reports it separately.
+    """
+    known = {t.id for _, t in net.treatments() if t.id}
+    out: Set[str] = set()
+    for _, t in net.treatments():
+        out.update(u for u in t.upgrades if u in known)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Parsing
+# --------------------------------------------------------------------------- #
+_KNOWN_TOP_LEVEL = {
+    "format", "format_version", "crs", "units", "meta",
+    "areas", "authorities", "phases", "costs", "features",
+}
+
+# Treatment fields a feature may default for its treatments.
+_INHERITABLE = ("status", "phase", "authority", "travel", "sides", "side",
+                "proposed_by")
+
+
+def _parse_boundary(raw) -> List[List[List[Point]]]:
+    """Normalize to a multipolygon, accepting a bare ring or a single polygon
+    as a convenience for hand-written files."""
+    def ring(r):
+        return [(float(p[0]), float(p[1])) for p in r
+                if isinstance(p, (list, tuple)) and len(p) == 2]
+
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return []
+    first = raw[0]
+    if (isinstance(first, (list, tuple)) and len(first) == 2
+            and all(isinstance(v, (int, float)) for v in first)):
+        return [[ring(raw)]]                                    # a bare ring
+    if (isinstance(first, (list, tuple)) and first
+            and isinstance(first[0], (list, tuple))
+            and first[0] and isinstance(first[0][0], (int, float))):
+        return [[ring(r) for r in raw]]                          # one polygon
+    return [[ring(r) for r in poly] for poly in raw]             # multipolygon
+
+
+def _parse_treatment(raw: dict, feature_defaults: dict) -> Treatment:
+    def take(key, default):
+        if key in raw and raw[key] is not None:
+            return raw[key]
+        return feature_defaults.get(key, default)
+
+    upgrades = raw.get("upgrades")
+    if isinstance(upgrades, str):
+        upgrades = [upgrades]                    # a bare string is allowed
+    elif not isinstance(upgrades, (list, tuple)):
+        upgrades = []
+
+    phase = take("phase", None)
+    return Treatment(
+        id=_s(raw.get("id")) or new_id("t-"),
+        type=_s(raw.get("type"), "other"),
+        status=_s(take("status", "proposed"), "proposed"),
+        phase=_s(phase) or None,
+        authority=_s(take("authority", "")),
+        travel=_s(take("travel", "two_way"), "two_way"),
+        sides=_to_int(take("sides", 2), default=2) or 2,
+        side=_s(take("side", "")),
+        quantity=_to_int(raw.get("quantity"), default=None),
+        upgrades=[_s(u) for u in upgrades if _s(u)],
+        proposed_by=_s(take("proposed_by", "")),
+        notes=_s(raw.get("notes")),
+        tags=_tags(raw.get("tags")),
+    )
+
+
+def _parse_feature(raw: dict) -> Feature:
+    defaults = {k: raw[k] for k in _INHERITABLE if k in raw and raw[k] is not None}
+    treatments = [_parse_treatment(t, defaults)
+                  for t in (raw.get("treatments") or []) if isinstance(t, dict)]
+    return Feature(
+        id=_s(raw.get("id")) or new_id("f-"),
+        name=_s(raw.get("name")),
+        on_street=_s(raw.get("on_street")),
+        start=_s(raw.get("start")),
+        end=_s(raw.get("end")),
+        notes=_s(raw.get("notes")),
+        treatments=treatments,
+        geometry=_parse_geometry(raw.get("geometry")),
+        tags=_tags(raw.get("tags")),
+    )
+
+
+def network_from_dict(raw: dict) -> Network:
+    """Build a Network from an already-loaded mapping. Lenient: missing fields
+    take defaults and malformed values become None/empty — run
+    validate_network() to get human-readable errors before trusting it."""
+    areas = []
+    for item in raw.get("areas") or []:
+        if not isinstance(item, dict):
+            continue
+        areas.append(Area(
+            id=_s(item.get("id")) or new_id("a-"),
+            name=_s(item.get("name")),
+            kind=_s(item.get("kind"), "municipality"),
+            context=_s(item.get("context")),
+            default_authority=_s(item.get("default_authority")),
+            updated=_to_date_string(item.get("updated")),
+            boundary=_parse_boundary(item.get("boundary")),
+            contributors=list(item.get("contributors") or []),
+            tags=_tags(item.get("tags")),
+        ))
+
+    authorities = []
+    for item in raw.get("authorities") or []:
+        if not isinstance(item, dict):
+            continue
+        authorities.append(Authority(
+            id=_s(item.get("id")) or new_id("auth-"),
+            name=_s(item.get("name")),
+            level=_s(item.get("level"), "municipal"),
+            note=_s(item.get("note")),
+        ))
+
+    phases = []
+    for item in raw.get("phases") or []:
+        if not isinstance(item, dict):
+            continue
+        phases.append(PhaseDef(
+            id=_s(item.get("id")) or new_id("p-"),
+            number=_to_int(item.get("number"), default=len(phases) + 1) or 1,
+            label=_s(item.get("label")),
+            target_date=_to_date_string(item.get("target_date")),
+            tags=_tags(item.get("tags")),
+        ))
+
+    features = [_parse_feature(f) for f in (raw.get("features") or [])
+                if isinstance(f, dict)]
+
+    return Network(
+        areas=areas,
+        authorities=authorities,
+        phases=phases,
+        features=features,
+        meta=dict(raw.get("meta") or {}),
+        costs=dict(raw.get("costs") or {}),
+        units=_s(raw.get("units"), "metric"),
+        crs=_s(raw.get("crs"), CRS),
+        format_id=_s(raw.get("format"), FORMAT_ID),
+        format_version=_to_int(raw.get("format_version"), default=FORMAT_VERSION),
+        extra={k: v for k, v in raw.items() if k not in _KNOWN_TOP_LEVEL},
+    )
 
 
 def parse_network(text: str) -> Network:
-    """Parse network.yaml text into a Network. Lenient: missing fields get
-    defaults and malformed values become None/empty — run validate_network()
-    afterwards to get human-readable errors before trusting the result."""
+    """Parse v2 YAML text into a Network. A v1 file is upgraded on the way in
+    (see `migrate.py`), so callers never see a v1 shape."""
     raw = yaml.safe_load(text)
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
         raise ValueError("network.yaml must be a YAML mapping at the top level "
                          "(got a %s)." % type(raw).__name__)
+    if _s(raw.get("format")) == LEGACY_FORMAT_ID or _to_int(
+            raw.get("format_version"), default=FORMAT_VERSION) < 2:
+        from .migrate import upgrade_v1
+        raw = upgrade_v1(raw)
     return network_from_dict(raw)
-
-
-def network_from_dict(raw: dict) -> Network:
-    """Build a Network from an already-loaded YAML/JSON mapping (same leniency
-    as parse_network)."""
-    phases = []
-    for item in raw.get("phases") or []:
-        if not isinstance(item, dict):
-            continue
-        phases.append(PhaseDef(
-            number=_to_int(item.get("phase"), default=0) or 0,
-            label=str(item.get("label", "") or ""),
-            deadline=str(item.get("deadline", "") or ""),
-        ))
-
-    paths = []
-    for item in raw.get("paths") or []:
-        if not isinstance(item, dict):
-            continue
-        paths.append(BikePath(
-            name=str(item.get("name", "") or "").strip(),
-            # `treatment` is the pre-split name for `type`; accept it on read.
-            type=str(item.get("type", item.get("treatment", "")) or "").strip(),
-            status=str(item.get("status", "proposed") or "proposed").strip(),
-            jurisdiction=str(item.get("jurisdiction", "city") or "city").strip(),
-            id=str(item.get("id", "") or "").strip(),
-            upgrades=str(item.get("upgrades", "") or "").strip(),
-            phase=_to_int(item.get("phase"), default=None),
-            directions=_to_int(item.get("directions"), default=2) or 2,
-            on_street=str(item.get("on_street", "") or "").strip(),
-            frm=str(item.get("from", "") or "").strip(),
-            to=str(item.get("to", "") or "").strip(),
-            notes=str(item.get("notes", "") or "").strip(),
-            segments=_parse_segments(item.get("geometry")),
-        ))
-
-    spots = []
-    for item in raw.get("spots") or []:
-        if not isinstance(item, dict):
-            continue
-        loc = item.get("location")
-        if (isinstance(loc, (list, tuple)) and len(loc) == 2
-                and all(isinstance(v, (int, float)) and not isinstance(v, bool)
-                        for v in loc)):
-            location = (float(loc[0]), float(loc[1]))
-        else:
-            location = None
-        spots.append(Spot(
-            name=str(item.get("name", "") or "").strip(),
-            # `kind` is the pre-rename name for `type`; accept it on read.
-            type=str(item.get("type", item.get("kind", "other")) or "other").strip(),
-            status=str(item.get("status", "proposed") or "proposed").strip(),
-            jurisdiction=str(item.get("jurisdiction", "city") or "city").strip(),
-            phase=_to_int(item.get("phase"), default=None),
-            location=location,
-            notes=str(item.get("notes", "") or "").strip(),
-        ))
-
-    return Network(
-        city=str(raw.get("city", "Malden") or "Malden"),
-        state=str(raw.get("state", "Massachusetts") or "Massachusetts"),
-        ordinance_chapter=str(raw.get("ordinance_chapter", "") or ""),
-        phases=phases,
-        paths=paths,
-        spots=spots,
-        format_id=str(raw.get("format", FORMAT_ID) or FORMAT_ID),
-        format_version=_to_int(raw.get("format_version"), default=FORMAT_VERSION),
-    )
 
 
 # --------------------------------------------------------------------------- #
 # Validation
 # --------------------------------------------------------------------------- #
 def validate_network(net: Network) -> List[str]:
-    """Return a list of human-readable errors (empty == valid). Import UIs show
-    these verbatim, so every message says which path/field is wrong and why."""
+    """Human-readable errors (empty == valid). Import UIs show these verbatim,
+    so every message says which thing is wrong and why.
+
+    STRUCTURE is strict. VOCABULARY is lenient where an unknown value can't
+    change the arithmetic — an unknown treatment type is reported elsewhere as
+    a notice, not here as an error.
+    """
     errors: List[str] = []
 
-    if net.format_id != FORMAT_ID:
+    if net.format_id not in (FORMAT_ID, LEGACY_FORMAT_ID):
         errors.append(f"unrecognized format {net.format_id!r}; expected {FORMAT_ID!r}.")
     if net.format_version is None or net.format_version > FORMAT_VERSION:
         errors.append(f"format_version {net.format_version!r} is newer than this tool "
                       f"understands (max {FORMAT_VERSION}). Update the tool.")
+    if net.units not in UNITS:
+        errors.append(f"unknown units {net.units!r}; this version stores "
+                      f"{', '.join(UNITS)} (imperial is a display preference).")
 
-    phase_numbers = [p.number for p in net.phases]
+    ids = net.all_ids()
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    if dupes:
+        errors.append(f"duplicate id(s): {', '.join(dupes)}. Areas, authorities, "
+                      f"phases, features and treatments share one namespace.")
+
+    for a in net.authorities:
+        if a.level not in AUTHORITY_LEVELS:
+            errors.append(f"authority {a.id!r}: unknown level {a.level!r}; "
+                          f"must be one of {', '.join(AUTHORITY_LEVELS)}.")
+
+    phase_ids = {p.id for p in net.phases}
     for p in net.phases:
         if p.number < 1:
-            errors.append(f"phase {p.number!r}: 'phase' must be a positive integer.")
-    dupes = {n for n in phase_numbers if phase_numbers.count(n) > 1}
-    if dupes:
-        errors.append(f"duplicate phase number(s): {sorted(dupes)}.")
+            errors.append(f"phase {p.id!r}: 'number' must be a positive integer.")
 
-    path_ids = [p.id for p in net.paths if p.id]
-    dupe_ids = {i for i in path_ids if path_ids.count(i) > 1}
-    if dupe_ids:
-        errors.append(f"duplicate path id(s): {sorted(dupe_ids)}.")
+    treatment_ids = {t.id for _, t in net.treatments() if t.id}
 
-    for i, path in enumerate(net.paths):
-        label = path.name or f"path #{i + 1}"
-        if not path.name:
-            errors.append(f"path #{i + 1}: missing required field 'name'.")
-        if path.type not in PATH_TYPES:
-            errors.append(f"{label}: unknown type {path.type!r}; "
-                          f"must be one of {', '.join(PATH_TYPES)}.")
-        if path.status not in STATUSES:
-            errors.append(f"{label}: unknown status {path.status!r}; "
-                          f"must be one of {', '.join(STATUSES)}.")
-        if path.jurisdiction not in JURISDICTIONS:
-            errors.append(f"{label}: unknown jurisdiction {path.jurisdiction!r}; "
-                          f"must be one of {', '.join(JURISDICTIONS)}.")
-        if path.directions not in (1, 2):
-            errors.append(f"{label}: 'directions' must be 1 or 2 "
-                          f"(got {path.directions!r}).")
-        if path.upgrades:
-            if path.status != "proposed":
-                errors.append(f"{label}: only a proposed path can have "
-                              f"'upgrades' (status is {path.status!r}).")
-            if path.upgrades == path.id:
-                errors.append(f"{label}: a path cannot upgrade itself.")
-            elif path.upgrades not in path_ids:
-                errors.append(f"{label}: 'upgrades' references unknown path "
-                              f"id {path.upgrades!r}.")
-            else:
-                # Walk the chain to catch loops (a upgrades b upgrades a).
-                by_id = {p.id: p for p in net.paths if p.id}
-                seen, cur = {path.id or object()}, path.upgrades
-                while cur:
-                    if cur in seen:
-                        errors.append(f"{label}: 'upgrades' chain forms a loop.")
-                        break
-                    seen.add(cur)
-                    nxt = by_id.get(cur)
-                    cur = nxt.upgrades if nxt else ""
-
-        if path.status == "proposed":
-            if path.phase is None or path.phase < 1:
-                errors.append(f"{label}: a proposed path needs a positive integer "
-                              f"'phase' (got {path.phase!r}).")
-            elif phase_numbers and path.phase not in phase_numbers:
-                errors.append(f"{label}: phase {path.phase} is not declared in "
-                              f"the top-level 'phases' list.")
-
-        if not path.segments or all(len(s) < 2 for s in path.segments):
-            errors.append(f"{label}: 'geometry' needs at least 2 [lat, lon] points.")
-        for si, seg in enumerate(path.segments):
-            where = f"segment #{si + 1} " if len(path.segments) > 1 else ""
-            if path.segments and len(seg) < 2 and len(path.segments) > 1:
-                errors.append(f"{label}: geometry {where.strip()} needs at "
-                              f"least 2 [lat, lon] points.")
-            for j, pt in enumerate(seg):
+    for i, f in enumerate(net.features):
+        label = f.name or f.id or f"feature #{i + 1}"
+        if not f.name:
+            errors.append(f"feature #{i + 1}: missing required field 'name'.")
+        if not f.treatments:
+            errors.append(f"{label}: has no treatments — a place with nothing "
+                          f"built or proposed there isn't part of the network.")
+        if not f.geometry or all(not part for part in f.geometry):
+            errors.append(f"{label}: 'geometry' needs at least one part with "
+                          f"at least one [lat, lon] coordinate.")
+        for pi, part in enumerate(f.geometry):
+            where = f"part #{pi + 1} " if len(f.geometry) > 1 else ""
+            for j, pt in enumerate(part):
                 if pt is None:
                     errors.append(f"{label}: geometry {where}point #{j + 1} is "
                                   f"not a [lat, lon] pair of numbers.")
-                elif not (-90 <= pt[0] <= 90 and -180 <= pt[1] <= 180):
-                    errors.append(f"{label}: geometry {where}point #{j + 1} "
-                                  f"({pt[0]}, {pt[1]}) is out of range — points "
-                                  f"are [lat, lon], in degrees.")
 
-    for i, spot in enumerate(net.spots):
-        label = f"spot #{i + 1}" + (f" ({spot.name})" if spot.name else "")
-        if spot.type not in SPOT_TYPES:
-            errors.append(f"{label}: unknown type {spot.type!r}; "
-                          f"must be one of {', '.join(SPOT_TYPES)}.")
-        if spot.jurisdiction not in JURISDICTIONS:
-            errors.append(f"{label}: unknown jurisdiction {spot.jurisdiction!r}; "
-                          f"must be one of {', '.join(JURISDICTIONS)}.")
-        if spot.status not in SPOT_STATUSES:
-            errors.append(f"{label}: unknown status {spot.status!r}; "
-                          f"must be one of {', '.join(SPOT_STATUSES)}.")
-        if spot.location is None:
-            errors.append(f"{label}: needs a 'location' — one [lat, lon] "
-                          f"pair of numbers.")
-        elif not (-90 <= spot.location[0] <= 90
-                  and -180 <= spot.location[1] <= 180):
-            errors.append(f"{label}: location ({spot.location[0]}, "
-                          f"{spot.location[1]}) is out of range — it is "
-                          f"[lat, lon], in degrees.")
-        if (spot.phase is not None and phase_numbers
-                and spot.phase not in phase_numbers):
-            errors.append(f"{label}: phase {spot.phase} is not declared in "
-                          f"the top-level 'phases' list.")
+        is_point_only = f.geometry_kind == "point"
+        for t in f.treatments:
+            tl = f"{label} / {t.type}"
+            if t.status not in STATUSES:
+                errors.append(f"{tl}: unknown status {t.status!r}; must be one "
+                              f"of {', '.join(STATUSES)}.")
+            if t.travel not in TRAVEL:
+                errors.append(f"{tl}: 'travel' must be one of {', '.join(TRAVEL)} "
+                              f"(got {t.travel!r}).")
+            if t.sides not in SIDES:
+                errors.append(f"{tl}: 'sides' must be 1 or 2 (got {t.sides!r}).")
+            if t.side not in SIDE_VALUES:
+                errors.append(f"{tl}: unknown side {t.side!r}; must be one of "
+                              f"{', '.join(v for v in SIDE_VALUES if v)}.")
+            if t.quantity is not None and t.quantity < 0:
+                errors.append(f"{tl}: 'quantity' cannot be negative — removal is "
+                              f"its own treatment type, not a negative count.")
+            if is_point_only:
+                for fname in LINE_ONLY_FIELDS:
+                    # Only complain when it was actually set to a non-default.
+                    if fname == "travel" and t.travel != "two_way":
+                        errors.append(f"{tl}: 'travel' only applies to a line; "
+                                      f"this feature is a point.")
+                    if fname == "sides" and t.sides != 2:
+                        errors.append(f"{tl}: 'sides' only applies to a line; "
+                                      f"this feature is a point.")
+            if t.status == "proposed":
+                if not t.phase:
+                    errors.append(f"{tl}: a proposed treatment needs a 'phase'.")
+                elif phase_ids and t.phase not in phase_ids:
+                    errors.append(f"{tl}: phase {t.phase!r} is not declared in "
+                                  f"the top-level 'phases' list.")
+            elif t.phase and t.phase not in phase_ids:
+                errors.append(f"{tl}: phase {t.phase!r} is not declared in the "
+                              f"top-level 'phases' list.")
+            for u in t.upgrades:
+                if u == t.id:
+                    errors.append(f"{tl}: a treatment cannot upgrade itself.")
+                elif u not in treatment_ids:
+                    errors.append(f"{tl}: 'upgrades' references unknown "
+                                  f"treatment id {u!r}.")
+
+    errors.extend(_upgrade_loop_errors(net))
     return errors
+
+
+def _upgrade_loop_errors(net: Network) -> List[str]:
+    by_id = {t.id: t for _, t in net.treatments() if t.id}
+    out = []
+    for f, t in net.treatments():
+        seen, stack = {t.id}, list(t.upgrades)
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                out.append(f"{f.name or f.id} / {t.type}: 'upgrades' chain "
+                           f"forms a loop.")
+                break
+            seen.add(cur)
+            nxt = by_id.get(cur)
+            if nxt:
+                stack.extend(nxt.upgrades)
+    return out
 
 
 # --------------------------------------------------------------------------- #
 # Serialization
 # --------------------------------------------------------------------------- #
-def _path_dict(p: BikePath) -> dict:
-    out: dict = {"name": p.name, "type": p.type, "status": p.status,
-                 "jurisdiction": p.jurisdiction}
-    # Optional identity/upgrade fields are omitted when unset so files that
-    # never use them serialize exactly as they did before the fields existed.
-    if p.id:
-        out["id"] = p.id
-    if p.upgrades:
-        out["upgrades"] = p.upgrades
-    if p.phase is not None:
-        out["phase"] = p.phase
-    out["directions"] = p.directions
-    for key, value in (("on_street", p.on_street), ("from", p.frm),
-                       ("to", p.to), ("notes", p.notes)):
+def _treatment_dict(t: Treatment, defaults: dict) -> dict:
+    out: dict = {"id": t.id, "type": t.type}
+    if t.status != defaults.get("status"):
+        out["status"] = t.status
+    if t.phase and t.phase != defaults.get("phase"):
+        out["phase"] = t.phase
+    if t.authority and t.authority != defaults.get("authority"):
+        out["authority"] = t.authority
+    if t.travel != "two_way":
+        out["travel"] = t.travel
+    if t.sides != 2:
+        out["sides"] = t.sides
+    if t.side:
+        out["side"] = t.side
+    if t.quantity is not None:
+        out["quantity"] = t.quantity
+    if t.upgrades:
+        out["upgrades"] = list(t.upgrades)
+    if t.proposed_by:
+        out["proposed_by"] = t.proposed_by
+    if t.notes:
+        out["notes"] = t.notes
+    if t.tags:
+        out["tags"] = dict(t.tags)
+    return out
+
+
+def _feature_dict(f: Feature) -> dict:
+    out: dict = {"id": f.id, "name": f.name}
+    for key, value in (("on_street", f.on_street), ("start", f.start),
+                       ("end", f.end), ("notes", f.notes)):
         if value:
             out[key] = value
-    # One segment serializes flat (the common case, and the pre-multi-segment
-    # form); several serialize as a list of point lists.
-    segs = [[[round(lat, 6), round(lon, 6)] for lat, lon in seg]
-            for seg in p.segments]
-    out["geometry"] = segs[0] if len(segs) == 1 else segs
+    # Hoist a field to the feature when EVERY treatment agrees on it, so a
+    # single-treatment feature reads as it did in v1.
+    defaults: dict = {}
+    if f.treatments:
+        for key in ("status", "phase", "authority"):
+            values = {getattr(t, key) for t in f.treatments}
+            if len(values) == 1:
+                only = values.pop()
+                if only:
+                    defaults[key] = only
+    out.update(defaults)
+    out["treatments"] = [_treatment_dict(t, defaults) for t in f.treatments]
+    if f.tags:
+        out["tags"] = dict(f.tags)
+    out["geometry"] = [[[round(lat, 6), round(lon, 6)] for lat, lon in part]
+                       for part in f.geometry]
     return out
 
 
-def _spot_dict(s: Spot) -> dict:
-    out: dict = {}
-    if s.name:
-        out["name"] = s.name
-    out["type"] = s.type
-    out["status"] = s.status
-    out["jurisdiction"] = s.jurisdiction
-    if s.phase is not None:
-        out["phase"] = s.phase
-    if s.location is not None:
-        out["location"] = [round(s.location[0], 6), round(s.location[1], 6)]
-    if s.notes:
-        out["notes"] = s.notes
+def _area_dict(a: Area) -> dict:
+    out: dict = {"id": a.id, "name": a.name, "kind": a.kind}
+    if a.context:
+        out["context"] = a.context
+    if a.default_authority:
+        out["default_authority"] = a.default_authority
+    if a.updated:
+        out["updated"] = a.updated
+    if a.contributors:
+        out["contributors"] = list(a.contributors)
+    if a.tags:
+        out["tags"] = dict(a.tags)
+    if a.boundary:
+        out["boundary"] = [[[[round(lat, 6), round(lon, 6)] for lat, lon in ring]
+                            for ring in poly] for poly in a.boundary]
     return out
+
+
+def _phase_dict(p: PhaseDef) -> dict:
+    out: dict = {"id": p.id, "number": p.number}
+    if p.label:
+        out["label"] = p.label
+    if p.target_date:
+        out["target_date"] = p.target_date
+    if p.tags:
+        out["tags"] = dict(p.tags)
+    return out
+
+
+class _QuotedStr(str):
+    """A string that must survive YAML's implicit timestamp/int types."""
+
+
+def _quoted_representer(dumper, data):
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(data), style="'")
+
+
+yaml.SafeDumper.add_representer(_QuotedStr, _quoted_representer)
 
 
 def serialize_network(net: Network) -> str:
-    """Serialize a Network to YAML text (stable key order; geometry points in
-    compact [lat, lon] flow style)."""
+    """Serialize to YAML text with a stable key order — reading a file,
+    changing one thing and writing it back must produce a one-line diff."""
     doc: dict = {
         "format": FORMAT_ID,
         "format_version": FORMAT_VERSION,
-        "city": net.city,
-        "state": net.state,
+        "crs": net.crs or CRS,
+        "units": net.units or "metric",
     }
-    if net.ordinance_chapter:
-        doc["ordinance_chapter"] = net.ordinance_chapter
-    doc["phases"] = [{"phase": p.number, "label": p.label, "deadline": p.deadline}
-                     for p in sorted(net.phases, key=lambda p: p.number)]
-    doc["paths"] = [_path_dict(p) for p in net.paths]
-    # Spot improvements are optional; files that don't use them keep
-    # serializing exactly as they did before the key existed.
-    if net.spots:
-        doc["spots"] = [_spot_dict(s) for s in net.spots]
-    header = ("# Bike network — written by bike-network-builder; re-importable there and\n"
-              "# readable by any YAML tool. Geometry points are [latitude, longitude]\n"
-              "# in degrees. See NETWORK_FORMAT.md.\n")
+    if net.meta:
+        doc["meta"] = dict(net.meta)
+    doc["areas"] = [_area_dict(a) for a in net.areas]
+    if net.authorities:
+        doc["authorities"] = [
+            {k: v for k, v in
+             (("id", a.id), ("name", a.name), ("level", a.level), ("note", a.note))
+             if v} for a in net.authorities]
+    if net.phases:
+        doc["phases"] = [_phase_dict(p) for p in
+                         sorted(net.phases, key=lambda p: p.number)]
+    if net.costs:
+        doc["costs"] = dict(net.costs)
+    doc["features"] = [_feature_dict(f) for f in net.features]
+    # Keys this version doesn't interpret, carried through untouched.
+    for k, v in net.extra.items():
+        doc.setdefault(k, v)
+
+    doc = _quote_dates(doc)
+    header = ("# Bike network — written by bike-network-builder; re-importable there\n"
+              "# and readable by any YAML tool. Geometry points are [latitude,\n"
+              "# longitude] in degrees (WGS84). See NETWORK_FORMAT.md.\n")
     return header + yaml.safe_dump(doc, sort_keys=False, default_flow_style=None,
                                    allow_unicode=True, width=100)
+
+
+def _quote_dates(doc: dict) -> dict:
+    """Force every date-ish value to a quoted string on the way out. Without
+    this, `2029-12-31` round-trips as a date object in PyYAML and a
+    UTC-midnight Date in js-yaml — a day early anywhere west of UTC."""
+    for phase in doc.get("phases") or []:
+        if phase.get("target_date"):
+            phase["target_date"] = _QuotedStr(phase["target_date"])
+    for area in doc.get("areas") or []:
+        if area.get("updated"):
+            area["updated"] = _QuotedStr(area["updated"])
+    meta = doc.get("meta")
+    if isinstance(meta, dict):
+        for key in ("created", "updated"):
+            if meta.get(key):
+                meta[key] = _QuotedStr(_to_date_string(meta[key]))
+    return doc

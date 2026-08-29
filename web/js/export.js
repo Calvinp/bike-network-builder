@@ -2,12 +2,10 @@
 // to the city, then produce every artifact in memory: network.geojson,
 // map.html, (in a browser) map.png, and a mileage summary with the same
 // warnings/notices the desktop tool reports.
-import { pathsToGeojson, spotsToGeojson } from "./geojson.js";
-import { segmentsMiles } from "./geometry.js";
-import {
-  clipPaths, clipSpots, pathsAsOfPhase, spotsAsOfPhase, summarize,
-} from "./pipeline.js";
-import { COLOR_MODES, MAP_PALETTE, hexToRgb } from "./render_common.js";
+import { featuresToGeojson } from "./geojson.js";
+import { clipFeatures, featuresAsOfPhase, partsKm, summarize } from "./pipeline.js";
+import { COLOR_MODES, hexToRgb, mapPalette } from "./render_common.js";
+import { COST_DISCLAIMER, hasCostOverrides } from "./costs.js";
 import { renderHtml } from "./render_html.js";
 import { encodeGif } from "./gif.js";
 
@@ -40,8 +38,8 @@ function embeddableLayers(contextLayers, notices) {
 // precomputed city polygon ring (used for clipping). `renderPng` is injected
 // (it needs a DOM canvas, so Node tests pass none). Returns
 // { geojson, html, pngBlob, summary }.
-export async function buildArtifacts(net, boundaryRings, clipRing, {
-  colorMode = "type",
+export async function buildArtifacts(net, boundaryRings, clipBoundary, {
+  colorMode = "treatment",
   renderPng = null,
   contextLayers = [],
 } = {}) {
@@ -51,51 +49,50 @@ export async function buildArtifacts(net, boundaryRings, clipRing, {
   const warnings = [];
   const notices = [];
 
-  let paths = net.paths.map((p) => ({ ...p }));
-  for (const p of paths) {
-    if (!p.length_miles && p.segments.some((s) => s.length >= 2)) {
-      p.length_miles = segmentsMiles(p.segments);
-    }
+  let features = net.features.map((f) => ({ ...f, points: f.points,
+                                            lines: f.lines }));
+  for (const f of features) {
+    if (!f.length_km) f.length_km = partsKm(f.lines());
   }
-  let spots = (net.spots || []).map((s) => ({ ...s }));
-  if (clipRing && clipRing.length >= 3) {
-    paths = clipPaths(paths, clipRing, warnings, notices);
-    spots = clipSpots(spots, clipRing);
+  if (clipBoundary && clipBoundary.length) {
+    features = clipFeatures(features, clipBoundary, warnings, notices);
   }
 
-  const geojson = pathsToGeojson(paths);
-  // Point features ride along in the export; polyline-only readers (including
-  // our own pathsFromGeojson) skip them harmlessly.
-  geojson.features = geojson.features.concat(spotsToGeojson(spots).features);
+  const geojson = featuresToGeojson(features);
 
-  const html = renderHtml(paths, net, {
-    boundary: boundaryRings, colorMode, spots,
+  const html = renderHtml(features, net, {
+    boundary: boundaryRings, colorMode,
     contextLayers: embeddableLayers(contextLayers, notices),
   });
   const pngBlob = renderPng
-    ? await renderPng(paths, net, { boundary: boundaryRings, colorMode, spots })
+    ? await renderPng(features, net, { boundary: boundaryRings, colorMode })
     : null;
 
-  const summary = summarize(paths, net);
+  const summary = summarize(features, net);
+  // These numbers end up on a slide in front of a council; if the file
+  // adjusts the built-in rates, every export says so.
+  if (hasCostOverrides(net.costs)) notices.push(COST_DISCLAIMER);
   summary.warnings = warnings;
   summary.notices = notices;
-  return { geojson, html, pngBlob, summary, paths, spots };
+  return { geojson, html, pngBlob, summary, features };
 }
 
 // The stops an animation/phase export walks: Today, then each declared phase
 // that actually has proposed work.
-export function phaseStops(net, paths) {
-  const nums = [...new Set(paths
-    .filter((p) => p.status === "proposed" && p.phase !== null
-                   && p.phase !== undefined)
-    .map((p) => p.phase))].sort((a, b) => a - b)
-    .filter((n) => net.phases.some((ph) => ph.number === n));
+export function phaseStops(net, features) {
+  // Treatments carry the phase now, and they carry a phase ID rather than a
+  // number — the number is display order, which a merge is free to renumber.
+  const byId = net.phaseMap();
+  const nums = [...new Set(features
+    .flatMap((f) => f.treatments)
+    .filter((t) => t.status === "proposed" && t.phase && byId.has(t.phase))
+    .map((t) => byId.get(t.phase).number))].sort((a, b) => a - b);
   const stops = [{ n: 0, caption: "Today" }];
   for (const n of nums) {
     const cfg = net.phases.find((ph) => ph.number === n);
     let caption = `Phase ${n}`;
     if (cfg && cfg.label) caption += `: ${cfg.label}`;
-    if (cfg && cfg.deadline) caption += `\nby ${cfg.deadline}`;
+    if (cfg && cfg.target_date) caption += `\nby ${cfg.target_date}`;
     stops.push({ n, caption });
   }
   return stops;
@@ -106,29 +103,29 @@ export function phaseStops(net, paths) {
  * pipeline.render_phase_exports(). Returns [] when nothing is phased.
  * `renderPng` is injected for the same reason as above (needs a canvas).
  */
-export async function buildPhaseArtifacts(net, boundaryRings, clipRing, {
-  colorMode = "type",
+export async function buildPhaseArtifacts(net, boundaryRings, clipBoundary, {
+  colorMode = "treatment",
   renderPng = null,
-  paths = null,
-  spots = null,
+  features = null,
   onProgress = null,
 } = {}) {
   if (!renderPng) return [];
-  let use = paths;
-  let useSpots = spots;
+  let use = features;
   if (!use) {
-    use = net.paths.map((p) => ({ ...p }));
-    for (const p of use) {
-      if (!p.length_miles && p.segments.some((s) => s.length >= 2)) {
-        p.length_miles = segmentsMiles(p.segments);
-      }
-    }
-    useSpots = (net.spots || []).map((s) => ({ ...s }));
-    if (clipRing && clipRing.length >= 3) {
-      use = clipPaths(use, clipRing, [], []);
-      useSpots = clipSpots(useSpots, clipRing);
+    use = net.features.map((f) => ({ ...f, points: f.points, lines: f.lines }));
+    for (const f of use) if (!f.length_km) f.length_km = partsKm(f.lines());
+    if (clipBoundary && clipBoundary.length) {
+      use = clipFeatures(use, clipBoundary, [], []);
     }
   }
+  // Phase views are computed against a network carrying the CLIPPED features,
+  // so a frame never draws geometry the totals excluded.
+  const clippedNet = { ...net, features: use,
+                       phaseMap: net.phaseMap.bind(net),
+                       authority: net.authority.bind(net),
+                       area: net.area.bind(net),
+                       allTreatments: () => use.flatMap(
+                         (f) => f.treatments.map((t) => [f, t])) };
 
   const stops = phaseStops(net, use);
   if (stops.length < 2) return [];
@@ -137,10 +134,9 @@ export async function buildPhaseArtifacts(net, boundaryRings, clipRing, {
   // Per-phase stills at full print size (skip "Today" — that is not a phase).
   for (const stop of stops.slice(1)) {
     if (onProgress) onProgress(`Rendering phase ${stop.n}…`);
-    const blob = await renderPng(pathsAsOfPhase(use, stop.n), net, {
+    const blob = await renderPng(featuresAsOfPhase(clippedNet, stop.n), net, {
       boundary: boundaryRings, colorMode,
-      spots: spotsAsOfPhase(useSpots, stop.n),
-      title: `${net.city} Bike Network — Phase ${stop.n}`,
+      title: `${net.displayName || "Bike"} Network — Phase ${stop.n}`,
     });
     files.push({ name: `map-phase-${stop.n}.png`, blob });
   }
@@ -153,10 +149,9 @@ export async function buildPhaseArtifacts(net, boundaryRings, clipRing, {
     if (onProgress) onProgress(`Animating ${stop.n ? `phase ${stop.n}` : "today"}…`);
     const caption = stop.caption
       + "\n".repeat(lines - stop.caption.split("\n").length);
-    frames.push(await renderPng(pathsAsOfPhase(use, stop.n), net, {
+    frames.push(await renderPng(featuresAsOfPhase(clippedNet, stop.n), net, {
       boundary: boundaryRings, colorMode,
-      spots: spotsAsOfPhase(useSpots, stop.n),
-      title: `${net.city} Bike Network — ${caption}`,
+      title: `${net.displayName || "Bike"} Network — ${caption}`,
       figPx: GIF_PX,
       asImageData: true,
     }));
@@ -167,7 +162,7 @@ export async function buildPhaseArtifacts(net, boundaryRings, clipRing, {
     const delays = frames.map((_, i) => (i === 0 ? 2000
       : i === frames.length - 1 ? 3000 : 1400));
     const bytes = encodeGif(frames.map((f) => f.data), {
-      width, height, delays, loop: 0, reserved: MAP_PALETTE.map(hexToRgb),
+      width, height, delays, loop: 0, reserved: mapPalette().map(hexToRgb),
     });
     files.push({ name: "phases.gif",
                  blob: new Blob([bytes], { type: "image/gif" }) });

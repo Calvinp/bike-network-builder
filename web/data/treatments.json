@@ -1,0 +1,237 @@
+{
+  "registry_version": 1,
+  "_comment": [
+    "THE TREATMENT REGISTRY. This file, not the format spec, defines what the",
+    "tool can represent. Adding a treatment is a registry entry, not a spec",
+    "change: a reader that meets an id it doesn't know draws it neutrally,",
+    "leaves it out of costs and lane totals, and says so (V2_PLAN.md 4.1).",
+    "",
+    "Adding an entry means answering three questions in the same commit:",
+    "what category is it, what does it cost per unit, and how does it render.",
+    "",
+    "category   keeps non-bike treatments out of 'bicycle lane kilometres'.",
+    "measure    linear = the geometry IS the quantity; counted = needs a",
+    "           `quantity` on the treatment, in `unit`.",
+    "geometry   which geometry kinds the treatment may attach to.",
+    "cost       planning-grade ranges. per_km for linear, per_unit for counted.",
+    "           null means 'not costed yet' - the tool shows no figure rather",
+    "           than inventing one. Costs are METRIC: v2 stores metric and",
+    "           converts for display. These are exact conversions of the",
+    "           documented per-mile figures, so imperial display reproduces",
+    "           the familiar round numbers.",
+    "stack_rank draw order ONLY, never semantics. A feature draws EVERY",
+    "           treatment it has, widest/lowest rank first. Nothing may treat",
+    "           treatments[0] as primary - list order is insignificant."
+  ],
+
+  "treatments": [
+    {
+      "id": "quick_build_separated",
+      "label": "Quick-build separated lane",
+      "category": "bike",
+      "measure": "linear",
+      "geometry": ["line"],
+      "cost": { "per_km": [93206, 310686] },
+      "style": { "color": "#0072B2", "stack_rank": 60 }
+    },
+    {
+      "id": "concrete_separated",
+      "label": "Concrete-protected lane",
+      "category": "bike",
+      "measure": "linear",
+      "geometry": ["line"],
+      "cost": { "per_km": [621371, 2174799] },
+      "style": { "color": "#D55E00", "stack_rank": 65 }
+    },
+    {
+      "id": "shared_use_path",
+      "label": "Shared-use path",
+      "category": "bike",
+      "measure": "linear",
+      "geometry": ["line"],
+      "cost": { "per_km": [621371, 1864114] },
+      "style": { "color": "#009E73", "stack_rank": 50 }
+    },
+    {
+      "id": "buffered_painted",
+      "label": "Buffered painted lane (interim)",
+      "category": "bike",
+      "measure": "linear",
+      "geometry": ["line"],
+      "cost": { "per_km": [31069, 93206] },
+      "style": { "color": "#E69F00", "stack_rank": 55 }
+    },
+    {
+      "id": "neighborway",
+      "label": "Neighborway (calm shared street)",
+      "category": "bike",
+      "measure": "linear",
+      "geometry": ["line"],
+      "cost": { "per_km": [31069, 155343] },
+      "style": { "color": "#56B4E9", "stack_rank": 45 }
+    },
+    {
+      "id": "pedestrianized",
+      "label": "Pedestrianized street",
+      "category": "pedestrian",
+      "measure": "linear",
+      "geometry": ["line"],
+      "cost": { "per_km": [155343, 1242742] },
+      "style": { "color": "#CC79A7", "stack_rank": 40 }
+    },
+
+    {
+      "id": "speed_hump",
+      "label": "Speed hump",
+      "category": "calming",
+      "measure": "counted",
+      "unit": "humps",
+      "geometry": ["point", "line"],
+      "cost": null,
+      "style": { "glyph": "∩", "stack_rank": 20 }
+    },
+    {
+      "id": "raised_crosswalk",
+      "label": "Raised crosswalk",
+      "category": "calming",
+      "measure": "counted",
+      "unit": "crossings",
+      "geometry": ["point"],
+      "cost": null,
+      "style": { "glyph": "▬", "stack_rank": 21 }
+    },
+    {
+      "id": "raised_intersection",
+      "label": "Raised intersection",
+      "category": "calming",
+      "measure": "counted",
+      "unit": "intersections",
+      "geometry": ["point"],
+      "cost": null,
+      "style": { "glyph": "◆", "stack_rank": 22 }
+    },
+    {
+      "id": "curb_extension",
+      "label": "Curb extension",
+      "category": "calming",
+      "measure": "counted",
+      "unit": "corners",
+      "geometry": ["point"],
+      "cost": null,
+      "style": { "glyph": "◖", "stack_rank": 23 }
+    },
+    {
+      "id": "pedestrian_island",
+      "label": "Pedestrian island",
+      "category": "crossing",
+      "measure": "counted",
+      "unit": "islands",
+      "geometry": ["point"],
+      "cost": null,
+      "style": { "glyph": "⌶", "stack_rank": 24 }
+    },
+    {
+      "id": "hawk_signal",
+      "label": "HAWK signal",
+      "category": "crossing",
+      "measure": "counted",
+      "unit": "signals",
+      "geometry": ["point"],
+      "cost": null,
+      "style": { "glyph": "⚑", "stack_rank": 25 }
+    },
+
+    {
+      "id": "modal_filter",
+      "label": "Modal filter",
+      "category": "access",
+      "measure": "counted",
+      "unit": "filters",
+      "geometry": ["point"],
+      "cost": null,
+      "style": { "glyph": "⊘", "stack_rank": 30 }
+    },
+    {
+      "id": "bollards",
+      "label": "Bollards",
+      "category": "access",
+      "measure": "counted",
+      "unit": "bollards",
+      "geometry": ["point", "line"],
+      "cost": null,
+      "style": { "glyph": "‖", "stack_rank": 31 }
+    },
+    {
+      "id": "retractable_bollards",
+      "label": "Retractable bollards",
+      "category": "access",
+      "measure": "counted",
+      "unit": "bollards",
+      "geometry": ["point", "line"],
+      "cost": null,
+      "style": { "glyph": "⇕", "stack_rank": 32 }
+    },
+
+    {
+      "id": "bike_parking",
+      "label": "Bike parking",
+      "category": "bike",
+      "measure": "counted",
+      "unit": "spaces",
+      "geometry": ["point"],
+      "cost": null,
+      "style": { "glyph": "P", "stack_rank": 10 }
+    },
+    {
+      "id": "street_trees",
+      "label": "Street trees",
+      "category": "greening",
+      "measure": "counted",
+      "unit": "trees",
+      "geometry": ["point", "line"],
+      "cost": null,
+      "style": { "glyph": "T", "stack_rank": 11 }
+    },
+    {
+      "id": "parking_removal",
+      "label": "Parking removal",
+      "category": "parking",
+      "measure": "counted",
+      "unit": "spaces",
+      "geometry": ["point", "line"],
+      "cost": null,
+      "style": { "glyph": "×", "stack_rank": 12 }
+    },
+    {
+      "id": "loading_zone",
+      "label": "Loading zone",
+      "category": "parking",
+      "measure": "counted",
+      "unit": "zones",
+      "geometry": ["point"],
+      "cost": null,
+      "style": { "glyph": "L", "stack_rank": 13 }
+    },
+    {
+      "id": "accessible_parking",
+      "label": "Accessible parking space",
+      "category": "parking",
+      "measure": "counted",
+      "unit": "spaces",
+      "geometry": ["point"],
+      "cost": null,
+      "style": { "glyph": "♿", "stack_rank": 14 }
+    },
+
+    {
+      "id": "other",
+      "label": "Other improvement",
+      "category": "other",
+      "measure": "counted",
+      "unit": "items",
+      "geometry": ["point", "line"],
+      "cost": null,
+      "style": { "glyph": "●", "stack_rank": 1 }
+    }
+  ]
+}

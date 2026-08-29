@@ -1,142 +1,140 @@
-// Convert between path lists and GeoJSON FeatureCollections — port of
-// bikenetwork/geojson.py. Geometry always travels WITH its path — nothing here
-// is keyed by name, so duplicate names are harmless. Single-segment paths are
-// LineStrings; combined paths are MultiLineStrings.
-import { segmentsMiles } from "./geometry.js";
-import { makePath, makeSpot } from "./network_format.js";
+// Convert between v2 features and GeoJSON FeatureCollections.
+//
+// This is BOTH the editor's internal wire format and the exported
+// `network.geojson`, so it is a second public artifact — hence the
+// format/format_version properties on the collection (V2_PLAN.md V7): a
+// downstream consumer can tell what it is holding.
+//
+// Geometry always travels WITH its feature; nothing is keyed by name, so
+// duplicate names are harmless. A v2 feature's geometry is a list of PARTS,
+// which maps onto GeoJSON as:
+//
+//   one line part          -> LineString
+//   several line parts     -> MultiLineString
+//   one point part         -> Point
+//   several point parts    -> MultiPoint
+//   a mix of both          -> GeometryCollection
+//
+// The mixed case is why this isn't just "LineString or Point": a row of street
+// trees that is partly individual trees and partly a continuous run is ONE
+// feature, and splitting it here would undo the whole reason features and
+// spots were unified.
+import { FORMAT_ID, FORMAT_VERSION, makeFeature, makeTreatment }
+  from "./network_format.js";
 
-function geojsonGeometry(segments) {
-  const coords = segments.map((seg) => seg.map(([lat, lon]) => [lon, lat]));
-  if (coords.length === 1) return { type: "LineString", coordinates: coords[0] };
-  return { type: "MultiLineString", coordinates: coords };
-}
+const toLonLat = (part) => part.map(([lat, lon]) => [lon, lat]);
+const toLatLon = (coords) => coords.map(([lon, lat]) => [lat, lon]);
 
-function segmentsFromGeometry(geom) {
-  const gtype = (geom || {}).type;
-  const coords = (geom || {}).coordinates || [];
-  let segLists;
-  if (gtype === "MultiLineString") segLists = coords;
-  else if (gtype === "LineString") segLists = [coords];
-  else return [];
-  const segments = [];
-  for (const seg of segLists) {
-    const pts = seg.map(([lon, lat]) => [lat, lon]);
-    if (pts.length >= 2) segments.push(pts);
+export function geojsonGeometry(parts) {
+  const lines = parts.filter((p) => p.length >= 2);
+  const points = parts.filter((p) => p.length === 1);
+  const lineGeom = lines.length === 1
+    ? { type: "LineString", coordinates: toLonLat(lines[0]) }
+    : { type: "MultiLineString", coordinates: lines.map(toLonLat) };
+  const pointGeom = points.length === 1
+    ? { type: "Point", coordinates: toLonLat(points[0])[0] }
+    : { type: "MultiPoint", coordinates: points.map((p) => toLonLat(p)[0]) };
+
+  if (lines.length && points.length) {
+    return { type: "GeometryCollection", geometries: [lineGeom, pointGeom] };
   }
-  return segments;
+  if (lines.length) return lineGeom;
+  if (points.length) return pointGeom;
+  return null;
 }
 
-// Build a GeoJSON FeatureCollection (one feature per path).
-export function pathsToGeojson(paths) {
-  const features = [];
-  for (const p of paths) {
-    const segments = p.segments.filter((s) => s.length >= 2);
-    if (!segments.length) continue;
-    features.push({
+export function partsFromGeojson(geom) {
+  if (!geom) return [];
+  const { type, coordinates } = geom;
+  switch (type) {
+    case "LineString":
+      return coordinates.length >= 2 ? [toLatLon(coordinates)] : [];
+    case "MultiLineString":
+      return coordinates.filter((c) => c.length >= 2).map(toLatLon);
+    case "Point":
+      return [[[coordinates[1], coordinates[0]]]];
+    case "MultiPoint":
+      return coordinates.map(([lon, lat]) => [[lat, lon]]);
+    case "GeometryCollection":
+      return (geom.geometries || []).flatMap(partsFromGeojson);
+    default:
+      return [];
+  }
+}
+
+function treatmentProps(t) {
+  const out = { id: t.id, type: t.type, status: t.status };
+  if (t.phase) out.phase = t.phase;
+  if (t.authority) out.authority = t.authority;
+  if (t.travel !== "two_way") out.travel = t.travel;
+  if (t.sides !== 2) out.sides = t.sides;
+  if (t.side) out.side = t.side;
+  if (t.quantity !== null && t.quantity !== undefined) out.quantity = t.quantity;
+  if (t.upgrades && t.upgrades.length) out.upgrades = [...t.upgrades];
+  if (t.proposed_by) out.proposed_by = t.proposed_by;
+  if (t.notes) out.notes = t.notes;
+  if (t.tags && Object.keys(t.tags).length) out.tags = { ...t.tags };
+  return out;
+}
+
+// One GeoJSON feature per network feature. Treatments ride along as a nested
+// property array rather than being flattened into one feature per treatment:
+// flattening would duplicate the geometry, which is precisely what unifying
+// features and treatments was meant to stop.
+export function featuresToGeojson(features) {
+  const out = [];
+  for (const f of features || []) {
+    const geometry = geojsonGeometry(f.geometry.filter((p) => p.length));
+    if (!geometry) continue;
+    out.push({
       type: "Feature",
-      geometry: geojsonGeometry(segments),
+      geometry,
       properties: {
-        name: p.name,
-        type: p.type,
-        status: p.status,
-        jurisdiction: p.jurisdiction,
-        id: p.id,
-        upgrades: p.upgrades,
-        phase: p.phase,
-        directions: p.directions,
-        on_street: p.on_street,
-        from: p.from,
-        to: p.to,
-        notes: p.notes,
-        miles: Math.round((p.length_miles || segmentsMiles(segments)) * 1e4) / 1e4,
+        id: f.id,
+        name: f.name,
+        on_street: f.on_street,
+        start: f.start,
+        end: f.end,
+        notes: f.notes,
+        treatments: f.treatments.map(treatmentProps),
+        ...(Object.keys(f.tags || {}).length ? { tags: { ...f.tags } } : {}),
+        ...(f.length_km ? { km: Math.round(f.length_km * 1e4) / 1e4 } : {}),
       },
     });
   }
-  return { type: "FeatureCollection", features };
+  return {
+    type: "FeatureCollection",
+    format: FORMAT_ID,
+    format_version: FORMAT_VERSION,
+    features: out,
+  };
 }
 
-// Build path objects from a FeatureCollection whose features carry the full
-// property set (the editor's save payload). LineString and MultiLineString
-// both work; features with no usable segment are skipped.
-export function pathsFromGeojson(fc) {
-  const paths = [];
-  (fc.features || []).forEach((feat, i) => {
-    const props = feat.properties || {};
-    const segments = segmentsFromGeometry(feat.geometry);
-    if (!segments.length) return;
-    let phase = null;
-    if (props.phase !== null && props.phase !== undefined) {
-      const n = parseInt(props.phase, 10);
-      phase = Number.isNaN(n) ? null : n;
-    }
-    let directions = parseInt(props.directions ?? 2, 10);
-    if (Number.isNaN(directions) || !directions) directions = 2;
-    const p = makePath({
-      name: String(props.name || `Path ${i + 1}`),
-      // `treatment` is the pre-split property name; accept it on read.
-      type: String(props.type || props.treatment || "quick_build_separated"),
-      status: String(props.status || "proposed"),
-      jurisdiction: String(props.jurisdiction || "city"),
-      id: String(props.id || "").trim(),
-      upgrades: String(props.upgrades || "").trim(),
-      phase,
-      directions,
-      on_street: String(props.on_street || ""),
-      from: String(props.from || ""),
-      to: String(props.to || ""),
-      notes: String(props.notes || ""),
-      segments,
-    });
-    p.length_miles = segmentsMiles(segments);
-    paths.push(p);
-  });
-  return paths;
-}
-
-// Spot (point) improvements as a separate FeatureCollection — keeping them
-// out of the paths collection means every polyline-only consumer can stay
-// polyline-only.
-export function spotsToGeojson(spots) {
-  const features = [];
-  for (const s of spots || []) {
-    if (!s.location) continue;
-    features.push({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [s.location[1], s.location[0]] },
-      properties: { name: s.name, type: s.type, status: s.status,
-                    jurisdiction: s.jurisdiction,
-                    phase: s.phase, notes: s.notes },
-    });
-  }
-  return { type: "FeatureCollection", features };
-}
-
-// Build spot objects from a FeatureCollection; non-Point or malformed
-// features are skipped.
-export function spotsFromGeojson(fc) {
+export function featuresFromGeojson(fc) {
   const out = [];
-  for (const feat of (fc || {}).features || []) {
-    const geom = feat.geometry || {};
-    const coords = geom.coordinates || [];
-    if (geom.type !== "Point" || coords.length !== 2
-        || !coords.every((v) => typeof v === "number" && Number.isFinite(v))) {
-      continue;
-    }
-    const props = feat.properties || {};
-    let phase = null;
-    if (props.phase !== null && props.phase !== undefined) {
-      const n = parseInt(props.phase, 10);
-      phase = Number.isNaN(n) ? null : n;
-    }
-    out.push(makeSpot({
-      name: String(props.name || ""),
-      // `kind` is the pre-rename property name; accept it on read.
-      type: String(props.type || props.kind || "other"),
-      jurisdiction: String(props.jurisdiction || "city"),
-      status: String(props.status || "proposed"),
-      phase,
-      location: [Number(coords[1]), Number(coords[0])],
-      notes: String(props.notes || ""),
+  for (const gf of (fc && fc.features) || []) {
+    const parts = partsFromGeojson(gf.geometry);
+    if (!parts.length) continue;
+    const props = gf.properties || {};
+    const treatments = (Array.isArray(props.treatments) ? props.treatments : [])
+      .map((t) => makeTreatment({
+        ...t,
+        phase: t.phase || null,
+        upgrades: Array.isArray(t.upgrades) ? [...t.upgrades] : [],
+        quantity: (t.quantity === null || t.quantity === undefined)
+          ? null : Number(t.quantity),
+        tags: t.tags ? { ...t.tags } : {},
+      }));
+    out.push(makeFeature({
+      id: props.id || "",
+      name: props.name || "",
+      on_street: props.on_street || "",
+      start: props.start || "",
+      end: props.end || "",
+      notes: props.notes || "",
+      treatments,
+      geometry: parts,
+      tags: props.tags ? { ...props.tags } : {},
     }));
   }
   return out;

@@ -1,64 +1,118 @@
-// Tests for the standalone HTML export — mirrors the html-related checks in
-// tests/test_pipeline.py (dir-arrow markers, no TextPath plugin) plus content
-// spot-checks.
+// The standalone interactive map export.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { renderHtml } from "../js/render_html.js";
-import { makeNetwork, makePath, makePhase } from "../js/network_format.js";
+import { makeFeature, makeNetwork, makePhase, makeTreatment }
+  from "../js/network_format.js";
+import { setRegistry } from "../js/registry.js";
 
-function net(paths) {
-  return makeNetwork({
-    city: "Malden",
-    phases: [makePhase(1, "Core", "2029")],
-    paths,
-  });
-}
+setRegistry(JSON.parse(readFileSync(
+  new URL("../data/treatments.json", import.meta.url), "utf8")));
 
-function p(name, over = {}) {
-  const path = makePath({ name, on_street: name, phase: 1, status: "proposed",
-    type: "quick_build_separated",
-    segments: [[[42.42, -71.07], [42.43, -71.06]]], ...over });
-  path.length_miles = 0.8;
-  return path;
-}
-
-test("one-way arrows use plain rotated DivIcon markers, no plugins", () => {
-  const html = renderHtml([p("OneWay", { directions: 1 })], net([]));
-  assert.ok(html.includes("dir-arrow"));
-  assert.ok(!html.includes("setText"));
-  assert.ok(!html.toLowerCase().replace(/-/g, "_").includes("polyline_text_path"));
+const feat = (f = {}) => makeFeature({
+  id: "f1", name: "Main Street", on_street: "Main Street",
+  treatments: [makeTreatment({ id: "t1", type: "quick_build_separated",
+                               status: "proposed", phase: "p1" })],
+  geometry: [[[42.1, -71.1], [42.2, -71.2]]],
+  ...f,
 });
 
-test("arrows hide below the minimum zoom", () => {
-  // Fixed-size chevron icons dwarf the streets when zoomed way out, so the
-  // page toggles them on zoomend (and overlayadd, for layer-control re-adds).
-  const html = renderHtml([p("OneWay", { directions: 1 })], net([]));
-  assert.ok(html.includes("zoomend"));
-  assert.ok(html.includes("overlayadd"));
-  assert.ok(html.includes("getZoom() >= 14"));
+const net = (f = {}) => makeNetwork({
+  areas: [{ id: "a1", name: "Malden", context: "Massachusetts",
+            displayName: "Malden, Massachusetts" }],
+  phases: [makePhase({ id: "p1", number: 1, label: "Core", target_date: "2029" }),
+           makePhase({ id: "p2", number: 2, label: "Later" })],
+  features: [feat()],
+  ...f,
 });
 
 test("html embeds popups, tooltip, legend and boundary", () => {
-  const paths = [p("Main Street"), p("Trail", { status: "existing", phase: null })];
-  const html = renderHtml(paths, net(paths),
-    { boundary: [[[42.4, -71.09], [42.4, -71.02]]], colorMode: "type" });
+  const html = renderHtml([feat()], net(), {
+    boundary: [[[42.0, -71.0], [42.3, -71.3]]], colorMode: "phase" });
   assert.ok(html.includes("Main Street"));
-  assert.ok(html.includes("Malden Bike Network"));          // legend title
-  assert.ok(html.includes("Existing infrastructure"));      // group + legend
-  assert.ok(html.includes("boundary"));
-  assert.ok(html.includes("Quick-build separated lane"));
-  assert.ok(html.includes("0.80 mi"));
+  assert.ok(html.includes("Bike Network"));
+  assert.ok(html.includes("DATA"));
 });
 
-test("phase mode groups by phase with label", () => {
-  const paths = [p("Main"), p("Hwy", { jurisdiction: "state" })];
-  const html = renderHtml(paths, net(paths), { colorMode: "phase" });
+test("nothing injected touches the map before it exists", () => {
+  // The trap that once left map.html blank: a script that calls map.on(...)
+  // before `var map = L.map(...)` has run takes the whole <script> block with
+  // it, and the map along with it.
+  const html = renderHtml([feat()], net(), { colorMode: "phase" });
+  const beforeMap = html.slice(0, html.indexOf("L.map("));
+  assert.ok(!/\bmap\s*\.\s*(on|addLayer|hasLayer|fitBounds)\s*\(/.test(beforeMap),
+            "something used the map before it was created");
+});
+
+test("one-way arrows use plain rotated DivIcon markers, no plugins", () => {
+  const oneWay = feat({ treatments: [makeTreatment({
+    id: "t1", type: "quick_build_separated", status: "proposed", phase: "p1",
+    travel: "one_way", sides: 1 })] });
+  const html = renderHtml([oneWay], net({ features: [oneWay] }), {});
+  assert.ok(html.includes("divIcon"));
+  assert.ok(!html.includes("polylinedecorator"));
+  assert.ok(!html.includes("TextPath"));
+});
+
+test("a two-way treatment gets no arrows", () => {
+  const html = renderHtml([feat()], net(), {});
+  assert.ok(!/"arrows":\s*\[\s*\{/.test(html));
+});
+
+test("phase mode groups by phase with its label", () => {
+  const html = renderHtml([feat()], net(), { colorMode: "phase" });
   assert.ok(html.includes("Phase 1: Core"));
-  assert.ok(html.includes("MassDOT"));
+});
+
+test("every treatment on a feature is drawn, not just one", () => {
+  const f = feat({ treatments: [
+    makeTreatment({ id: "a", type: "shared_use_path", status: "existing" }),
+    makeTreatment({ id: "b", type: "concrete_separated", status: "proposed",
+                    phase: "p2" }),
+  ] });
+  const html = renderHtml([f], net({ features: [f] }), { colorMode: "treatment" });
+  // Both legend rows appear, and the geometry is emitted twice (stacked).
+  assert.ok(html.includes("Shared-use path"));
+  assert.ok(html.includes("Concrete-protected lane"));
+});
+
+test("the legend lists treatments, never combinations", () => {
+  const f = feat({ treatments: [
+    makeTreatment({ id: "a", type: "shared_use_path", status: "existing" }),
+    makeTreatment({ id: "b", type: "concrete_separated", status: "existing" }),
+  ] });
+  const html = renderHtml([f], net({ features: [f] }), { colorMode: "treatment" });
+  assert.ok(!html.includes("Shared-use path + Concrete"));
+});
+
+test("point treatments render as glyph markers with a label", () => {
+  const f = feat({ name: "Main & Salem",
+    treatments: [makeTreatment({ id: "t1", type: "bike_parking",
+                                 status: "existing" })],
+    geometry: [[[42.15, -71.15]]] });
+  const html = renderHtml([f], net({ features: [f] }), {});
+  assert.ok(html.includes("Bike parking"));
+  assert.ok(html.includes("Main &amp; Salem") || html.includes("Main & Salem"));
 });
 
 test("names with html characters are escaped", () => {
-  const html = renderHtml([p('<img src=x onerror=alert(1)>')], net([]));
-  assert.ok(!html.includes("<img src=x"));
-  assert.ok(html.includes("&lt;img"));
+  const f = feat({ name: '<script>alert("x")</script>' });
+  const html = renderHtml([f], net({ features: [f] }), {});
+  assert.ok(!html.includes('<script>alert("x")'));
+  assert.ok(html.includes("&lt;script&gt;"));
+});
+
+test("an unphased network gets no slider", () => {
+  const f = feat({ treatments: [makeTreatment({
+    id: "t1", type: "shared_use_path", status: "existing" })] });
+  const html = renderHtml([f], net({ features: [f], phases: [] }), {});
+  assert.ok(html.includes('"stops": []') || html.includes('"stops":[]'));
+});
+
+test("an unknown treatment still renders rather than breaking the export", () => {
+  const f = feat({ treatments: [makeTreatment({
+    id: "t1", type: "transit:bus_lane", status: "proposed", phase: "p1" })] });
+  const html = renderHtml([f], net({ features: [f] }), { colorMode: "treatment" });
+  assert.ok(html.includes("transit: bus lane"));
 });

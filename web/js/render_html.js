@@ -4,141 +4,175 @@
 // and plain rotated-DivIcon chevrons for one-way paths (NO TextPath-style
 // plugins — that crashed the folium map at runtime once).
 import {
-  BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR, STATE_COLOR,
-  TYPE_COLORS, chevron, escapeHtml, labelText, pathColor, phaseColor,
-  spotColor, spotGlyph, spotLabel, typeLabel,
+  BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR,
+  UNDER_CONSTRUCTION_COLOR, chevron, dashFor, escapeHtml, featureStrokes,
+  phaseColor, pointColor, treatmentColor, treatmentGlyph, treatmentLabel,
 } from "./render_common.js";
-import { phaseMap } from "./network_format.js";
+import { registry } from "./registry.js";
 
-const phaseKey = (n, phases) => {
-  const cfg = phases.get(n);
-  return (cfg && cfg.label ? `Phase ${n}: ${cfg.label}` : `Phase ${n}`).trim();
-};
+const phaseKey = (phase) => (phase && phase.label
+  ? `Phase ${phase.number}: ${phase.label}` : `Phase ${(phase || {}).number || "?"}`);
 
-// In a phased plan, proposed paths group by PHASE regardless of color mode so
-// the slider can step through them cumulatively (coloring still follows the
-// color mode). `order` sorts the layer checklist sensibly.
-function groupName(p, colorMode, phases, phased) {
-  if (p.status === "existing") return ["Existing infrastructure", [0, 0]];
-  if (p.status === "funded") return ["Approved / funded (not yet built)", [1, 0]];
+// In a phased plan, proposed treatments group by PHASE regardless of colour
+// mode so the slider can step through them cumulatively (colouring still
+// follows the colour mode). `order` sorts the layer checklist sensibly.
+function groupName(t, phase, colorMode, phased) {
+  if (t.status === "existing") return ["Existing infrastructure", [0, 0]];
+  if (t.status === "under_construction") return ["Under construction", [1, 0]];
+  if (t.status === "funded") return ["Approved / funded (not yet built)", [2, 0]];
   if (phased) {
-    const named = p.phase !== null && p.phase !== undefined;
-    return [named ? phaseKey(p.phase, phases) : "Proposed",
-            [2, named ? p.phase : 1e6]];
+    return [phase ? phaseKey(phase) : "Proposed",
+            [3, phase ? phase.number : 1e6]];
   }
-  if (colorMode === "single") return ["Bike network (proposed)", [2, 0]];
-  if (colorMode === "type") return [typeLabel(p.type), [2, 0]];
-  if (p.jurisdiction === "state") {
-    return ["On a state road (MassDOT approval needed)", [2, 0]];
-  }
-  return [phaseKey(p.phase, phases), [2, p.phase || 0]];
+  if (colorMode === "single") return ["Bike network (proposed)", [3, 0]];
+  if (colorMode === "treatment") return [treatmentLabel(t.type), [3, 0]];
+  return [phase ? phaseKey(phase) : "Proposed", [3, phase ? phase.number : 0]];
 }
 
-function legendHtml(net, colorMode, paths, spots, bottomPx) {
-  const row = (color, label, dashed = false) =>
-    `<div><span style="border-top:4px ${dashed ? "dashed" : "solid"} ${color};`
+function legendHtml(net, colorMode, rows_, bottomPx) {
+  const row = (color, label, dash = null) =>
+    `<div><span style="border-top:4px ${dash ? "dashed" : "solid"} ${color};`
     + `width:14px;display:inline-block;margin-right:6px;"></span>${label}</div>`;
 
+  const linear = rows_.filter((r) => r.isLine);
   let rows = "";
   if (colorMode === "phase") {
-    const phases = phaseMap(net);
-    for (const ph of [...phases.keys()].sort((a, b) => a - b)) {
-      rows += row(phaseColor(ph), `Phase ${ph}: ${phases.get(ph).label}`);
+    for (const p of [...net.phases].sort((a, b) => a.number - b.number)) {
+      rows += row(phaseColor(p.number), escapeHtml(phaseKey(p)));
     }
-    rows += row(STATE_COLOR, "On a state road (MassDOT approval)");
-  } else if (colorMode === "type") {
-    const seen = new Set(paths.map((p) => p.type));
-    for (const t of Object.keys(TYPE_COLORS).filter((t) => seen.has(t))) {
-      rows += row(TYPE_COLORS[t], typeLabel(t));
+  } else if (colorMode === "treatment") {
+    // One row per treatment actually present, in registry draw order — never
+    // one row per COMBINATION, which would be unreadable.
+    const seen = [...new Set(linear.map((r) => r.t.type))];
+    for (const spec of registry().sortedForDraw(seen)) {
+      rows += row(treatmentColor(spec.id), escapeHtml(spec.label));
     }
   } else {
     rows += row(SINGLE_COLOR, "Bike network (proposed)");
   }
-  if (paths.some((p) => p.status === "funded")) {
-    rows += row(colorMode === "phase" ? FUNDED_COLOR : "#555555",
-                "Approved / funded (not yet built)", true);
+  for (const [status, color, label] of [
+    ["funded", FUNDED_COLOR, "Approved / funded (not yet built)"],
+    ["under_construction", UNDER_CONSTRUCTION_COLOR, "Under construction"],
+    ["existing", EXISTING_COLOR, "Existing infrastructure"]]) {
+    if (linear.some((r) => r.t.status === status)) {
+      rows += row(colorMode === "phase" ? color : "#555555", label,
+                  dashFor(status));
+    }
   }
-  if (paths.some((p) => p.status === "existing")) {
-    rows += row(colorMode === "phase" ? EXISTING_COLOR : "#555555",
-                "Existing infrastructure", true);
-  }
-  // One row per spot kind present; the glyph lives in the label text.
-  const kinds = [...new Set((spots || []).map((s) => s.type))];
-  for (const kind of kinds) {
+  // One row per point treatment present; the glyph lives in the label text.
+  const glyphTypes = [...new Set(rows_.filter((r) => !r.isLine)
+    .map((r) => r.t.type))];
+  for (const type of glyphTypes) {
     rows += `<div><span style="width:14px;display:inline-block;margin-right:6px;`
-      + `text-align:center;font-weight:bold;">${spotGlyph(kind)}</span>`
-      + `${escapeHtml(spotLabel(kind))}</div>`;
+      + `text-align:center;font-weight:bold;">${treatmentGlyph(type)}</span>`
+      + `${escapeHtml(treatmentLabel(type))}</div>`;
   }
+  const note = net.costsAdjusted
+    ? `<div style="margin-top:6px;font-size:11px;color:#555;">`
+      + `Cost figures adjusted by the author.</div>` : "";
   return `
     <div style="position:fixed;bottom:${bottomPx}px;left:24px;z-index:9999;background:white;
          padding:10px 12px;border:1px solid #999;border-radius:6px;font:12px sans-serif;
          box-shadow:0 1px 4px rgba(0,0,0,.3);">
-      <b>${escapeHtml(net.city)} Bike Network</b>${rows}
+      <b>${escapeHtml(net.displayName || "Bike Network")} Bike Network</b>${rows}${note}
     </div>`;
 }
 
-export function renderHtml(paths, net, {
-  boundary = null, colorMode = "type", spots = [], contextLayers = [],
+export function renderHtml(features, net, {
+  boundary = null, colorMode = "treatment", contextLayers = [],
 } = {}) {
-  const phases = phaseMap(net);
+  const phases = net.phaseMap();
+  const phaseOf = (t) => (t.phase ? phases.get(t.phase) || null : null);
+  const phaseNumberOf = (id) => {
+    const p = phases.get(id);
+    return p ? p.number : null;
+  };
   const phased = Boolean(net.phases && net.phases.length)
-    && paths.some((p) => p.status === "proposed"
-      && p.phase !== null && p.phase !== undefined);
+    && features.some((f) => f.treatments.some(
+      (t) => t.status === "proposed" && t.phase));
+
   const groups = new Map();   // key -> {features, order, phase}
-  const groupFor = (p) => {
-    const [key, order] = groupName(p, colorMode, phases, phased);
+  const groupFor = (t) => {
+    const phase = phaseOf(t);
+    const [key, order] = groupName(t, phase, colorMode, phased);
     if (!groups.has(key)) groups.set(key, { features: [], order, phase: null });
     const g = groups.get(key);
-    if (phased && p.status === "proposed" && p.phase !== null
-        && p.phase !== undefined) {
-      g.phase = p.phase;
-    }
+    if (phased && t.status === "proposed" && phase) g.phase = phase.number;
     return g.features;
   };
 
-  for (const p of paths) {
-    const segs = p.segments.filter((s) => s.length >= 2);
-    if (!segs.length) continue;
-    let weight, dash;
-    if (p.status === "existing") { weight = 4; dash = "6,5"; }
-    else if (p.status === "funded") { weight = 5; dash = "10,4"; }
-    else { weight = 6; dash = null; }
-    let detail = typeLabel(p.type);
-    if (p.status === "proposed" && p.phase !== null && p.phase !== undefined) {
-      detail = `Phase ${p.phase} &middot; ` + detail;
-    } else if (p.status !== "proposed") {
-      detail = `${p.status[0].toUpperCase()}${p.status.slice(1)} &middot; ` + detail;
+  // Every treatment on a feature is drawn — stacked strokes on one geometry,
+  // widest first. Nothing reads treatments[0] as primary.
+  const legendRows = [];
+  const points = [];
+  for (const f of features) {
+    const lines = f.lines();
+    const strokes = featureStrokes(f, colorMode, { phaseNumberOf });
+    for (const stroke of strokes) {
+      const t = stroke.treatment;
+      const spec = registry().get(t.type);
+      const phase = phaseOf(t);
+      let detail = escapeHtml(treatmentLabel(t.type));
+      if (t.status === "proposed" && phase) {
+        detail = `${escapeHtml(phaseKey(phase))} &middot; ` + detail;
+      } else if (t.status !== "proposed") {
+        const s2 = t.status.replace(/_/g, " ");
+        detail = `${s2[0].toUpperCase()}${s2.slice(1)} &middot; ` + detail;
+      }
+      if (t.quantity) detail += ` &middot; ${t.quantity} ${escapeHtml(spec.unit)}`;
+      const popup = `<b>${escapeHtml(f.name)}</b><br>`
+        + (f.on_street ? `${escapeHtml(f.on_street)}<br>` : "")
+        + detail
+        + (f.length_km ? `<br>${f.length_km.toFixed(2)} km` : "")
+        + (f.notes ? `<br><i>${escapeHtml(f.notes)}</i>` : "");
+
+      if (lines.length) {
+        legendRows.push({ t, isLine: true });
+        groupFor(t).push({
+          latlngs: lines.length === 1 ? lines[0] : lines,
+          color: stroke.color,
+          weight: stroke.weight,
+          dash: stroke.dashArray,
+          popup,
+          tooltip: escapeHtml(f.name),
+          // A superseded treatment draws no chevron when its replacement is on
+          // the same map: the upgrade covers the old line exactly, so only the
+          // stale arrow would show, claiming the new lane is one-way.
+          arrows: t.travel === "one_way" ? lines.map(chevron) : [],
+          id: t.id || "",
+          upgrades: (t.upgrades || []).join(" "),
+          phase: t.status === "proposed" && phase ? phase.number : null,
+        });
+      }
+      for (const pt of f.points()) {
+        legendRows.push({ t, isLine: false });
+        points.push({
+          lat: pt[0], lon: pt[1],
+          glyph: treatmentGlyph(t.type),
+          color: pointColor(t),
+          tooltip: escapeHtml(f.name || treatmentLabel(t.type)),
+          popup,
+          phase: t.status === "proposed" ? (phase ? phase.number : 1) : null,
+        });
+      }
     }
-    const popup = `<b>${escapeHtml(p.name)}</b><br>${escapeHtml(p.on_street)}<br>${detail}`
-      + (p.length_miles ? `<br>${p.length_miles.toFixed(2)} mi` : "")
-      + (p.notes ? `<br><i>${escapeHtml(p.notes)}</i>` : "");
-    groupFor(p).push({
-      latlngs: segs.length === 1 ? segs[0] : segs,
-      color: pathColor(p, colorMode),
-      weight, dash, popup,
-      tooltip: escapeHtml(p.name),
-      arrows: p.directions === 1 ? segs.map(chevron) : [],
-      id: p.id || "",
-      upgrades: p.upgrades || "",
-      phase: p.status === "proposed" ? p.phase : null,
-    });
   }
 
-  const pts = paths.flatMap((p) => p.segments.flat());
+  const pts = features.flatMap((f) => f.geometry.flat());
   const center = pts.length
     ? [pts.reduce((s, q) => s + q[0], 0) / pts.length,
        pts.reduce((s, q) => s + q[1], 0) / pts.length]
-    : [42.4251, -71.0662];
+    : [0, 0];
 
   // Slider stops: Today, then each phase that has proposed work.
   const phaseNums = [...new Set([...groups.values()]
     .map((g) => g.phase).filter((n) => n !== null))].sort((a, b) => a - b);
   const stops = [{ n: 0, caption: "Today" }];
   for (const n of phaseNums) {
-    const cfg = phases.get(n);
+    const cfg = [...phases.values()].find((p) => p.number === n);
     let caption = `Phase ${n}`;
     if (cfg && cfg.label) caption += `: ${cfg.label}`;
-    if (cfg && cfg.deadline) caption += ` — by ${cfg.deadline}`;
+    if (cfg && cfg.target_date) caption += ` — by ${cfg.target_date}`;
     stops.push({ n, caption });
   }
   if (stops.length > 1) {
@@ -147,29 +181,17 @@ export function renderHtml(paths, net, {
   const firstPhase = phaseNums.length ? phaseNums[0] : 1;
 
   const data = {
-    city: net.city,
+    city: net.displayName || "",
     center,
     boundary: boundary || [],
     groups: [...groups.entries()]
       .sort((a, b) => (a[1].order[0] - b[1].order[0])
                       || (a[1].order[1] - b[1].order[1]))
       .map(([name, g]) => ({ name, features: g.features, phase: g.phase })),
-    spots: (spots || []).filter((s) => s.location).map((s) => ({
-      lat: s.location[0],
-      lon: s.location[1],
-      glyph: spotGlyph(s.type),
-      color: spotColor(s),
-      tooltip: escapeHtml(s.name || spotLabel(s.type)),
-      popup: `<b>${escapeHtml(s.name || spotLabel(s.type))}</b><br>`
-        + (s.status === "existing" ? escapeHtml(spotLabel(s.type))
-           : `Proposed ${escapeHtml(spotLabel(s.type).toLowerCase())}`)
-        + (s.status === "proposed" && s.phase !== null && s.phase !== undefined
-           ? ` &middot; Phase ${s.phase}` : "")
-        + (s.notes ? `<br><i>${escapeHtml(s.notes)}</i>` : ""),
-      // Proposed spots appear once the slider reaches their phase.
-      phase: s.status === "proposed"
-        ? (s.phase === null || s.phase === undefined ? firstPhase : s.phase)
-        : null,
+    // Point treatments, drawn as glyph markers. A proposed one with no phase
+    // is part of the plan but unscheduled: it appears at the first stop.
+    spots: points.map((pt) => ({
+      ...pt, phase: pt.phase === null ? null : (pt.phase || firstPhase),
     })),
     layers: (contextLayers || []).map(({ entry, geojson }) => ({
       label: entry.label || entry.id,
@@ -207,7 +229,7 @@ ${phased ? `  #phase-slider-box { position: fixed; bottom: 24px; left: 50%;
 </head>
 <body>
 <div id="map"></div>
-${legendHtml(net, colorMode, paths, spots, phased ? 96 : 24)}
+${legendHtml(net, colorMode, legendRows, phased ? 96 : 24)}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 var DATA = ${json};

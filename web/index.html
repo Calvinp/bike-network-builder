@@ -21,9 +21,15 @@
     <label class="checkbox" title="How the network is color-coded, on screen and in exported maps">
       Color by
       <select id="color-mode">
-        <option value="type" selected>Path type</option>
-        <option value="phase">Phase</option>
+        <option value="phase" selected>Phase</option>
+        <option value="treatment">What is built</option>
         <option value="single">One color</option>
+      </select></label>
+    <label class="checkbox" title="Distances and cost rates are stored in metric; this only changes what you see">
+      Units
+      <select id="units">
+        <option value="imperial" selected>miles</option>
+        <option value="metric">kilometres</option>
       </select></label>
     <label class="checkbox" title="Preview the network as it will exist after each phase. Totals and exports always cover the full plan.">
       Show
@@ -61,17 +67,24 @@
       <div class="card" id="totals-card">
         <h2>Network totals</h2>
         <div class="totals">
-          <div><div class="num" id="t-city">–</div><div class="lbl">city corridor-mi</div></div>
-          <div><div class="num" id="t-lane">–</div><div class="lbl">bike-lane-mi</div></div>
-          <div><div class="num" id="t-state">–</div><div class="lbl">state-road mi (request)</div></div>
-          <div><div class="num" id="t-count">–</div><div class="lbl">city paths</div></div>
+          <div><div class="num" id="t-city">–</div><div class="lbl" id="t-city-lbl">corridor-mi</div></div>
+          <div><div class="num" id="t-lane">–</div><div class="lbl" id="t-lane-lbl">bike-lane-mi</div></div>
+          <div><div class="num" id="t-existing">–</div><div class="lbl">already built</div></div>
+          <div><div class="num" id="t-count">–</div><div class="lbl">corridors</div></div>
         </div>
         <div class="costs">
-          <div class="costrow"><span>Est. cost — city builds</span><b id="c-city">–</b></div>
-          <div class="costrow"><span>Est. cost — state builds</span><b id="c-state">–</b></div>
-          <div class="costrow ctotal"><span>Est. cost — total</span><b id="c-total">–</b></div>
-          <div class="costrow" id="t-spots-row" style="display:none"><span>Spot improvements</span><b id="t-spots">–</b></div>
+          <div class="costrow ctotal"><span>Est. cost</span><b id="c-total">–</b></div>
+          <div class="costrow" id="t-quantities-row" style="display:none"><span id="t-quantities">–</span></div>
         </div>
+        <details id="by-group-box" style="display:none">
+          <summary class="cardsum">Breakdown</summary>
+          <div class="field"><label>Group by</label><select id="group-by">
+            <option value="authority">who builds it</option>
+            <option value="area">area</option>
+          </select></div>
+          <div id="by-group"></div>
+        </details>
+        <div id="unknown-warn" class="warnchip" style="display:none"></div>
         <button id="unnamed-warn" class="warnchip" style="display:none"
           title="Click to jump to the next path that still has a default name"></button>
       </div>
@@ -79,37 +92,37 @@
       <div class="card">
         <h2>Selected <span id="sel-pill"></span></h2>
         <div id="prop-empty" class="empty">Click a line on the map to edit it, or use “Add path”.</div>
-        <div id="spot-form" style="display:none">
-          <div class="field"><label>Type</label><select id="s-type"></select></div>
-          <div class="field"><label>Name (optional)</label><input id="s-name" /></div>
-          <div class="row2">
-            <div class="field"><label>Status</label><select id="s-status">
-              <option value="proposed">proposed</option><option value="existing">existing</option>
-            </select></div>
-            <div class="field"><label>Phase</label><select id="s-phase"></select></div>
-          </div>
-          <div class="field"><label>Jurisdiction</label><select id="s-juris"></select></div>
-          <div class="field"><label>Notes</label><textarea id="s-notes" rows="2"></textarea></div>
-          <p class="hint">Drag the marker on the map to move it.</p>
-          <div class="btnrow">
-            <button id="btn-spot-delete" class="danger">Delete spot</button>
-          </div>
-        </div>
         <div id="prop-form" style="display:none">
           <div class="field"><label>Name</label><input id="f-name" /></div>
+          <!-- One place can have several things built at it: a bike lane AND a
+               raised crossing AND street trees. Each is a "treatment" with its
+               own status, phase and who-builds-it. -->
+          <div class="field">
+            <label>What is here</label>
+            <div id="treatment-tabs" class="treatment-tabs"></div>
+            <button id="btn-add-treatment" class="ghost small">+ Add another</button>
+          </div>
           <div class="row2">
             <div class="field"><label>Status</label><select id="f-status"></select></div>
             <div class="field"><label>Type</label><select id="f-type"></select></div>
           </div>
           <div class="row2">
             <div class="field"><label>Phase</label><select id="f-phase"></select></div>
-            <div class="field"><label>Directions</label><select id="f-dir">
-              <option value="2">2 (one each way)</option><option value="1">1 (one-way)</option>
-            </select></div>
+            <div class="field" id="quantity-field" style="display:none">
+              <label id="quantity-label">How many</label><input id="f-quantity" type="number" min="0" />
+            </div>
           </div>
           <div class="row2">
-            <div class="field"><label>Jurisdiction</label><select id="f-juris"></select></div>
+            <div class="field"><label>Who builds it</label><select id="f-auth"></select></div>
             <div class="field"><label>Length</label><input id="f-len" disabled /></div>
+          </div>
+          <div class="row2" id="line-only-fields">
+            <div class="field"><label>Which way</label><select id="f-travel">
+              <option value="two_way">both ways</option><option value="one_way">one way</option>
+            </select></div>
+            <div class="field"><label>Sides of the street</label><select id="f-sides">
+              <option value="2">2 (one each side)</option><option value="1">1 (all on one side)</option>
+            </select></div>
           </div>
           <div class="field"><label>Notes</label><textarea id="f-notes" rows="2"></textarea></div>
           <div class="field" id="upgrade-row" style="display:none">
@@ -125,9 +138,13 @@
               from this network. Fine to leave blank.</p>
             <div class="field"><label>On street</label><input id="f-on" /></div>
             <div class="row2">
-              <div class="field"><label>From (intersection)</label><input id="f-from" /></div>
-              <div class="field"><label>To (intersection)</label><input id="f-to" /></div>
+              <div class="field"><label>Start (intersection)</label><input id="f-start" /></div>
+              <div class="field"><label>End (intersection)</label><input id="f-end" /></div>
             </div>
+            <div class="field" id="side-field"><label>Which side of the street</label>
+              <select id="f-side"></select></div>
+            <div class="field"><label>Whose proposal</label><input id="f-proposed-by"
+              placeholder="e.g. the City 2030 plan" /></div>
           </details>
           <div class="btnrow">
             <button id="btn-snap-sel" class="ghost">Snap to roads</button>
@@ -137,7 +154,7 @@
               title="Merge another path into this one, so they act as a single entry">Combine…</button>
             <button id="btn-upgrade" class="ghost"
               title="Add a later-phase project that replaces this one (e.g. quick-build now, concrete later). The corridor counts once in the totals; each phase's work is costed.">↑ Plan an upgrade</button>
-            <button id="btn-delete" class="danger">Delete path</button>
+            <button id="btn-delete" class="danger">Delete</button>
           </div>
         </div>
       </div>
@@ -147,7 +164,9 @@
           <summary class="cardsum">Phases &amp; dates</summary>
           <div id="phases"></div>
           <div class="btnrow"><button id="btn-add-phase" class="ghost">+ Add phase</button></div>
-          <p class="hint">Dates are free text (e.g. “December 31, 2029”). Push them back if the plan takes a while to adopt.</p>
+          <p class="hint">Target dates can be a year (2029), a month (2029-12)
+            or a day (2029-12-31). Push them back if the plan takes a while to
+            adopt.</p>
         </details>
       </div>
 

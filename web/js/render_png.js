@@ -6,11 +6,12 @@
 // rotated dark glyphs with a white outline, scale bar, north arrow, legend.
 // Browser-only (needs a DOM canvas); everything upstream of it is node-tested.
 import { lonlatToMercator } from "./geometry.js";
-import { phaseMap, supersededIds } from "./network_format.js";
+import { supersededIds } from "./network_format.js";
+import { registry } from "./registry.js";
 import {
-  BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR, SPOT_GLYPHS,
-  STATE_COLOR, TYPE_COLORS, labelText, pathColor, phaseColor, spotColor,
-  spotGlyph, spotLabel, typeLabel,
+  BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR,
+  UNDER_CONSTRUCTION_COLOR, dashFor, featureStrokes, labelText, phaseColor,
+  pointColor, treatmentColor, treatmentGlyph, treatmentLabel,
 } from "./render_common.js";
 
 const FIG_IN = 16;                   // matplotlib figsize
@@ -26,9 +27,10 @@ const pt = (v) => v * PX_PER_PT;
 const font = (sizePt, weight = "") =>
   `${weight ? weight + " " : ""}${Math.round(pt(sizePt))}px "Segoe UI", Arial, sans-serif`;
 
-function mercSegments(p) {
-  return p.segments.filter((s) => s.length >= 2)
-    .map((seg) => seg.map(([lat, lon]) => lonlatToMercator(lat, lon)));
+// Only the LINE parts of a feature project into polylines; point parts are
+// drawn as glyphs elsewhere.
+function mercSegments(f) {
+  return f.lines().map((seg) => seg.map(([lat, lon]) => lonlatToMercator(lat, lon)));
 }
 
 // The point a fraction t (0..1) along a polyline's arc length.
@@ -54,39 +56,43 @@ function legendRows(net, colorMode, seen) {
   const rows = [];
   const solid = (color, label, lw = 4) => rows.push({ color, label, lw, dash: null });
   if (colorMode === "phase") {
-    const phases = phaseMap(net);
-    for (const ph of [...seen.phases].sort((a, b) => a - b)) {
-      const cfg = phases.get(ph);
-      let text = `Phase ${ph}` + (cfg && cfg.label ? `: ${cfg.label}` : "");
-      if (cfg && cfg.deadline) text += ` (by ${cfg.deadline})`;
-      solid(phaseColor(ph), text);
+    for (const p of [...net.phases].sort((a, b) => a.number - b.number)) {
+      if (!seen.phases.has(p.number)) continue;
+      let text = `Phase ${p.number}` + (p.label ? `: ${p.label}` : "");
+      if (p.target_date) text += ` (by ${p.target_date})`;
+      solid(phaseColor(p.number), text);
     }
-    if (seen.state) solid(STATE_COLOR, "On a state road (needs MassDOT approval)");
-    if (seen.funded) rows.push({ color: FUNDED_COLOR, lw: 3.6, dash: FUNDED_DASH,
-                                 label: "Approved / funded (not yet built)" });
-    if (seen.existing) rows.push({ color: EXISTING_COLOR, lw: 3.2, dash: EXISTING_DASH,
-                                   label: "Existing infrastructure" });
-  } else if (colorMode === "type") {
-    for (const t of Object.keys(TYPE_COLORS).filter((t) => seen.types.has(t))) {
-      solid(TYPE_COLORS[t], typeLabel(t));
+  } else if (colorMode === "treatment") {
+    // One row per treatment present, in registry draw order — never one row
+    // per combination, which would be unreadable.
+    for (const spec of registry().sortedForDraw([...seen.types])) {
+      solid(treatmentColor(spec.id), spec.label);
     }
-    if (seen.funded) rows.push({ color: "#555555", lw: 3.6, dash: FUNDED_DASH,
-                                 label: "Dashed: approved / funded (not yet built)" });
-    if (seen.existing) rows.push({ color: "#555555", lw: 3.2, dash: EXISTING_DASH,
-                                   label: "Dashed: existing infrastructure" });
   } else {
     solid(SINGLE_COLOR, "Bike network (proposed)");
-    if (seen.funded) rows.push({ color: SINGLE_COLOR, lw: 3.6, dash: FUNDED_DASH,
-                                 label: "Approved / funded (not yet built)" });
-    if (seen.existing) rows.push({ color: SINGLE_COLOR, lw: 3.2, dash: EXISTING_DASH,
-                                   label: "Existing infrastructure" });
   }
-  if (seen.boundary) rows.push({ color: BOUNDARY_COLOR, lw: 1.4, dash: BOUNDARY_DASH,
-                                 label: `${net.city} city boundary` });
-  // One row per spot kind present; the glyph stands in for the line swatch.
-  for (const kind of Object.keys(SPOT_GLYPHS).filter((k) => seen.spots.has(k))) {
-    rows.push({ glyph: spotGlyph(kind), color: "#1a1a1a", lw: 0, dash: null,
-                label: spotLabel(kind) });
+  // Status is carried by dash pattern, orthogonal to the colour modes.
+  const statusColor = (fallback) => (colorMode === "phase" ? fallback : "#555555");
+  if (seen.funded) {
+    rows.push({ color: statusColor(FUNDED_COLOR), lw: 3.6, dash: FUNDED_DASH,
+                label: "Approved / funded (not yet built)" });
+  }
+  if (seen.under_construction) {
+    rows.push({ color: statusColor(UNDER_CONSTRUCTION_COLOR), lw: 3.4,
+                dash: [2, 6], label: "Under construction" });
+  }
+  if (seen.existing) {
+    rows.push({ color: statusColor(EXISTING_COLOR), lw: 3.2, dash: EXISTING_DASH,
+                label: "Existing infrastructure" });
+  }
+  if (seen.boundary) {
+    rows.push({ color: BOUNDARY_COLOR, lw: 1.4, dash: BOUNDARY_DASH,
+                label: `${net.displayName || "Area"} boundary` });
+  }
+  // One row per point treatment present; the glyph stands in for the swatch.
+  for (const spec of registry().sortedForDraw([...seen.points])) {
+    rows.push({ glyph: spec.glyph || "●", color: "#1a1a1a", lw: 0,
+                dash: null, label: spec.label });
   }
   return rows;
 }
@@ -165,12 +171,11 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-export async function renderPng(paths, net, {
+export async function renderPng(features, net, {
   boundary = null,
-  colorMode = "type",
+  colorMode = "treatment",
   basemap = true,
   title = null,
-  spots = [],
   // Long side of the image in pixels. Animation frames pass something small;
   // the extent comes from the boundary, so every frame lands on the same
   // canvas and the map does not jump as the GIF plays.
@@ -187,7 +192,11 @@ export async function renderPng(paths, net, {
   const stroke = (c, seg, to, opts) => strokePolyline(c, seg, to, { ...opts, s: S });
 
   // ---- projection & canvas layout -------------------------------------- //
-  const mercByPath = new Map(paths.map((p) => [p, mercSegments(p)]));
+  const phaseNumberOf = (id) => {
+    const p = net.phaseMap().get(id);
+    return p ? p.number : null;
+  };
+  const mercByPath = new Map(features.map((f) => [f, mercSegments(f)]));
   const allPts = [...mercByPath.values()].flat(2);
   const boundaryMerc = (boundary || []).map(
     (ring) => ring.map(([lat, lon]) => lonlatToMercator(lat, lon)));
@@ -233,61 +242,92 @@ export async function renderPng(paths, net, {
   }
 
   // ---- the network ------------------------------------------------------ //
-  const seen = { phases: new Set(), types: new Set(),
-                 existing: false, funded: false, state: false,
-                 spots: new Set((spots || []).map((s) => s.type)),
+  const seen = { phases: new Set(), types: new Set(), points: new Set(),
+                 existing: false, under_construction: false, funded: false,
                  boundary: Boolean(boundaryMerc.length) };
-  // A path drawn together with the upgrade that replaces it is completely
+  // A treatment drawn together with the upgrade that replaces it is completely
   // covered by it, so only its chevron would still show — an arrow claiming
   // the new lane is one-way. The replacement owns the direction now.
-  const replaced = supersededIds(paths);
+  const replaced = supersededIds({
+    features,
+    allTreatments: () => features.flatMap((f) => f.treatments.map((t) => [f, t])),
+  });
   const arrowPts = [];    // mercator chevron positions (labels avoid them)
   const labelPick = new Map();
+  const pointDraws = [];  // {mx, my, glyph, color}
 
-  for (const p of paths) {
-    const segs = mercByPath.get(p);
-    if (!segs.length) continue;
-    seen.types.add(p.type);
-    if (p.status === "existing") seen.existing = true;
-    else if (p.status === "funded") seen.funded = true;
-    else if (p.jurisdiction === "state") seen.state = true;
-    else if (p.phase !== null && p.phase !== undefined) seen.phases.add(p.phase);
+  // Every treatment is drawn: STACKED STROKES on one geometry, widest first.
+  // strokesByFeature preserves that order, and nothing reads treatments[0].
+  const strokesByFeature = new Map(features.map(
+    (f) => [f, featureStrokes(f, colorMode, { phaseNumberOf })]));
 
-    // Label candidates: skip very short paths — their labels are clutter.
-    if (p.status !== "existing" && !(p.length_miles > 0 && p.length_miles < 0.2)) {
-      const text = labelText(p);
+  for (const f of features) {
+    for (const t of f.treatments) {
+      if (t.status === "existing") seen.existing = true;
+      else if (t.status === "under_construction") seen.under_construction = true;
+      else if (t.status === "funded") seen.funded = true;
+      else {
+        const n = phaseNumberOf(t.phase);
+        if (n !== null) seen.phases.add(n);
+      }
+      if (f.lines().length) seen.types.add(t.type);
+      if (f.points().length) {
+        seen.points.add(t.type);
+        for (const pt of f.points()) {
+          const [mx, my] = lonlatToMercator(pt[0], pt[1]);
+          pointDraws.push({ mx, my, glyph: treatmentGlyph(t.type),
+                            color: pointColor(t) });
+        }
+      }
+    }
+
+    // Label candidates: skip very short features — their labels are clutter.
+    const km = f.length_km || 0;
+    const onlyExisting = f.treatments.every((t) => t.status === "existing");
+    if (!onlyExisting && !(km > 0 && km < 0.32)) {
+      const text = labelText(f);
       const prev = labelPick.get(text);
-      if (text && (!prev || p.length_miles > prev.length_miles)) labelPick.set(text, p);
+      if (text && (!prev || km > (prev.length_km || 0))) labelPick.set(text, f);
     }
   }
 
-  // Pass 1: existing (dashed) + white halos under every proposed line.
-  for (const p of paths) {
-    const color = pathColor(p, colorMode);
-    for (const seg of mercByPath.get(p)) {
-      if (p.status === "existing") {
-        stroke(ctx, seg, toPx, { color, lwPt: 3.2, dashPt: EXISTING_DASH });
-      } else if (p.status !== "funded") {
-        stroke(ctx, seg, toPx, { color: "#ffffff", lwPt: 6.0, alpha: 0.55 });
+  // Pass 1: white halos under every non-existing stroke, so a line stays
+  // readable over a busy basemap. Existing lines draw dashed in this pass —
+  // they are context and sit underneath.
+  for (const f of features) {
+    for (const stroke_ of strokesByFeature.get(f)) {
+      const t = stroke_.treatment;
+      for (const seg of mercByPath.get(f)) {
+        if (t.status === "existing") {
+          stroke(ctx, seg, toPx, { color: stroke_.color, lwPt: 3.2,
+                                   dashPt: EXISTING_DASH });
+        } else {
+          stroke(ctx, seg, toPx, { color: "#ffffff",
+                                   lwPt: stroke_.weight + 2.0, alpha: 0.55 });
+        }
       }
     }
   }
-  // Pass 2: funded (dashed) + proposed strokes.
-  for (const p of paths) {
-    const color = pathColor(p, colorMode);
-    for (const seg of mercByPath.get(p)) {
-      if (p.status === "funded") {
-        stroke(ctx, seg, toPx, { color, lwPt: 3.6, dashPt: FUNDED_DASH });
-      } else if (p.status !== "existing") {
-        stroke(ctx, seg, toPx, { color, lwPt: 4.0 });
-      }
-      if (p.directions === 1 && seg.length >= 2 && !replaced.has(p.id)) {
-        const k = Math.max(1, Math.floor(seg.length / 2));
-        const [x0, y0] = seg[k - 1];
-        const [x1, y1] = seg[k];
-        if (x1 !== x0 || y1 !== y0) {
-          arrowPts.push({ mx: (x0 + x1) / 2, my: (y0 + y1) / 2,
-                          angle: Math.atan2(y1 - y0, x1 - x0) });
+  // Pass 2: the strokes themselves, widest first so the highest-ranked
+  // treatment ends up on top.
+  for (const f of features) {
+    const strokes = strokesByFeature.get(f);
+    for (const stroke_ of strokes) {
+      const t = stroke_.treatment;
+      if (t.status === "existing") continue;      // already drawn in pass 1
+      const dashPt = t.status === "funded" ? FUNDED_DASH
+        : t.status === "under_construction" ? [2, 6] : null;
+      for (const seg of mercByPath.get(f)) {
+        stroke(ctx, seg, toPx, { color: stroke_.color,
+                                 lwPt: stroke_.weight * 0.8, dashPt });
+        if (t.travel === "one_way" && seg.length >= 2 && !replaced.has(t.id)) {
+          const k = Math.max(1, Math.floor(seg.length / 2));
+          const [x0, y0] = seg[k - 1];
+          const [x1, y1] = seg[k];
+          if (x1 !== x0 || y1 !== y0) {
+            arrowPts.push({ mx: (x0 + x1) / 2, my: (y0 + y1) / 2,
+                            angle: Math.atan2(y1 - y0, x1 - x0) });
+          }
         }
       }
     }
@@ -318,12 +358,11 @@ export async function renderPng(paths, net, {
     ctx.restore();
   }
 
-  // Spot (point) improvements: the same glyph-with-a-white-outline idiom.
+  // Point treatments: the same glyph-with-a-white-outline idiom the chevrons
+  // use, so every surface draws the same characters the same way.
   const spotPts = [];   // mercator, so route labels can steer around them
-  for (const s of spots || []) {
-    if (!s.location) continue;
-    const [mx, my] = lonlatToMercator(s.location[0], s.location[1]);
-    const [x, y] = toPx(mx, my);
+  for (const d of pointDraws) {
+    const [x, y] = toPx(d.mx, d.my);
     ctx.save();
     ctx.font = font(9, "bold");
     ctx.textAlign = "center";
@@ -331,11 +370,11 @@ export async function renderPng(paths, net, {
     ctx.lineWidth = pt(2.5);
     ctx.lineJoin = "round";
     ctx.strokeStyle = "#ffffff";
-    ctx.strokeText(spotGlyph(s.type), x, y);
-    ctx.fillStyle = spotColor(s);
-    ctx.fillText(spotGlyph(s.type), x, y);
+    ctx.strokeText(d.glyph, x, y);
+    ctx.fillStyle = d.color;
+    ctx.fillText(d.glyph, x, y);
     ctx.restore();
-    spotPts.push({ mx, my });
+    spotPts.push({ mx: d.mx, my: d.my });
   }
 
   // ---- route labels (greedy declutter, drop rather than overlap) -------- //
@@ -352,12 +391,12 @@ export async function renderPng(paths, net, {
     [a.mx - 2 * charW, a.my - boxH, a.mx + 2 * charW, a.my + boxH]);
 
   const ranked = [...labelPick.entries()]
-    .sort((a, b) => b[1].length_miles - a[1].length_miles);
+    .sort((a, b) => (b[1].length_km || 0) - (a[1].length_km || 0));
   for (const [text, p] of ranked) {
     const own = mercByPath.get(p) || [];
     if (!own.length) continue;
     const seg = own.reduce((m, s) => (s.length > m.length ? s : m), own[0]);
-    const others = paths.filter((q) => q !== p)
+    const others = features.filter((q) => q !== p)
       .flatMap((q) => mercByPath.get(q) || []).flat();
     let best = null;   // [crowd, box, [mx, my]]
     for (const t of [0.5, 0.38, 0.62, 0.25, 0.75, 0.12, 0.88]) {
@@ -391,7 +430,7 @@ export async function renderPng(paths, net, {
   // ---- map furniture ----------------------------------------------------- //
   const mapTop = titleH, mapH = H - titleH;
   // Scale bar (0.5 mi, corrected for mercator stretch at the mean latitude).
-  const lats = paths.flatMap((p) => p.segments.flat()).map(([lat]) => lat);
+  const lats = features.flatMap((f) => f.geometry.flat()).map(([lat]) => lat);
   if (lats.length) {
     const meanLat = lats.reduce((a, b) => a + b, 0) / lats.length;
     const mercLen = (0.5 * 1609.344) / Math.cos((meanLat * Math.PI) / 180);

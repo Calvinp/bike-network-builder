@@ -1,7 +1,7 @@
 """Tests for parsing and validating corridors.yaml, the OSM seed (pure, no network)."""
 import pytest
 from bikenetwork.model import parse_seed, validate_seed
-from bikenetwork.network_format import BikePath, PATH_TYPES, STATUSES
+from bikenetwork.model import Corridor
 
 
 VALID_YAML = """
@@ -38,21 +38,21 @@ def _wrap(corridor_yaml: str) -> str:
             "  - {phase: 2, label: More, deadline: '2032'}\ncorridors:\n" + indented)
 
 
-def test_parse_returns_network_of_paths():
-    net = parse_seed(VALID_YAML)
-    assert net.city == "Malden"
-    assert [p.number for p in net.phases] == [1, 2]
-    assert len(net.paths) == 2
-    assert isinstance(net.paths[0], BikePath)
-    assert net.paths[0].on_street == "Main Street"
-    assert net.paths[0].frm == "Main Street & Pleasant Street"
-    assert net.paths[0].to == "Main Street & Salem Street"
-    assert net.paths[0].phase == 1
-    assert net.paths[1].type == "concrete_separated"
+def test_parse_returns_a_seed_of_corridors():
+    seed = parse_seed(VALID_YAML)
+    assert seed.city == "Malden"
+    assert [p["phase"] for p in seed.phases] == [1, 2]
+    assert len(seed.corridors) == 2
+    assert isinstance(seed.corridors[0], Corridor)
+    assert seed.corridors[0].on_street == "Main Street"
+    assert seed.corridors[0].frm == "Main Street & Pleasant Street"
+    assert seed.corridors[0].to == "Main Street & Salem Street"
+    assert seed.corridors[0].phase == 1
+    assert seed.corridors[1].type == "concrete_separated"
 
 
 def test_parse_accepts_legacy_treatment_key():
-    net = parse_seed(_wrap("""
+    seed = parse_seed(_wrap("""
 - name: Old style
   on_street: Main Street
   from: Main Street & A Street
@@ -60,12 +60,12 @@ def test_parse_accepts_legacy_treatment_key():
   phase: 1
   treatment: concrete_separated
 """))
-    assert net.paths[0].type == "concrete_separated"
+    assert seed.corridors[0].type == "concrete_separated"
 
 
 def test_parse_defaults_status_to_proposed():
-    net = parse_seed(VALID_YAML)
-    assert net.paths[1].status == "proposed"  # omitted in YAML
+    seed = parse_seed(VALID_YAML)
+    assert seed.corridors[1].status == "proposed"  # omitted in YAML
 
 
 def test_valid_network_has_no_errors():
@@ -73,21 +73,21 @@ def test_valid_network_has_no_errors():
 
 
 def test_missing_required_field_is_error():
-    net = parse_seed(_wrap("""
+    seed = parse_seed(_wrap("""
 - name: Bad
   on_street: Main Street
   from: Main Street & X Street
   phase: 1
   type: quick_build_separated
 """))
-    errors = validate_seed(net)
+    errors = validate_seed(seed)
     assert any("'to'" in e for e in errors)
 
 
 def test_endpoint_must_reference_on_street():
     # The key lesson: endpoints must be precise intersections ON the corridor
     # street, not neighborhood names like "Malden Center".
-    net = parse_seed(_wrap("""
+    seed = parse_seed(_wrap("""
 - name: Vague
   on_street: Main Street
   from: Malden Center
@@ -95,12 +95,12 @@ def test_endpoint_must_reference_on_street():
   phase: 1
   type: quick_build_separated
 """))
-    errors = validate_seed(net)
+    errors = validate_seed(seed)
     assert any("Malden Center" in e for e in errors)
 
 
 def test_unknown_type_is_error():
-    net = parse_seed(_wrap("""
+    seed = parse_seed(_wrap("""
 - name: Bad type
   on_street: Main Street
   from: Main Street & A Street
@@ -108,12 +108,12 @@ def test_unknown_type_is_error():
   phase: 1
   type: gold_plated
 """))
-    errors = validate_seed(net)
+    errors = validate_seed(seed)
     assert any("type" in e.lower() for e in errors)
 
 
 def test_non_positive_phase_is_error():
-    net = parse_seed(_wrap("""
+    seed = parse_seed(_wrap("""
 - name: Bad phase
   on_street: Main Street
   from: Main Street & A Street
@@ -121,14 +121,14 @@ def test_non_positive_phase_is_error():
   phase: 0
   type: quick_build_separated
 """))
-    errors = validate_seed(net)
+    errors = validate_seed(seed)
     assert any("phase" in e.lower() for e in errors)
 
 
 def test_duplicate_names_are_seed_errors():
     # OSM resolution is keyed by name, so the SEED requires unique names
     # (the editor / network format don't).
-    net = parse_seed(_wrap("""
+    seed = parse_seed(_wrap("""
 - name: Twin
   on_street: Main Street
   from: Main Street & A Street
@@ -142,23 +142,35 @@ def test_duplicate_names_are_seed_errors():
   phase: 1
   type: quick_build_separated
 """))
-    errors = validate_seed(net)
+    errors = validate_seed(seed)
     assert any("duplicate" in e.lower() for e in errors)
 
 
-def test_types_and_statuses_exposed():
-    assert "quick_build_separated" in PATH_TYPES
-    assert "concrete_separated" in PATH_TYPES
-    assert "proposed" in STATUSES
+def test_corridor_types_are_checked_against_the_registry():
+    """corridors.yaml can name any treatment the deployment knows about,
+    including ones added to data/treatments.json since this code was written."""
+    from bikenetwork.registry import load_registry
+    reg = load_registry()
+    assert reg.is_known("quick_build_separated")
+    assert reg.is_known("concrete_separated")
+    errors = validate_seed(parse_seed(_wrap("""
+- name: X Street
+  on_street: X Street
+  from: X Street & A Street
+  to: X Street & B Street
+  phase: 1
+  type: not_a_real_treatment
+""")))
+    assert any("treatment registry" in e for e in errors)
 
 
 def test_jurisdiction_defaults_to_city():
-    net = parse_seed(VALID_YAML)
-    assert net.paths[0].jurisdiction == "city"
+    seed = parse_seed(VALID_YAML)
+    assert seed.corridors[0].jurisdiction == "city"
 
 
 def test_unknown_jurisdiction_is_error():
-    net = parse_seed(_wrap("""
+    seed = parse_seed(_wrap("""
 - name: Bad juris
   on_street: Broadway
   from: Broadway & A Street
@@ -167,12 +179,12 @@ def test_unknown_jurisdiction_is_error():
   type: concrete_separated
   jurisdiction: county
 """))
-    errors = validate_seed(net)
+    errors = validate_seed(seed)
     assert any("jurisdiction" in e.lower() for e in errors)
 
 
 def test_state_jurisdiction_is_valid():
-    net = parse_seed(_wrap("""
+    seed = parse_seed(_wrap("""
 - name: Broadway (state)
   on_street: Broadway
   from: Broadway & A Street
@@ -181,5 +193,5 @@ def test_state_jurisdiction_is_valid():
   type: concrete_separated
   jurisdiction: state
 """))
-    assert net.paths[0].jurisdiction == "state"
-    assert validate_seed(net) == []
+    assert seed.corridors[0].jurisdiction == "state"
+    assert validate_seed(seed) == []

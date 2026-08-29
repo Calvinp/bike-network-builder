@@ -1,10 +1,31 @@
-// Shared rendering vocabulary: the Okabe-Ito palette, per-mode path colors,
-// and label helpers. Port of the constants/helpers in bikenetwork/render_map.py
-// — the ONE place the palette lives in the web app (the Python renderers keep
-// their own copies; keep them in step).
-export const COLOR_MODES = ["phase", "type", "single"];
+// Shared rendering vocabulary: colours, glyphs, labels, and the rule for
+// drawing a feature that carries SEVERAL treatments.
+//
+// The ONE place the palette lives. Colours and glyphs for treatments come from
+// the registry (data/treatments.json); everything here is the presentation
+// logic around them.
+//
+// ## The multi-treatment rule
+//
+// A feature draws EVERY treatment it carries, as STACKED STROKES on the same
+// geometry: widest first, narrowest last, ordered by the registry's
+// `stack_rank`. Two draw calls, no parallel-offset geometry maths, identical
+// in the editor, the exported HTML, the PNG and the GIF frames.
+//
+// `stack_rank` is Z-ORDER ONLY, never semantics. It decides what is drawn on
+// top; it never designates a "primary" treatment, and NOTHING may consult
+// `treatments[0]` — list order is declared insignificant precisely so a future
+// `arrangement:` key stays reachable. Two files listing the same treatments in
+// a different order must render identically; a test pins exactly that.
+//
+// Below MIN_STACK_ZOOM, or past MAX_STACKED, stacked strokes turn to mush and
+// we fall back to the highest-ranked treatment alone. The legend lists
+// treatments, never combinations.
+import { registry } from "./registry.js";
 
-// Okabe-Ito palette — distinguishable for all common types of color blindness.
+export const COLOR_MODES = ["phase", "treatment", "single"];
+
+// Okabe-Ito — distinguishable for all common types of colour blindness.
 export const PHASE_COLORS = {
   1: "#0072B2",  // blue
   2: "#009E73",  // bluish green
@@ -12,113 +33,136 @@ export const PHASE_COLORS = {
   4: "#E69F00",  // orange
   5: "#56B4E9",  // sky blue
 };
-export const TYPE_COLORS = {
-  quick_build_separated: "#0072B2",
-  concrete_separated: "#D55E00",
-  shared_use_path: "#009E73",
-  buffered_painted: "#E69F00",
-  neighborway: "#56B4E9",
-  // Reddish purple deliberately shared with STATE_COLOR: that color only
-  // appears in phase mode, where type colors never draw.
-  pedestrianized: "#CC79A7",
-};
-export const TYPE_LABELS = {
-  quick_build_separated: "Quick-build separated lane",
-  concrete_separated: "Concrete-protected lane",
-  shared_use_path: "Shared-use path",
-  buffered_painted: "Buffered painted lane (interim)",
-  neighborway: "Neighborway (calm shared street)",
-  pedestrianized: "Pedestrianized street",
-};
 
-// Spot (point) improvements: glyphs mirrored from render_map.py so the PNG,
-// the interactive map and the editor all draw the same characters.
-export const SPOT_GLYPHS = {
-  speed_hump: "∩",
-  raised_crosswalk: "▬",
-  raised_intersection: "◆",
-  curb_extension: "◖",
-  modal_filter: "⊘",             // no through motor traffic
-  bollards: "‖",                 // a line of posts
-  retractable_bollards: "⇕",     // posts that drop and rise
-  bike_parking: "P",
-  street_trees: "T",
-  other: "●",
-};
-export const SPOT_LABELS = {
-  speed_hump: "Speed hump",
-  raised_crosswalk: "Raised crosswalk",
-  raised_intersection: "Raised intersection",
-  curb_extension: "Curb extension",
-  modal_filter: "Modal filter",
-  bollards: "Bollards",
-  retractable_bollards: "Retractable bollards",
-  bike_parking: "Bike parking",
-  street_trees: "Street trees",
-  other: "Spot improvement",
-};
-export const SPOT_PROPOSED_COLOR = "#1a1a1a";
-export const SPOT_EXISTING_COLOR = "#707070";
-
-export const spotGlyph = (type) => SPOT_GLYPHS[type] || SPOT_GLYPHS.other;
-export const spotLabel = (type) => SPOT_LABELS[type] || String(type).replace(/_/g, " ");
-export const spotColor = (s) => (s.status === "existing"
-  ? SPOT_EXISTING_COLOR : SPOT_PROPOSED_COLOR);
 export const SINGLE_COLOR = "#0072B2";
 export const EXISTING_COLOR = "#000000";
+export const UNDER_CONSTRUCTION_COLOR = "#999999";
 export const FUNDED_COLOR = "#E69F00";
-export const STATE_COLOR = "#CC79A7";
 export const BOUNDARY_COLOR = "#777777";
+export const UNKNOWN_COLOR = "#8c8c8c";
 
-// Names the editor assigns to freshly-drawn paths — never worth labeling.
-export const DEFAULT_NAMES = new Set(["new path", "existing path", "new corridor"]);
+// Point treatments: darker when proposed, grey when already on the ground.
+export const POINT_PROPOSED_COLOR = "#1a1a1a";
+export const POINT_EXISTING_COLOR = "#707070";
 
-export const phaseColor = (phase) => PHASE_COLORS[phase] || "#000000";
+// Stacked-stroke geometry.
+export const BASE_WEIGHT = 4;
+export const WEIGHT_STEP = 3;
+export const MAX_STACKED = 3;
+export const MIN_STACK_ZOOM = 14;
 
-// The line color for a path under a color mode (mirrors render_map.path_color).
-export function pathColor(p, colorMode) {
-  if (colorMode === "single") return SINGLE_COLOR;
-  if (colorMode === "type") return TYPE_COLORS[p.type] || "#444444";
-  if (p.status === "existing") return EXISTING_COLOR;
-  if (p.status === "funded") return FUNDED_COLOR;
-  if (p.jurisdiction === "state") return STATE_COLOR;
-  return phaseColor(p.phase);
+// Names the editor assigns to freshly-drawn features — never worth labelling.
+export const DEFAULT_NAMES = new Set(["new feature", "new path", "existing path",
+                                      "new corridor"]);
+
+export const phaseColor = (number) => PHASE_COLORS[number] || "#000000";
+
+export function treatmentColor(type) {
+  const spec = registry().get(type);
+  return spec.color || (spec.unknown ? UNKNOWN_COLOR : POINT_PROPOSED_COLOR);
 }
 
-// What to call a path on the map: its name without any trailing "(A to B)"
-// qualifier — so multi-segment corridors share one label — or the on_street
-// as a fallback. Empty string = don't label.
-export function labelText(p) {
-  let name = (p.name || "").trim();
+export function treatmentLabel(type) {
+  const spec = registry().get(type);
+  return spec.label || String(type).replace(/_/g, " ");
+}
+
+export function treatmentGlyph(type) {
+  const spec = registry().get(type);
+  return spec.glyph || "●";
+}
+
+// The colour ONE treatment draws in, under a colour mode. `phaseNumberOf` maps
+// a phase id to its number (the caller has the network; this module doesn't).
+export function strokeColor(t, colorMode, phaseNumberOf) {
+  if (colorMode === "single") return SINGLE_COLOR;
+  if (colorMode === "treatment") return treatmentColor(t.type);
+  if (t.status === "existing") return EXISTING_COLOR;
+  if (t.status === "under_construction") return UNDER_CONSTRUCTION_COLOR;
+  if (t.status === "funded") return FUNDED_COLOR;
+  return phaseColor(phaseNumberOf ? phaseNumberOf(t.phase) : null);
+}
+
+// The strokes to draw for a feature, already in draw order: widest first, so
+// the last one drawn sits on top. Returns [{treatment, color, weight, dashed}].
+//
+// `zoom` may be omitted (exports render at a fixed scale); pass it in the
+// editor so a zoomed-out map degrades to a single stroke instead of mush.
+export function featureStrokes(feature, colorMode, { phaseNumberOf, zoom } = {}) {
+  const specs = registry().sortedForDraw(feature.treatments.map((t) => t.type));
+  // Re-associate each spec with its treatment. sortedForDraw is stable and
+  // total, so the same treatments always produce the same order regardless of
+  // how the file happened to list them.
+  const remaining = [...feature.treatments];
+  const ordered = specs.map((spec) => {
+    const i = remaining.findIndex((t) => t.type === spec.id);
+    return remaining.splice(i < 0 ? 0 : i, 1)[0];
+  }).filter(Boolean);
+
+  const tooSmall = (zoom !== undefined && zoom < MIN_STACK_ZOOM);
+  const visible = (tooSmall || ordered.length > MAX_STACKED)
+    ? ordered.slice(-1)                  // the highest-ranked one alone
+    : ordered;
+
+  const n = visible.length;
+  return visible.map((t, i) => ({
+    treatment: t,
+    color: strokeColor(t, colorMode, phaseNumberOf),
+    weight: BASE_WEIGHT + (n - 1 - i) * WEIGHT_STEP,
+    // A treatment that isn't on the ground yet reads as dashed at every level;
+    // status is carried by line style, orthogonal to the colour modes.
+    dashed: t.status !== "existing",
+    dashArray: dashFor(t.status),
+  }));
+}
+
+// Status is carried by line STYLE, which leaves colour free for phase or
+// treatment. Solid = on the ground; the rest get progressively airier dashes.
+export function dashFor(status) {
+  switch (status) {
+    case "existing": return null;
+    case "under_construction": return "2,6";
+    case "funded": return "10,6";
+    default: return "6,6";               // proposed
+  }
+}
+
+export const pointColor = (t) => (t.status === "existing"
+  ? POINT_EXISTING_COLOR : POINT_PROPOSED_COLOR);
+
+// What to call a feature on the map: its name without any trailing "(A to B)"
+// qualifier — so multi-part corridors share one label — or the on_street as a
+// fallback. Empty string = don't label.
+export function labelText(f) {
+  let name = (f.name || "").trim();
   if (DEFAULT_NAMES.has(name.toLowerCase())) name = "";
   name = name.replace(/\s*\([^)]*\)$/, "");
-  return name || (p.on_street || "").trim();
+  return name || (f.on_street || "").trim();
 }
 
-export function typeLabel(t) {
-  return TYPE_LABELS[t] || String(t).replace(/_/g, " ");
-}
-
-// The chevron rotation (CSS degrees) for the midpoint of a segment: screen
+// The chevron rotation (CSS degrees) for the midpoint of a line part: screen
 // angle where x = east, y = SOUTH; lon degrees shrink by cos(lat).
-export function chevron(seg) {
-  const k = Math.max(1, Math.floor(seg.length / 2));
-  const [lat1, lon1] = seg[k - 1];
-  const [lat2, lon2] = seg[k];
+export function chevron(part) {
+  const k = Math.max(1, Math.floor(part.length / 2));
+  const [lat1, lon1] = part[k - 1];
+  const [lat2, lon2] = part[k];
   const dx = (lon2 - lon1) * Math.cos((lat1 * Math.PI) / 180);
   const theta = (Math.atan2(-(lat2 - lat1), dx) * 180) / Math.PI;
   return { lat: (lat1 + lat2) / 2, lon: (lon1 + lon2) / 2, theta };
 }
 
-// Every color a rendered map draws with. The GIF encoder reserves these so a
-// basemap full of pale pixels can't crowd the network's own colors out of the
-// 256-entry palette. (Declared here, after the constants it collects.)
-export const MAP_PALETTE = [
-  ...Object.values(PHASE_COLORS), ...Object.values(TYPE_COLORS),
-  SINGLE_COLOR, EXISTING_COLOR, FUNDED_COLOR, STATE_COLOR, BOUNDARY_COLOR,
-  SPOT_PROPOSED_COLOR, SPOT_EXISTING_COLOR,
-  "#ffffff", "#000000", "#555555", "#1a1a1a", "#eef0ef", "#cccccc",
-];
+// Every colour a rendered map draws with. The GIF encoder reserves these so a
+// basemap full of pale pixels can't crowd the network's own colours out of the
+// 256-entry palette.
+export function mapPalette() {
+  return [
+    ...Object.values(PHASE_COLORS),
+    ...registry().all().map((t) => t.color).filter(Boolean),
+    SINGLE_COLOR, EXISTING_COLOR, UNDER_CONSTRUCTION_COLOR, FUNDED_COLOR,
+    BOUNDARY_COLOR, UNKNOWN_COLOR, POINT_PROPOSED_COLOR, POINT_EXISTING_COLOR,
+    "#ffffff", "#000000", "#555555", "#1a1a1a", "#eef0ef", "#cccccc",
+  ];
+}
 
 export function hexToRgb(hex) {
   const h = hex.replace("#", "");
