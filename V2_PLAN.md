@@ -3,10 +3,10 @@
 Making the tool geography-agnostic, and taking the one backwards-compatibility
 break that buys the room to do it properly. Malden stays the default throughout.
 
-**Status:** design complete. **M-1, M0, M1, M4 and M2 are implemented and
-green** (145 pytest + 246 node, cross-language parity included). M3 and M5
-remain. The one outstanding piece of M2 is operational rather than code:
-generating and hosting a roads-tile archive for a region beyond Malden.
+**Status:** **every milestone is implemented and green** (153 pytest + 274
+node, cross-language parity included). What remains is not code: `help.md`
+(human-authored), manual testing, and the operational half of M2 — generating
+and hosting a roads-tile archive for a region beyond Malden.
 
 **This document is the plan.** The turn-by-turn discussion that produced it,
 including rejected alternatives and the reasoning behind each call, is in

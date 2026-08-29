@@ -3,7 +3,8 @@
 // map.html, (in a browser) map.png, and a mileage summary with the same
 // warnings/notices the desktop tool reports.
 import { featuresToGeojson } from "./geojson.js";
-import { clipFeatures, featuresAsOfPhase, partsKm, summarize } from "./pipeline.js";
+import { assignAreas, clipFeatures, featuresAsOfPhase, partsKm, summarize }
+  from "./pipeline.js";
 import { COLOR_MODES, hexToRgb, mapPalette } from "./render_common.js";
 import { COST_DISCLAIMER, hasCostOverrides } from "./costs.js";
 import { renderHtml } from "./render_html.js";
@@ -167,5 +168,58 @@ export async function buildPhaseArtifacts(net, boundaryRings, clipBoundary, {
     files.push({ name: "phases.gif",
                  blob: new Blob([bytes], { type: "image/gif" }) });
   }
+  return files;
+}
+
+// --------------------------------------------------------------------------
+// Exporting a large network
+// --------------------------------------------------------------------------
+// Past a handful of areas, one file stops being a document. A nationwide PNG
+// is not something anyone wants to look at, and a single YAML holding a whole
+// metro is not something anyone wants to email. So an export over many areas
+// becomes ONE FILE PER AREA plus an index (V2_PLAN.md §9, M5).
+//
+// The threshold is deliberately generous: splitting a two-town network would
+// be officious, and the point is only to stop the pathological case.
+export const SPLIT_ABOVE_AREAS = 4;
+
+export function shouldSplitByArea(net) {
+  return (net.areas || []).length > SPLIT_ABOVE_AREAS;
+}
+
+/**
+ * The network cut into one sub-network per area, plus an `index` describing
+ * the set. Features are assigned by the same rule the totals and the merge
+ * use, so all three agree about which town a corridor is in.
+ */
+export function splitByArea(net, { serialize }) {
+  const areaOf = assignAreas(net.features, net.areas);
+  const buckets = new Map();
+  for (const f of net.features) {
+    const id = areaOf.get(f.id) ?? "";
+    if (!buckets.has(id)) buckets.set(id, []);
+    buckets.get(id).push(f);
+  }
+
+  const files = [];
+  const index = { format: "bike-network-index", format_version: 2, areas: [] };
+  for (const [areaId, features] of buckets) {
+    const area = net.area(areaId);
+    const name = (area && area.name) || "elsewhere";
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+      || "elsewhere";
+    // Each piece is a COMPLETE network file — it opens on its own, rather than
+    // being a fragment that only means something next to its siblings.
+    const piece = { ...net, features,
+                    areas: area ? [area] : [],
+                    allTreatments: () => features.flatMap(
+                      (f) => f.treatments.map((t) => [f, t])) };
+    files.push({ name: `networks/${slug}.yaml`, data: serialize(piece) });
+    index.areas.push({ id: areaId || null, name,
+                       file: `networks/${slug}.yaml`,
+                       features: features.length });
+  }
+  files.push({ name: "networks/index.json",
+               data: JSON.stringify(index, null, 2) });
   return files;
 }

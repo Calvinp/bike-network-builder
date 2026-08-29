@@ -131,6 +131,7 @@ V2_PLAN.md                  the v2 / geography-agnostic plan  <- read this
 V2_DESIGN_NOTES.md          the discussion that produced it
 data/treatments.json        THE REGISTRY. What the tool can represent.
 tools/make_road_tiles.py    cut a street graph into roads tiles for the app
+tools/fetch_existing_infra.py  batch OSM pull -> existing-infra candidates
 bikenetwork/
   place.py                  reads data/place.json; derives the bbox from the boundary
   registry.py               reads data/treatments.json
@@ -147,8 +148,8 @@ data/                       malden_boundary / existing_infra / committed_infra .
 web/                        THE APP. index.html, app.js, style.css, help.md
   js/                       place, registry, network_format, migrate, geometry,
                             boundary, geojson, costs, pipeline, merge, routing,
-                            graph (spatial index + tiles),
-                            store (localStorage + assets), zip,
+                            graph (spatial index + tiles), history (undo/redo),
+                            storage (IndexedDB + journal), store, zip,
                             render_common (the palette + the stacking rule),
                             render_html, render_png (canvas), export, gif
   data/                     byte-identical copies of the data assets (test-enforced)
@@ -382,7 +383,33 @@ region beyond Malden. The tiler exists and the app consumes tiles; what's left
 is running it on a Geofabrik extract and putting the output on storage. Malden
 keeps its bundled graph, so nothing regresses in the meantime.
 
-**Next:** M3 (context layers) and M5 (scale + undo) are what remain — it depends on M1 and
+**Done: M3 — bring your own context**, and **M5 — scale hardening**:
+
+- Layers declare an `extent`; one that misses the area is hidden rather than
+  shown empty. FARS is wired as the national floor (the fetch itself is a
+  networked run you have to make).
+- `tools/fetch_existing_infra.py` pulls OSM cycleways as candidates. BATCH, per
+  the never-call-Overpass-from-the-browser rule, with a deliberately
+  conservative tag mapping — a painted lane is `buffered_painted`, never
+  anything "separated".
+- **Additive imports.** A file that proposes nothing is a record of what
+  exists, not a rival plan, so the keep-mine/use-theirs question disappears and
+  the review list becomes the whole sheet. Importing OSM-derived features sets
+  `meta.license` to ODbL-1.0 and says so.
+- **Undo/redo** — buttons plus Ctrl+Z/Ctrl+Y, coalescing rapid edits, keeping
+  the selection across a restore. Snapshots BOUNDED BY BYTES, so a small
+  network gets deep history and a huge one gets shallow history rather than
+  eating the tab. Startup is suppressed, or a freshly loaded page would offer
+  to undo its own housekeeping.
+- **IndexedDB** is the store now; localStorage remains only as a synchronous
+  journal for `pagehide`, because an IndexedDB transaction does not complete
+  once a tab is being torn down.
+- **Canvas rendering** for the network, and exports over more than four areas
+  split into one file per area plus an index.
+
+**Next:** nothing in the plan. Remaining work is yours: `help.md`, manual
+testing, and the operational half of M2 (a roads-tile archive on hosted
+storage) — it depends on M1 and
 nothing else, and M2 is gated on D7. Then M3, then M2, then M5. See V2_PLAN.md
 §9 for the sequence and §8 for the settled snapping/licence design.
 

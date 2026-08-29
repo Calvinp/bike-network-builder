@@ -148,3 +148,52 @@ test("a superseded treatment stays in map.html so the slider can fall back", asy
   assert.ok(art.html.includes('"qb"'));
   assert.ok(art.html.includes('"cc"'));
 });
+
+// --------------------------------------------------------------------------
+// Exporting a large network
+// --------------------------------------------------------------------------
+test("a network over a few areas stays one file", async () => {
+  const { shouldSplitByArea } = await import("../js/export.js");
+  assert.equal(shouldSplitByArea(net()), false);
+});
+
+test("a network over many areas splits into one file per area plus an index", async () => {
+  // A single YAML holding a whole metro is not something anyone emails.
+  const { shouldSplitByArea, splitByArea } = await import("../js/export.js");
+  const { serializeNetwork, makeArea, makeNetwork, makePhase } =
+    await import("../js/network_format.js");
+
+  const areas = [];
+  const features = [];
+  for (let i = 0; i < 6; i++) {
+    const lon0 = i, lon1 = i + 1;
+    areas.push(makeArea({ id: `a${i}`, name: `Town ${i}`,
+      boundary: [[[[0, lon0], [0, lon1], [1, lon1], [1, lon0], [0, lon0]]]] }));
+    features.push(makeFeature({
+      id: `f${i}`, name: `Street ${i}`,
+      treatments: [makeTreatment({ id: `t${i}`, type: "quick_build_separated",
+                                   status: "proposed", phase: "p1" })],
+      geometry: [[[0.5, lon0 + 0.2], [0.5, lon0 + 0.8]]] }));
+  }
+  const big = makeNetwork({ areas, features,
+    phases: [makePhase({ id: "p1", number: 1, label: "Core" })] });
+
+  assert.equal(shouldSplitByArea(big), true);
+  const files = splitByArea(big, { serialize: serializeNetwork });
+  assert.equal(files.length, 7);          // six areas + the index
+  assert.ok(files.some((f) => f.name === "networks/index.json"));
+  assert.ok(files.some((f) => f.name === "networks/town-0.yaml"));
+
+  // Each piece is a COMPLETE network file: it opens on its own rather than
+  // being a fragment that only means something beside its siblings.
+  const { parseNetwork, validateNetwork } = await import("../js/network_format.js");
+  const piece = parseNetwork(files.find((f) => f.name === "networks/town-3.yaml").data);
+  assert.deepEqual(validateNetwork(piece), []);
+  assert.equal(piece.features.length, 1);
+  assert.equal(piece.features[0].name, "Street 3");
+  assert.equal(piece.areas.length, 1);
+
+  const index = JSON.parse(files.find((f) => f.name === "networks/index.json").data);
+  assert.equal(index.areas.length, 6);
+  assert.ok(index.areas.every((a) => a.file && a.features === 1));
+});

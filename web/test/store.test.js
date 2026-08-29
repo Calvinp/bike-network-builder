@@ -377,3 +377,66 @@ test("a layer whose extent misses the area is hidden, not shown empty", () => {
     layersFor([{ id: "unknown" }]).then((ids) => assert.deepEqual(ids, ["unknown"])),
   ]);
 });
+
+// --------------------------------------------------------------------------
+// Storage: IndexedDB primary, a synchronous journal for teardown
+// --------------------------------------------------------------------------
+test("saveSync writes a journal rather than the main store", async () => {
+  // IndexedDB transactions do not complete once a tab is being torn down, so
+  // pagehide has to reach for something synchronous.
+  const { IdbStorage } = await import("../js/storage.js");
+  const local = (() => { const m = new Map(); return {
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, String(v)),
+    removeItem: (k) => m.delete(k), map: m }; })();
+  const idb = new IdbStorage({ local });
+  assert.equal(idb.writeJournal("k", "hello"), true);
+  assert.equal(local.getItem("k::journal"), "hello");
+});
+
+test("a network too big for the journal is skipped, not thrown", async () => {
+  const { IdbStorage } = await import("../js/storage.js");
+  const local = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+  const idb = new IdbStorage({ local, journalMaxBytes: 10 });
+  assert.equal(idb.writeJournal("k", "x".repeat(100)), false);
+});
+
+test("a journal write that the browser refuses is survivable", async () => {
+  const { IdbStorage } = await import("../js/storage.js");
+  const local = { getItem: () => null, removeItem: () => {},
+                  setItem: () => { throw new Error("QuotaExceededError"); } };
+  const idb = new IdbStorage({ local });
+  assert.equal(idb.writeJournal("k", "hello"), false);
+});
+
+test("the localStorage fallback keeps the same shape", async () => {
+  const { LocalStorageAdapter } = await import("../js/storage.js");
+  const m = new Map();
+  const a = new LocalStorageAdapter({
+    getItem: (k) => (m.has(k) ? m.get(k) : null),
+    setItem: (k, v) => m.set(k, String(v)) });
+  a.setItem("k", "v");
+  assert.equal(a.getItem("k"), "v");
+  assert.equal(a.writeJournal("k", "w"), true);
+});
+
+test("the store awaits its storage, so an async adapter works", async () => {
+  // Awaiting a plain value is harmless, which is what lets a synchronous
+  // localStorage and an async IndexedDB share one code path.
+  const m = new Map();
+  const store = new Store({
+    storage: {
+      getItem: async (k) => (m.has(k) ? m.get(k) : null),
+      setItem: async (k, v) => { m.set(k, String(v)); },
+    },
+    fetchText: async (url) => {
+      if (url.endsWith("place.json")) return PLACE_JSON;
+      if (url.endsWith("treatments.json")) return TREATMENTS;
+      if (url.endsWith("base_network.yaml")) return BASE_YAML;
+      if (url.endsWith("malden_boundary.geojson")) return BOUNDARY_FC;
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+  });
+  const net = await store.loadNetwork();
+  assert.equal(net.features[0].name, "Trail");
+});

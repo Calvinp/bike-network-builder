@@ -10,6 +10,7 @@ import {
 } from "./network_format.js";
 import { boundaryFromWays } from "./boundary.js";
 import { parsePlace } from "./place.js";
+import { pickStorage } from "./storage.js";
 import { Registry, setRegistry } from "./registry.js";
 import { COLOR_MODES } from "./render_common.js";
 import { graphFromJson } from "./routing.js";
@@ -85,7 +86,10 @@ const defaultFetchText = async (url) => {
 
 export class Store {
   constructor({ storage, fetchText, assetBase = "", tileCache } = {}) {
-    this.storage = storage ?? globalThis.localStorage;
+    // IndexedDB where it exists (localStorage caps out around 5 MB, which a
+    // regional network exceeds), localStorage otherwise. Injectable so the
+    // tests stay synchronous and offline.
+    this.storage = storage ?? pickStorage();
     this.fetchText = fetchText ?? defaultFetchText;
     this.assetBase = assetBase;
     this._place = null;           // the deployment's default area
@@ -127,7 +131,7 @@ export class Store {
   // data, a deployment may configure some, and the user never has to import
   // anything to get started.
   async loadNetwork() {
-    let text = this.storage.getItem(LS_KEY);
+    let text = await this.storage.getItem(LS_KEY);
     if (!text) {
       text = await this.placeAsset("seed_network") ?? "";
       if (text) this.storage.setItem(LS_KEY, text);
@@ -283,7 +287,7 @@ export class Store {
   async save(data) {
     if (data.network === null || data.network === undefined) return { ok: true };
     const net = networkFromBrowser(data, await this.loadNetwork());
-    this.storage.setItem(LS_KEY, serializeNetwork(net));
+    await this.storage.setItem(LS_KEY, serializeNetwork(net));
     return { ok: true };
   }
 
@@ -291,9 +295,18 @@ export class Store {
   // it completes even while the tab is being torn down. `existing` is the
   // caller's cached parse of the stored network (for the fields the UI
   // doesn't edit); required because reading it here could need a fetch.
+  // Last-ditch write for pagehide/visibilitychange. IndexedDB transactions do
+  // NOT complete once a tab is being torn down, so this writes a synchronous
+  // localStorage journal instead and the next load prefers it. A network too
+  // big for the journal is skipped rather than throwing during teardown —
+  // the same exposure the tool has always had, now bounded and explicit.
   saveSync(data, existing) {
-    if (data.network === null || data.network === undefined) return;
-    this.storage.setItem(LS_KEY, serializeNetwork(networkFromBrowser(data, existing)));
+    if (data.network === null || data.network === undefined) return false;
+    const text = serializeNetwork(networkFromBrowser(data, existing));
+    if (typeof this.storage.writeJournal === "function") {
+      return this.storage.writeJournal(LS_KEY, text);
+    }
+    try { this.storage.setItem(LS_KEY, text); return true; } catch { return false; }
   }
 
   // Serialized current network (for the YAML export / the bundle).

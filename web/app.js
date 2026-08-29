@@ -20,7 +20,8 @@
  */
 "use strict";
 
-import { buildArtifacts, buildPhaseArtifacts } from "./js/export.js";
+import { buildArtifacts, buildPhaseArtifacts, shouldSplitByArea, splitByArea }
+  from "./js/export.js";
 import { clipPolylineLatlon, longestPiece } from "./js/boundary.js";
 import { featuresFromGeojson, featuresToGeojson } from "./js/geojson.js";
 import { renderPng } from "./js/render_png.js";
@@ -31,12 +32,14 @@ import {
   treatmentLabel,
 } from "./js/render_common.js";
 import { KM_PER_MI, MI_PER_KM } from "./js/costs.js";
-import { makeArea, makeFeature, makeNetwork, makePhase, makeTreatment, newId }
+import { makeArea, makeFeature, makeNetwork, makePhase, makeTreatment,
+         newId, parseNetwork, serializeNetwork }
   from "./js/network_format.js";
 import { applyMerge, describeMerge, planMerge } from "./js/merge.js";
 import { partsKm, summarize } from "./js/pipeline.js";
 import { snapRoute } from "./js/routing.js";
 import { Store } from "./js/store.js";
+import { History } from "./js/history.js";
 import { zipCreate } from "./js/zip.js";
 
 const BOUNDARY = BOUNDARY_COLOR;
@@ -47,6 +50,7 @@ let clipBoundary = null;    // assembled area multipolygon (clipping)
 let place = null;           // the deployment default area (data/place.json)
 
 let map, networkGroup, boundaryGroup, arrowsGroup, pointsGroup, overlayGroup;
+let networkRenderer = null;
 let features = [];          // [{props, treatments, sel, layer, overlays, markers, arrows}]
 let selected = null;
 let options = {};
@@ -56,6 +60,13 @@ let units = "imperial";     // DISPLAY preference; storage is always metric
 let colorMode = "phase";
 let phaseView = "all";
 let editMode = false, dirty = false, combineFrom = null;
+
+/* Undo/redo. Snapshots of the serialized network, bounded by bytes so a big
+   network gets shallow history rather than eating the tab (see history.js).
+   `restoring` guards the reload: applying a snapshot must not record itself as
+   a new edit, or undo would never get anywhere. */
+const history = new History();
+let restoring = false;
 
 /* ---------- units ---------- */
 /* v2 stores metric. Imperial is a display preference, converted here and
@@ -133,7 +144,8 @@ function restyle(f) {
   f.overlays.forEach((o) => overlayGroup.removeLayer(o));
   f.overlays = strokes.slice(1).map((s) => {
     const o = L.polyline(f.layer.getLatLngs(), {
-      ...strokeOpts(s, isSel), interactive: false, pmIgnore: true });
+      ...strokeOpts(s, isSel), interactive: false, pmIgnore: true,
+      renderer: networkRenderer });
     overlayGroup.addLayer(o);
     return o;
   });
@@ -259,7 +271,7 @@ function addFeature(props, treatments, lines, points) {
               markers: [], arrows: null };
   if (lines && lines.length) {
     f.layer = L.polyline(lines.length === 1 ? lines[0] : lines,
-                         { color: "#444", weight: 4 });
+                         { color: "#444", weight: 4, renderer: networkRenderer });
     f.layer.on("click", () => {
       if (combineFrom) { if (f !== combineFrom) combineInto(combineFrom, f); return; }
       if (!editMode) selectFeature(f);
@@ -298,7 +310,7 @@ function removeFeature(f) {
     t.upgrades = (t.upgrades || []).filter((u) => !gone.has(u));
   }));
   if (selected === f) deselect();
-  markDirty(); recomputeTotals(); renderLegend();
+  markDirty("delete"); recomputeTotals(); renderLegend();
 }
 function clearFeatures() {
   deselect();
@@ -888,11 +900,66 @@ async function initContextLayers() {
    There is no Save button; the status pill shows the autosave state. */
 const AUTOSAVE_MS = 1200;
 let saveTimer = null, saving = false;
-function markDirty() {
+function markDirty(label = "") {
   dirty = true; setStatus();
+  if (!restoring) recordHistory(label);
   clearTimeout(saveTimer);
   saveTimer = setTimeout(autosave, AUTOSAVE_MS);
 }
+function recordHistory(label) {
+  try {
+    history.push(serializeNetwork(liveNetwork()), label);
+  } catch (e) { /* history is a convenience; never break an edit over it */ }
+  syncUndoButtons();
+}
+function syncUndoButtons() {
+  const u = document.getElementById("btn-undo");
+  const r = document.getElementById("btn-redo");
+  if (!u || !r) return;
+  u.disabled = !history.canUndo;
+  r.disabled = !history.canRedo;
+  u.title = history.canUndo
+    ? `Undo${history.undoLabel ? " " + history.undoLabel : ""} (Ctrl+Z)`
+    : "Nothing to undo";
+  r.title = history.canRedo
+    ? `Redo${history.redoLabel ? " " + history.redoLabel : ""} (Ctrl+Y)`
+    : "Nothing to redo";
+}
+/* Rebuild the whole editor from a snapshot. Coarse, and deliberately so: the
+   alternative is a command object per mutation, which is a large refactor of
+   code that is currently direct and readable. */
+function restoreSnapshot(text) {
+  if (text === null || text === undefined) return;
+  // Rebuilding the editor throws the selection away, which is jarring when the
+  // thing you just undid was an edit to the feature you were looking at. Put
+  // it back if it still exists.
+  const wasSelected = selected ? selected.props.id : null;
+  const wasTreatment = selected ? selected.sel : 0;
+  restoring = true;
+  try {
+    const net = parseNetwork(text);
+    clearFeatures();
+    config = { ...config, areas: net.areas, authorities: net.authorities,
+               phases: net.phases, meta: net.meta, costs: net.costs,
+               units: net.units };
+    loadFeatureCollection(featuresToGeojson(net.features));
+    renderPhases(); renderLegend(); recomputeTotals(); applyPhaseView();
+    dirty = true;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(autosave, AUTOSAVE_MS);
+  } finally { restoring = false; }
+  if (wasSelected) {
+    const again = features.find((f) => f.props.id === wasSelected);
+    if (again) {
+      again.sel = Math.min(wasTreatment, again.treatments.length - 1);
+      selectFeature(again);
+    }
+  }
+  syncUndoButtons();
+  setStatus();
+}
+function doUndo() { restoreSnapshot(history.undo()); }
+function doRedo() { restoreSnapshot(history.redo()); }
 function setStatus(msg) {
   const el = document.getElementById("status");
   if (msg) { el.innerHTML = msg; return; }
@@ -986,15 +1053,19 @@ async function exportOutput(name) {
 async function exportBundle() {
   setStatus("Preparing export… (a few seconds)");
   try {
+    const net = await store.loadNetwork();
     const art = await makeArtifacts(true);
     showExportNotes(art.summary);
-    const entries = [
-      { name: "network.yaml", data: await store.exportYamlText() },
+    // A network over many areas ships as one file per area plus an index: a
+    // single YAML holding a whole metro is not something anyone emails.
+    const entries = shouldSplitByArea(net)
+      ? splitByArea(net, { serialize: serializeNetwork })
+      : [{ name: "network.yaml", data: await store.exportYamlText() }];
+    entries.push(...[
       { name: "map.png", data: new Uint8Array(await art.pngBlob.arrayBuffer()) },
       { name: "map.html", data: art.html },
       { name: "network.geojson", data: JSON.stringify(art.geojson, null, 2) },
-    ];
-    const net = await store.loadNetwork();
+    ]);
     const phaseFiles = await buildPhaseArtifacts(
       net, await store.boundaryRings(), await store.boundary(),
       { colorMode, renderPng, features: art.features,
@@ -1417,6 +1488,12 @@ function toggleEdit() {
 
 /* ---------- init ---------- */
 async function init() {
+  // Nothing that happens while the editor is BUILDING ITSELF is an undoable
+  // edit — adopting the deployment's boundary is housekeeping, and offering to
+  // undo it would put a live Undo button on a freshly loaded page pointing at
+  // a step the user never took.
+  restoring = true;
+
   // The opening view comes from the deployment's place, never from a constant.
   // A place with no centre falls through to fitBounds() below, which frames
   // the network or the boundary — guessing a centre would drop the user
@@ -1427,6 +1504,10 @@ async function init() {
   else map.setView([0, 0], 2);
   L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
     { attribution: "© OpenStreetMap, © CARTO", maxZoom: 20 }).addTo(map);
+  // SVG stops being viable in the low thousands of polylines, which a
+  // multi-town network reaches easily. One shared canvas renderer for the
+  // network keeps panning smooth; context layers already had their own.
+  networkRenderer = L.canvas({ padding: 0.4 });
   networkGroup = L.featureGroup().addTo(map);
   overlayGroup = L.layerGroup().addTo(map);
   boundaryGroup = L.featureGroup().addTo(map);
@@ -1497,6 +1578,10 @@ async function init() {
   });
 
   bindForm(); bindImportSheet(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
+  // Startup is over; from here, edits count.
+  restoring = false;
+  // The baseline every undo walks back toward.
+  recordHistory("");
   applyPhaseView();   // a fresh load must already honour upgrades
   initContextLayers();
 
@@ -1505,6 +1590,8 @@ async function init() {
     { status: "existing", type: "shared_use_path", phase: null });
   document.getElementById("btn-add-spot").onclick = startPlacePoint;
   document.getElementById("btn-edit").onclick = toggleEdit;
+  document.getElementById("btn-undo").onclick = doUndo;
+  document.getElementById("btn-redo").onclick = doRedo;
   document.getElementById("btn-add-phase").onclick = addPhase;
   document.getElementById("btn-snap-sel").onclick = snapSelected;
   document.getElementById("btn-reverse").onclick = reverseSelected;
@@ -1523,9 +1610,20 @@ async function init() {
     if (e.key === "Escape" && combineFrom) { combineFrom = null; setStatus(); }
     if (e.key === "Escape" && placingPoint) { placingPoint = false; setStatus(); }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+    const mod = e.ctrlKey || e.metaKey;
+    // Ctrl+Z while drawing removes the last clicked point; otherwise it undoes
+    // an edit. The in-progress drawing wins, because that is what the key was
+    // doing a moment ago.
     if (!typing && (e.key === "Backspace" || e.key === "Delete"
-                    || (e.ctrlKey && e.key.toLowerCase() === "z"))) {
-      if (undoDrawVertex()) e.preventDefault();
+                    || (mod && e.key.toLowerCase() === "z"))) {
+      if (undoDrawVertex()) { e.preventDefault(); return; }
+    }
+    if (mod && !e.shiftKey && e.key.toLowerCase() === "z") {
+      e.preventDefault(); doUndo(); return;
+    }
+    if (mod && (e.key.toLowerCase() === "y"
+                || (e.shiftKey && e.key.toLowerCase() === "z"))) {
+      e.preventDefault(); doRedo();
     }
   });
   // Mobile: the sidebar is a slide-over panel; a peek bar previews taps.
