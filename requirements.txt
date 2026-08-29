@@ -1,24 +1,16 @@
-# Core stack — pure-Python / well-supported wheels, works on Python 3.14.
-# Geometry is fetched from OpenStreetMap once and cached to data/*.geojson,
-# so normal runs and the whole test suite work OFFLINE.
+# Python is the HEADLESS side of this tool: build.py turns corridors.yaml +
+# OpenStreetMap into a network file, fetch_layers.py refreshes reference data,
+# and bikenetwork/ is the reference reader/validator for the format.
+#
+# The editor, the maps and every export live in web/ (framework-free ES
+# modules, no build step, `cd web && node --test`). Nothing here renders
+# anything, which is why matplotlib, folium, contextily, shapely and Flask are
+# all gone — see V2_PLAN.md §2.
+#
+# Geometry is fetched from OpenStreetMap once and cached to data/, so normal
+# runs and the whole test suite work OFFLINE.
 PyYAML>=6.0
-matplotlib>=3.8
 requests>=2.31
-
-# Mapping: contextily = tiled street basemap behind the static PNG;
-# folium = interactive Leaflet HTML map (output/map.html). Both install on 3.14.
-contextily>=1.5
-folium>=0.16
-
-# shapely = clip corridors to the Malden city boundary (accurate in-city mileage).
-shapely>=2.0
-
-# Flask = the local web editor (editor.py). The browser front-end loads Leaflet +
-# Leaflet-Geoman from a CDN, so the editor needs internet for tiles/libs.
-Flask>=3.0
 
 # Tests
 pytest>=8.0
-
-# Optional: package build.py to a Windows .exe (see README "Packaging").
-# pyinstaller>=6.0

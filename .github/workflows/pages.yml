@@ -27,6 +27,14 @@ jobs:
           node-version: 22
       - run: node --test
         working-directory: web
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      # The Python side is the headless build path and the reference
+      # reader/validator; its tests include the Python<->JS parity checks, so
+      # they need node too (installed above).
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
 
   deploy:
     needs: test
