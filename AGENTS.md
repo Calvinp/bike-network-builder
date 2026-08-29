@@ -130,6 +130,7 @@ NETWORK_FORMAT.md           the format spec
 V2_PLAN.md                  the v2 / geography-agnostic plan  <- read this
 V2_DESIGN_NOTES.md          the discussion that produced it
 data/treatments.json        THE REGISTRY. What the tool can represent.
+tools/make_road_tiles.py    cut a street graph into roads tiles for the app
 bikenetwork/
   place.py                  reads data/place.json; derives the bbox from the boundary
   registry.py               reads data/treatments.json
@@ -145,7 +146,8 @@ data/                       malden_boundary / existing_infra / committed_infra .
   layers/                   context layers + layers.json manifest
 web/                        THE APP. index.html, app.js, style.css, help.md
   js/                       place, registry, network_format, migrate, geometry,
-                            boundary, geojson, costs, pipeline, routing,
+                            boundary, geojson, costs, pipeline, merge, routing,
+                            graph (spatial index + tiles),
                             store (localStorage + assets), zip,
                             render_common (the palette + the stacking rule),
                             render_html, render_png (canvas), export, gif
@@ -263,7 +265,22 @@ tests/                      pytest, incl. the Python<->JS parity checks
   Overpass etiquette wants a reachable contact.
 - **The browser must never call public Overpass** (V2_PLAN.md §8.5). Overpass
   is a batch tool: `build.py` and `fetch_layers.py`, where volume is bounded
-  and a human is present.
+  and a human is present. Snapping data reaches the browser as STATIC TILES,
+  which cannot be DDoSed by our own users the way a query API can — there is
+  no query, just cacheable bytes with a flat cost curve.
+- **Snap data has three tiers, and "none" is a legitimate one**: `street_tiles`
+  (fetched for the current view and merged), `street_graph` (a bundled asset —
+  Malden's path, instant and fully offline), or nothing, in which case snapping
+  is unavailable and a click behaves exactly like today's off-street click.
+  Never turn the third into an error.
+- **A click more than ~30 m from a road is DELIBERATE**, not a failed snap:
+  park interiors and cut-throughs stay exactly where they were put. Worth
+  remembering when a route comes back as a straight line — check the endpoint
+  distance before suspecting the graph.
+- `nearestNode` and `nearRoad` take an optional `GraphIndex` (`graph.js`).
+  Without one they scan every node/edge, which is 30,516 nodes per waypoint on
+  Malden alone; with one they look at a few grid cells. A test pins that the
+  two agree on the shipped graph.
 - **`web/help.md` is the ONE copy of the manual, and it is human-authored
   (Calvin writes it) — do NOT edit it.** When you add a user-facing feature,
   list what needs covering in your summary instead of writing it yourself.
@@ -346,7 +363,26 @@ be the tests that catch you.
   a stacked stroke and survives autosave → YAML → reload, trees do NOT inflate
   lane distance, and units toggle 14.3 mi ↔ 23.1 km.
 
-**Next:** M4 (additive import) is the natural one — it depends on M1 and
+**Done: M4 — additive import** (V2_PLAN.md §6) and **M2 — snapping at scale**
+(§8). See the commit messages for the detail; the short version:
+
+- `merge.js` — import by AREA, not wholesale. Areas you don't have default to
+  add, areas you do default to keep mine, a feature belongs to the area holding
+  most of its length, colliding ids are rewritten with their references, and
+  phase mapping is skipped whenever it would be trivial.
+- `graph.js` — a grid index (12x faster nearest-node on the shipped graph, and
+  the gap grows with size) plus tile arithmetic, so the graph grows to fit
+  where you draw instead of shipping whole.
+- `tools/make_road_tiles.py` cuts a graph into z14 tiles: Malden's 3.9 MB
+  becomes 24 tiles averaging 156 KB. Verified in a browser that a route crosses
+  three tiles and follows streets (6.19 km routed vs 4.68 km straight).
+
+**Still operational, not code:** generating and hosting a roads archive for a
+region beyond Malden. The tiler exists and the app consumes tiles; what's left
+is running it on a Geofabrik extract and putting the output on storage. Malden
+keeps its bundled graph, so nothing regresses in the meantime.
+
+**Next:** M3 (context layers) and M5 (scale + undo) are what remain — it depends on M1 and
 nothing else, and M2 is gated on D7. Then M3, then M2, then M5. See V2_PLAN.md
 §9 for the sequence and §8 for the settled snapping/licence design.
 

@@ -26,6 +26,7 @@ export function makePlace(fields = {}) {
     assets: {},
     mapCenter: null,
     mapZoom: 13,
+    tileZoom: 14,
     fetch: {},
     ...fields,
 
@@ -71,6 +72,8 @@ export function parsePlace(raw) {
     assets: (doc.assets && typeof doc.assets === "object") ? doc.assets : {},
     mapCenter: center,
     mapZoom: Number.isFinite(Number(map.zoom)) ? Number(map.zoom) : 13,
+    // Zoom level of the roads tiles, if this deployment ships any.
+    tileZoom: Number.isFinite(Number(doc.tile_zoom)) ? Number(doc.tile_zoom) : 14,
     fetch: (doc.fetch && typeof doc.fetch === "object") ? doc.fetch : {},
   });
 }

@@ -5,10 +5,19 @@
 import { haversineMiles, shortestPath } from "./geometry.js";
 
 // Return the id of the graph node closest to (lat, lon).
-export function nearestNode(coord, lat, lon) {
+//
+// `index` is an optional GraphIndex (see graph.js). Without one this scans
+// every node, which is fine for a toy graph and hopeless for a real one —
+// Malden alone is 30,516 nodes, once per waypoint. With one it looks at a
+// handful of grid cells. The two must agree, and a test pins that against the
+// shipped graph.
+export function nearestNode(coord, lat, lon, index = null) {
+  const candidates = index ? index.nodesNear(lat, lon) : coord.keys();
   let best = null, bestD = Infinity;
-  for (const [nid, [nlat, nlon]] of coord) {
-    const d = haversineMiles([lat, lon], [nlat, nlon]);
+  for (const nid of candidates) {
+    const pt = coord.get(nid);
+    if (!pt) continue;
+    const d = haversineMiles([lat, lon], [pt[0], pt[1]]);
     if (d < bestD) { best = nid; bestD = d; }
   }
   return best;
@@ -55,18 +64,27 @@ function nearRoad(pt, edges, coord, maxMiles) {
 // treated as deliberately OFF-STREET (a park interior, a cut-through between
 // buildings): its legs stay exactly where they were drawn. One drawn line can
 // therefore mix snapped street sections with free-drawn off-street sections.
-export function snapRoute(waypoints, adj, coord, maxSnapMiles = 0.02) {
+export function snapRoute(waypoints, adj, coord, maxSnapMiles = 0.02, index = null) {
   if (waypoints.length < 2) {
     return waypoints.map((w) => [Number(w[0]), Number(w[1])]);
   }
 
-  const edges = [];
-  for (const [a, nbrs] of adj) {
-    for (const [b] of nbrs) if (a < b) edges.push([a, b]);
-  }
+  // Without an index every edge is a candidate for every waypoint; with one,
+  // only the edges in the cells around the click.
+  let allEdges = null;
+  const edgesFor = (w) => {
+    if (index) return index.edgesNear(Number(w[0]), Number(w[1]));
+    if (!allEdges) {
+      allEdges = [];
+      for (const [a, nbrs] of adj) {
+        for (const [b] of nbrs) if (a < b) allEdges.push([a, b]);
+      }
+    }
+    return allEdges;
+  };
   const nodes = waypoints.map((w) => (
-    nearRoad(w, edges, coord, maxSnapMiles)
-      ? nearestNode(coord, w[0], w[1])
+    nearRoad(w, edgesFor(w), coord, maxSnapMiles)
+      ? nearestNode(coord, w[0], w[1], index)
       : null  // off-street click
   ));
 

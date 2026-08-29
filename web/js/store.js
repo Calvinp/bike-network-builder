@@ -13,6 +13,8 @@ import { parsePlace } from "./place.js";
 import { Registry, setRegistry } from "./registry.js";
 import { COLOR_MODES } from "./render_common.js";
 import { graphFromJson } from "./routing.js";
+import { GraphIndex, emptyGraph, mergeGraphs, tileKey, tileUrl,
+         tilesForBbox } from "./graph.js";
 import { zipRead } from "./zip.js";
 
 export { COLOR_MODES };
@@ -77,7 +79,7 @@ const defaultFetchText = async (url) => {
 };
 
 export class Store {
-  constructor({ storage, fetchText, assetBase = "" } = {}) {
+  constructor({ storage, fetchText, assetBase = "", tileCache } = {}) {
     this.storage = storage ?? globalThis.localStorage;
     this.fetchText = fetchText ?? defaultFetchText;
     this.assetBase = assetBase;
@@ -86,6 +88,9 @@ export class Store {
     this._boundaryRings = null;   // raw ways, for drawing
     this._boundary = null;        // assembled multipolygon, for clipping
     this._graph = null;           // {adj, coord} street graph, for snapping
+    this._index = null;           // spatial index over it
+    this._tiles = new Set();      // tile keys already merged in
+    this.tileCache = tileCache ?? new Map();
   }
 
   asset(name) { return this.assetBase + name; }
@@ -154,16 +159,79 @@ export class Store {
     return this._boundary;
   }
 
-  // The street graph is ~4 MB, fetched only when snapping is first used.
-  // Null when the deployment ships none: snapping is then simply unavailable,
-  // and a click behaves exactly like today's off-street click (V2_PLAN.md §8.4).
+  // ---- snap-to-road data ------------------------------------------------
+  //
+  // Three ways a deployment can supply streets, in the order they are tried:
+  //
+  //   1. TILES (`street_tiles`) — a URL template for static roads tiles on
+  //      storage we control. Fetched for the current view and merged into
+  //      whatever is already loaded, so the graph grows to fit where you draw
+  //      instead of being shipped whole. Static files cannot be DDoSed by our
+  //      own users the way a query API can (V2_PLAN.md §8.2).
+  //   2. A BUNDLED GRAPH (`street_graph`) — today's Malden asset. Instant,
+  //      fully offline, and the reason the test suite needs no network.
+  //   3. NOTHING — snapping is simply unavailable, and a click behaves exactly
+  //      like today's off-street click. That is a legitimate state, not an
+  //      error (V2_PLAN.md §8.4).
+  //
+  // The browser NEVER calls a public Overpass instance for any of this.
+  // Overpass is a batch tool: build.py and fetch_layers.py, where volume is
+  // bounded and a human is present (V2_PLAN.md §8.5).
+
   async streetGraph() {
     if (!this._graph) {
       const text = await this.placeAsset("street_graph");
       if (!text) return null;
       this._graph = graphFromJson(JSON.parse(text));
+      this._index = new GraphIndex(this._graph);
     }
     return this._graph;
+  }
+
+  // The graph covering `bbox` ([south, west, north, east]), loading any tiles
+  // it needs. Returns {graph, index} or null when this deployment ships no
+  // street data at all.
+  async streetGraphFor(bbox) {
+    const place = await this.place();
+    const template = place.asset("street_tiles");
+    if (!template) {
+      const graph = await this.streetGraph();
+      return graph ? { graph, index: this._index } : null;
+    }
+    const zoom = Number(place.tileZoom) || 14;
+    if (!this._graph) this._graph = emptyGraph();
+
+    let added = false;
+    for (const tile of tilesForBbox(bbox, zoom)) {
+      const key = tileKey(tile);
+      if (this._tiles.has(key)) continue;
+      this._tiles.add(key);            // marked before the await: a failed
+                                       // tile is not retried on every pan
+      const raw = await this.loadTile(template, tile);
+      if (!raw) continue;
+      mergeGraphs(this._graph, graphFromJson(raw));
+      added = true;
+    }
+    // The index is rebuilt only when something actually arrived; panning over
+    // ground already loaded costs nothing.
+    if (added || !this._index) this._index = new GraphIndex(this._graph);
+    return this._graph.coord.size ? { graph: this._graph, index: this._index } : null;
+  }
+
+  // One tile, from the cache if it is there. The cache is injectable so tests
+  // stay offline; in a browser it is backed by IndexedDB, which is what makes
+  // an area keep working after the network goes away.
+  async loadTile(template, tile) {
+    const key = tileKey(tile);
+    const cached = await this.tileCache.get(key);
+    if (cached) return cached;
+    try {
+      const raw = JSON.parse(await this.fetchText(this.asset(tileUrl(template, tile))));
+      await this.tileCache.set(key, raw);
+      return raw;
+    } catch {
+      return null;      // a missing tile is ordinary: not every tile exists
+    }
   }
 
   // The treatment registry, installed globally so every renderer can read it

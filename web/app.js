@@ -1266,18 +1266,31 @@ function doImport() {
 }
 
 /* ---------- snap to roads ---------- */
-let graphLoadFailed = false;
+let snapUnavailable = false;
 async function snapPoints(pts) {
   // pts: [[lat,lng],...]; returns road-following [[lat,lng],...] or null.
+  if (snapUnavailable) return null;
   try {
-    if (!store._graph && !graphLoadFailed) {
-      setStatus("Loading street data… (first time only)");
+    if (!store._graph) setStatus("Loading street data…");
+    // Ask for the streets around what is being drawn, not for a city: the
+    // graph grows to fit where you work (V2_PLAN.md §8.3).
+    const lats = pts.map((p) => Number(p[0])), lons = pts.map((p) => Number(p[1]));
+    const pad = 0.01;   // ~1 km, so a route can reach past its own endpoints
+    const bbox = [Math.min(...lats) - pad, Math.min(...lons) - pad,
+                  Math.max(...lats) + pad, Math.max(...lons) + pad];
+    const source = await store.streetGraphFor(bbox);
+    // No street data for here: snapping is unavailable, and a click behaves
+    // exactly like an off-street click already does. Say it once, quietly,
+    // rather than failing on every point.
+    if (!source) {
+      if (!snapUnavailable) {
+        snapUnavailable = true;
+        setStatus("Snapping isn’t available here yet — lines stay where you draw them.");
+      }
+      return null;
     }
-    const graph = await store.streetGraph();
-    // No street graph shipped for this deployment: snapping is simply
-    // unavailable, and a click behaves exactly like an off-street click.
-    if (!graph) { graphLoadFailed = true; return null; }
-    let route = snapRoute(pts, graph.adj, graph.coord);
+    let route = snapRoute(pts, source.graph.adj, source.graph.coord, 0.02,
+                          source.index);
     clipBoundary = clipBoundary || await store.boundary();
     // A snapped preview wants ONE continuous line, so take the longest
     // in-boundary run rather than every piece — joining pieces across a gap
@@ -1286,7 +1299,7 @@ async function snapPoints(pts) {
     const clipped = longestPiece(pieces);
     if (clipped.length >= 2) route = clipped;
     return route.length >= 2 ? route : null;
-  } catch (e) { graphLoadFailed = true; console.error(e); return null; }
+  } catch (e) { snapUnavailable = true; console.error(e); return null; }
 }
 async function snapSelected() {
   if (!selected || !selected.layer) return;

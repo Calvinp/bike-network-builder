@@ -219,3 +219,125 @@ test("a boundary supplied by the UI is saved, not silently discarded", async () 
       config: { areas: [{ id: "a1", name: "Malden", boundary: ring }] } }, existing);
   assert.equal(merged.areas[0].boundary.length, 1);
 });
+
+// --------------------------------------------------------------------------
+// Snap-to-road data: tiles, a bundled graph, or nothing
+// --------------------------------------------------------------------------
+const TILE = JSON.stringify({
+  coord: { 1: [42.42, -71.06], 2: [42.42, -71.05] },
+  adj: { 1: [[2, 1]], 2: [[1, 1]] },
+});
+
+function tileStore(extraAssets, tiles) {
+  const fetched = [];
+  return {
+    fetched,
+    store: new Store({
+      storage: (() => { const m = new Map(); return {
+        getItem: (k) => (m.has(k) ? m.get(k) : null),
+        setItem: (k, v) => m.set(k, String(v)) }; })(),
+      fetchText: async (url) => {
+        fetched.push(url);
+        if (url.endsWith("place.json")) {
+          return JSON.stringify({ name: "Tileville",
+            assets: { treatments: "data/treatments.json", ...extraAssets },
+            tile_zoom: 14 });
+        }
+        if (url.endsWith("treatments.json")) return TREATMENTS;
+        if (tiles && /roads\/\d+\/\d+\/\d+\.json$/.test(url)) return TILE;
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+    }),
+  };
+}
+
+test("a deployment with no street data at all reports none, and that is fine", async () => {
+  // Snapping is then simply unavailable and a click behaves like today's
+  // off-street click — a legitimate state, not an error.
+  const { store } = tileStore({}, false);
+  assert.equal(await store.streetGraph(), null);
+  assert.equal(await store.streetGraphFor([42.4, -71.1, 42.45, -71.0]), null);
+});
+
+test("tiles are fetched for the view and merged into one graph", async () => {
+  const { store, fetched } = tileStore(
+    { street_tiles: "roads/{z}/{x}/{y}.json" }, true);
+  const res = await store.streetGraphFor([42.41, -71.07, 42.43, -71.05]);
+  assert.ok(res.graph.coord.size >= 2);
+  assert.ok(res.index, "an index comes back with the graph");
+  assert.ok(fetched.some((u) => /roads\/14\/\d+\/\d+\.json/.test(u)));
+});
+
+test("panning over ground already loaded fetches nothing again", async () => {
+  const { store, fetched } = tileStore(
+    { street_tiles: "roads/{z}/{x}/{y}.json" }, true);
+  const bbox = [42.41, -71.07, 42.43, -71.05];
+  await store.streetGraphFor(bbox);
+  const after = fetched.filter((u) => u.includes("roads/")).length;
+  await store.streetGraphFor(bbox);
+  assert.equal(fetched.filter((u) => u.includes("roads/")).length, after);
+});
+
+test("a missing tile is ordinary and is not retried on every pan", async () => {
+  // Not every tile exists — coastline, a gap in coverage. Retrying forever
+  // would turn a pan into a burst of failing requests.
+  const { store, fetched } = tileStore(
+    { street_tiles: "roads/{z}/{x}/{y}.json" }, false);
+  const bbox = [42.41, -71.07, 42.43, -71.05];
+  await store.streetGraphFor(bbox);
+  const after = fetched.length;
+  await store.streetGraphFor(bbox);
+  assert.equal(fetched.length, after);
+});
+
+test("the tile cache is consulted before the network", async () => {
+  const cache = new Map();
+  const fetched = [];
+  const store = new Store({
+    storage: { getItem: () => null, setItem: () => {} },
+    tileCache: cache,
+    fetchText: async (url) => {
+      fetched.push(url);
+      if (url.endsWith("place.json")) {
+        return JSON.stringify({ name: "T",
+          assets: { street_tiles: "roads/{z}/{x}/{y}.json" }, tile_zoom: 14 });
+      }
+      return TILE;
+    },
+  });
+  await store.streetGraphFor([42.41, -71.07, 42.43, -71.05]);
+  assert.ok(cache.size > 0, "tiles should be cached");
+  const tileRequests = fetched.filter((u) => u.includes("roads/")).length;
+  // A second store sharing the cache does no network work for those tiles.
+  const store2 = new Store({
+    storage: { getItem: () => null, setItem: () => {} },
+    tileCache: cache,
+    fetchText: async (url) => {
+      fetched.push(url);
+      if (url.endsWith("place.json")) {
+        return JSON.stringify({ name: "T",
+          assets: { street_tiles: "roads/{z}/{x}/{y}.json" }, tile_zoom: 14 });
+      }
+      throw new Error("should have come from the cache");
+    },
+  });
+  await store2.streetGraphFor([42.41, -71.07, 42.43, -71.05]);
+  assert.equal(fetched.filter((u) => u.includes("roads/")).length, tileRequests);
+});
+
+test("a bundled graph still works, and comes with an index", async () => {
+  const { store } = tileStore({ street_graph: "data/street_graph.json" }, false);
+  const s2 = new Store({
+    storage: { getItem: () => null, setItem: () => {} },
+    fetchText: async (url) => {
+      if (url.endsWith("place.json")) {
+        return JSON.stringify({ name: "T",
+          assets: { street_graph: "data/street_graph.json" } });
+      }
+      return readFileSync(new URL("../data/street_graph.json", import.meta.url), "utf8");
+    },
+  });
+  const res = await s2.streetGraphFor([42.41, -71.07, 42.43, -71.05]);
+  assert.ok(res.graph.coord.size > 1000);
+  assert.ok(res.index);
+});
