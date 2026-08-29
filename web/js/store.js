@@ -50,11 +50,14 @@ export function networkFromBrowser(data, existing) {
   }));
   return makeNetwork({
     areas: cfg.areas ? cfg.areas.map((a) => {
-      // The boundary isn't round-tripped through the UI — it isn't editable
-      // there — so it comes back from the stored network by id.
+      // Boundaries aren't EDITED in the UI, but they do arrive there — adopted
+      // from the deployment on first load, or carried in by an import — so a
+      // supplied one wins and the stored one is only a fallback. Taking the
+      // stored one unconditionally silently discarded both.
       const stored = existing.area(a.id);
-      return { ...(stored || {}), ...a,
-               boundary: stored ? stored.boundary : [] };
+      const boundary = (a.boundary && a.boundary.length)
+        ? a.boundary : ((stored && stored.boundary) || []);
+      return { ...(stored || {}), ...a, boundary };
     }) : existing.areas,
     authorities: cfg.authorities || existing.authorities,
     phases: phases.length ? phases : existing.phases,
@@ -251,7 +254,11 @@ export class Store {
     }
     const errors = validateNetwork(net);
     if (errors.length) return { ok: false, errors };
-    return { ok: true, network: featuresToGeojson(net.features),
+    return { ok: true,
+             // The parsed network itself, so an import can be MERGED rather
+             // than only replacing (see merge.js).
+             parsed: net,
+             network: featuresToGeojson(net.features),
              config: configForBrowser(net),
              // A v1 file whose phase deadlines didn't parse: the ONE place the
              // upgrade has to ask a human (V2_PLAN.md §4.10).

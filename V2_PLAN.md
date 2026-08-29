@@ -5,7 +5,8 @@ break that buys the room to do it properly. Malden stays the default throughout.
 
 **Status:** design complete. **M-1, M0 and M1 are implemented and
 green** (140 pytest + 195 node, cross-language parity included).
-M4 is next; M2 is gated on the D7 work in §8.
+M4 and M2 are next; D7 is settled in §8 (its remaining step is
+operational, not a design question).
 
 **This document is the plan.** The turn-by-turn discussion that produced it,
 including rejected alternatives and the reasoning behind each call, is in
@@ -787,7 +788,7 @@ only when someone deliberately opens a file another group sent them.
 | **M1** | The v2 format | §4 in full, plus §5. The spec, the validator, `network_format.py`, `network_format.js` and the round-trip test move together. |
 | **M2** | Snapping anywhere | §8. Starts with the PMTiles size spike, then the roads archive, local-window routing, and the grid index. |
 | **M3** | Bring your own context | §7 — layer extents, the OSM importer with its review list, FARS. |
-| **M4** | Additive import | §6. Depends on M1 and nothing else. Since M2 is blocked, this is probably the more urgent path. |
+| **M4** | Additive import | §6. Depends on M1 and nothing else, and it is what the whole v2 break was FOR. |
 | **M5** | Scale hardening | Below. |
 
 **M0's acceptance test is the definition of done for the whole project:** a
@@ -924,7 +925,7 @@ structure to write into — new sections marked **new**, changed ones **changed*
 ## 14. Sequence
 
 **M-1** (retire Flask) → **M0** (de-Maldenize) → **M1** (v2 format) →
-**M4** (import) → **M3** (context) → **M2** (snapping, if D7 allows) → **M5**
+**M4** (import) → **M2** (snapping) → **M3** (context) → **M5**
 (scale + undo). The v1 error-message patch is a separate low-priority session
 whenever convenient.
 

@@ -31,7 +31,9 @@ import {
   treatmentLabel,
 } from "./js/render_common.js";
 import { KM_PER_MI, MI_PER_KM } from "./js/costs.js";
-import { makeFeature, makeTreatment, newId } from "./js/network_format.js";
+import { makeArea, makeFeature, makeNetwork, makePhase, makeTreatment, newId }
+  from "./js/network_format.js";
+import { applyMerge, describeMerge, planMerge } from "./js/merge.js";
 import { partsKm, summarize } from "./js/pipeline.js";
 import { snapRoute } from "./js/routing.js";
 import { Store } from "./js/store.js";
@@ -601,20 +603,21 @@ function money(v) {
    never drift apart. It does not clip (clipping needs the boundary and is an
    export-time concern); the export notes say what got trimmed. */
 function liveNetwork() {
-  return {
-    areas: config.areas, authorities: config.authorities,
-    phases: config.phases, costs: config.costs, units: config.units,
+  // Built with makeNetwork rather than hand-rolled, so it carries every method
+  // the shared modules expect (allIds, allTreatments, phaseMap, authority, …).
+  // A hand-rolled stand-in silently loses one the moment a module starts using
+  // it, which is exactly how the merge first broke.
+  return makeNetwork({
+    areas: config.areas.map((a) => makeArea({ ...a })),
+    authorities: config.authorities,
+    phases: config.phases.map((p) => makePhase({ ...p })),
+    costs: config.costs,
+    units: config.units,
+    meta: config.meta,
     features: features.map(toModelFeature),
-    phaseMap: () => new Map(config.phases.map((p) => [p.id, p])),
-    area: (id) => config.areas.find((a) => a.id === id) || null,
-    authority: (id) => config.authorities.find((a) => a.id === id)
-      || { id, name: id || "", level: "municipal" },
-    allTreatments() {
-      return this.features.flatMap((f) => f.treatments.map((t) => [f, t]));
-    },
-    unknownTreatmentTypes: (reg) => (reg || registry()).unknownIds(
-      features.flatMap((f) => f.treatments.map((t) => t.type))),
-  };
+    crs: baseNet ? baseNet.crs : undefined,
+    extra: baseNet ? baseNet.extra : {},
+  });
 }
 function toModelFeature(f) {
   const lines = f.layer ? segsOf(f.layer).map((s) => s.map((p) => [p.lat, p.lng])) : [];
@@ -928,6 +931,16 @@ function showExportNotes(s) {
 }
 
 /* ---------- import / export ---------- */
+/* A download lands wherever the browser puts it — Downloads on desktop and
+   Android, the share sheet on iOS — and a page cannot choose. So the file has
+   to be recognisable on its own: name it for the area and the date, and a
+   Downloads folder holding three towns' networks stays legible. */
+function exportName(ext) {
+  const slug = (config.areas.map((a) => a.name).join("-") || "bike-network")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const day = new Date().toISOString().slice(0, 10);
+  return `${slug}-network-${day}.${ext}`;
+}
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -938,7 +951,7 @@ function downloadBlob(blob, filename) {
 async function exportYaml() {
   if (await flushSave()) {
     downloadBlob(new Blob([await store.exportYamlText()],
-      { type: "application/yaml" }), "network.yaml");
+      { type: "application/yaml" }), exportName("yaml"));
   } else setStatus('<span class="dirty">Export failed — couldn’t save</span>');
 }
 async function makeArtifacts(withPng) {
@@ -959,12 +972,12 @@ async function exportOutput(name) {
   try {
     const art = await makeArtifacts(name === "map.png");
     showExportNotes(art.summary);
-    if (name === "map.png") downloadBlob(art.pngBlob, name);
+    if (name === "map.png") downloadBlob(art.pngBlob, exportName("png"));
     else if (name === "map.html") {
-      downloadBlob(new Blob([art.html], { type: "text/html" }), name);
+      downloadBlob(new Blob([art.html], { type: "text/html" }), exportName("html"));
     } else {
       downloadBlob(new Blob([JSON.stringify(art.geojson, null, 2)],
-        { type: "application/geo+json" }), name);
+        { type: "application/geo+json" }), exportName("geojson"));
     }
     setStatus();
   } catch (e) { console.error(e); setStatus('<span class="dirty">Export failed</span>'); }
@@ -989,7 +1002,7 @@ async function exportBundle() {
       entries.push({ name: f.name, data: new Uint8Array(await f.blob.arrayBuffer()) });
     }
     const zip = await zipCreate(entries);
-    downloadBlob(new Blob([zip], { type: "application/zip" }), "bike-network.zip");
+    downloadBlob(new Blob([zip], { type: "application/zip" }), exportName("zip"));
     setStatus();
   } catch (e) { console.error(e); setStatus('<span class="dirty">Export failed</span>'); }
 }
@@ -1016,26 +1029,240 @@ async function importYamlFile(file) {
     alert("This file isn't a valid network file:\n\n" + (j.errors || []).join("\n"));
     return;
   }
-  if (features.length && !confirm(
-    "Replace the current network with the imported one? (Tip: Export your "
-    + "current network first if you might want it back.)")) { setStatus(); return; }
+  // Nothing to merge INTO: the first import of an empty map is just a load,
+  // and asking a question with one possible answer is worse than not asking.
+  if (!features.length) { replaceWith(j); return; }
+  openImportSheet(j);
+}
+
+/* Wholesale replacement — the empty-map case, and what "use theirs everywhere"
+   collapses to once it has been confirmed. */
+function replaceWith(j, notes) {
   clearFeatures();
   config = { ...config, ...j.config };
   loadFeatureCollection(j.network);
+  afterImport(j, notes);
+}
+function afterImport(j, notes) {
   renderPhases(); renderLegend(); recomputeTotals(); applyPhaseView();
   if (networkGroup.getLayers().length) {
     map.fitBounds(networkGroup.getBounds().pad(0.05));
   }
   markDirty();
+  showExportNotes({ notices: notes || [], warnings: [] });
   // The ONE place upgrading an older file has to ask a human: v1 deadlines
   // were free text, and nothing is invented on the user's behalf.
   if ((j.needsDates || []).length) {
-    const lines = j.needsDates.map((p) => `Phase ${p.number}: “${p.text}”`);
-    setStatus(`Imported. ${lines.length} phase date${lines.length > 1 ? "s" : ""} `
-      + `couldn't be read — set ${lines.length > 1 ? "them" : "it"} under `
-      + `“Phases &amp; dates”.`);
+    const n = j.needsDates.length;
+    setStatus(`Imported. ${n} phase date${n > 1 ? "s" : ""} couldn't be read — `
+      + `set ${n > 1 ? "them" : "it"} under “Phases &amp; dates”.`);
     document.getElementById("phases-box").open = true;
   } else setStatus();
+}
+
+/* ---------- the import sheet ----------
+   The unit of choice is a whole AREA: add theirs, or keep mine. No per-feature
+   merge, no conflict resolution. "Advanced" is per-feature SELECTION, which is
+   a different and much simpler thing. */
+let importState = null;
+
+function openImportSheet(j) {
+  const theirs = j.parsed;
+  const mine = liveNetwork();
+  const plan = planMerge(mine, theirs);
+  const areaChoices = {};
+  plan.areas.forEach((a) => { areaChoices[String(a.id)] = a.choice; });
+  const phaseMapping = {};
+  plan.phases.rows.forEach((r) => { phaseMapping[r.fromId] = r.toId; });
+  importState = { j, theirs, mine, plan, areaChoices, phaseMapping,
+                  featureChoices: null };
+
+  const decided = plan.areas.filter((a) => !a.untouched).length;
+  document.getElementById("import-title").textContent =
+    `This file covers ${decided} area${decided === 1 ? "" : "s"}.`;
+  renderImportAreas();
+  renderImportSeam();
+  renderImportFeatures();
+  renderImportPhases();
+  document.getElementById("import-sheet").hidden = false;
+  setStatus();
+}
+function closeImportSheet() {
+  document.getElementById("import-sheet").hidden = true;
+  importState = null;
+}
+function renderImportAreas() {
+  const box = document.getElementById("import-areas");
+  box.innerHTML = "";
+  for (const a of importState.plan.areas) {
+    const row = document.createElement("div");
+    row.className = "area-row" + (a.untouched ? " untouched" : "");
+    const key = String(a.id);
+    const counts = a.untouched
+      ? `not in this file — your ${a.mineCount} `
+        + `${a.mineCount === 1 ? "feature is" : "features are"} untouched`
+      : `${a.theirsCount} in the file · you have `
+        + `${a.mineCount === 0 ? "none" : a.mineCount}`;
+    row.innerHTML = `<span class="area-name">${a.name}</span>`
+      + `<span class="area-counts">${counts}</span>`;
+    if (!a.untouched) {
+      const choice = document.createElement("span");
+      choice.className = "area-choice";
+      for (const [value, label] of [["theirs", a.isNew ? "Add theirs" : "Use theirs"],
+                                    ["mine", "Keep mine"]]) {
+        if (a.isNew && value === "mine") continue;   // nothing of mine to keep
+        const l = document.createElement("label");
+        const r = document.createElement("input");
+        r.type = "radio"; r.name = `area-${key}`; r.value = value;
+        r.checked = importState.areaChoices[key] === value;
+        r.addEventListener("change", () => {
+          importState.areaChoices[key] = value;
+          renderImportFeatures();
+        });
+        l.appendChild(r);
+        l.appendChild(document.createTextNode(label));
+        choice.appendChild(l);
+      }
+      if (a.isNew) {
+        const l = document.createElement("label");
+        const r = document.createElement("input");
+        r.type = "checkbox"; r.checked = importState.areaChoices[key] === "theirs";
+        r.addEventListener("change", () => {
+          importState.areaChoices[key] = r.checked ? "theirs" : "mine";
+          renderImportFeatures();
+        });
+        choice.innerHTML = "";
+        l.appendChild(r); l.appendChild(document.createTextNode("Add theirs"));
+        choice.appendChild(l);
+      }
+      row.appendChild(choice);
+    }
+    box.appendChild(row);
+  }
+}
+function renderImportSeam() {
+  const el = document.getElementById("import-seam");
+  const names = importState.plan.seamCrossing;
+  if (!names.length) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = `${names.length} `
+    + `${names.length === 1 ? "feature crosses" : "features cross"} into areas `
+    + `you're keeping — they stay as you have them.`;
+}
+function renderImportFeatures() {
+  const box = document.getElementById("import-features");
+  box.innerHTML = "";
+  const { plan, theirs, areaChoices, featureChoices } = importState;
+  const incoming = theirs.features.filter(
+    (f) => areaChoices[String(plan.theirsBy.get(f.id))] === "theirs");
+  if (!incoming.length) {
+    box.innerHTML = '<p class="hint">Nothing is coming in right now.</p>';
+    return;
+  }
+  for (const f of incoming) {
+    const l = document.createElement("label");
+    l.className = "feature-pick";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !featureChoices || featureChoices[f.id] !== false;
+    cb.addEventListener("change", () => {
+      if (!importState.featureChoices) importState.featureChoices = {};
+      importState.featureChoices[f.id] = cb.checked;
+    });
+    l.appendChild(cb);
+    l.appendChild(document.createTextNode(" " + (f.name || "(unnamed)")));
+    box.appendChild(l);
+  }
+}
+function renderImportPhases() {
+  const wrap = document.getElementById("import-phases");
+  const plan = importState.plan.phases;
+  // Skipped entirely when it would be trivial — the fantasy-map user who put
+  // everything in one phase should never learn this screen exists.
+  if (plan.trivial) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  const box = document.getElementById("import-phase-rows");
+  box.innerHTML = "";
+  for (const r of plan.rows) {
+    const row = document.createElement("div");
+    row.className = "phase-row";
+    const from = document.createElement("span");
+    from.className = "from";
+    from.textContent = `Their “${r.fromLabel}”`
+      + (r.fromDate ? ` (${r.fromDate})` : "") + " →";
+    const sel = document.createElement("select");
+    // Labels and dates, never bare numbers: "Phase 2" isn't a choice anyone
+    // can make.
+    for (const o of plan.options) {
+      const opt = document.createElement("option");
+      opt.value = o.id;
+      opt.textContent = `your ${o.label}${o.date ? ` — ${o.date}` : ""}`;
+      sel.appendChild(opt);
+    }
+    const extra = document.createElement("option");
+    extra.value = "__new__";
+    extra.textContent = "…add it as a new phase at the end";
+    sel.appendChild(extra);
+    sel.value = importState.phaseMapping[r.fromId] || plan.options[0].id;
+    sel.addEventListener("change", () => {
+      importState.phaseMapping[r.fromId] = sel.value;
+      checkPhaseOrder();
+    });
+    row.appendChild(from); row.appendChild(sel);
+    box.appendChild(row);
+  }
+  checkPhaseOrder();
+}
+function checkPhaseOrder() {
+  const plan = importState.plan.phases;
+  const rows = plan.rows.map((r) => ({ ...r,
+    toId: importState.phaseMapping[r.fromId] }));
+  const warn = document.getElementById("import-phase-warn");
+  // Many-to-one is a normal thing to want. Only order inversion warns.
+  if (plan.isInverted(rows)) {
+    warn.hidden = false;
+    warn.textContent = "⚠ Their later phase is going into an earlier phase "
+      + "than their earlier one. That's allowed, but their sequencing won't "
+      + "survive the import.";
+  } else warn.hidden = true;
+}
+function bindImportSheet() {
+  document.getElementById("import-cancel").onclick = () => {
+    closeImportSheet(); setStatus("Import cancelled.");
+  };
+  document.getElementById("import-all").onclick = async () => {
+    // Naming the cost, and offering the only undo this tool has.
+    const losing = importState.plan.areas
+      .filter((a) => !a.untouched && a.mineCount > 0)
+      .map((a) => `${a.mineCount} in ${a.name}`);
+    if (losing.length) {
+      const msg = `This replaces ${losing.join(" and ")} with the ones in this `
+        + `file. There's no undo.\n\nSave a copy of your network first?`;
+      if (confirm(msg)) await exportYaml();
+      if (!confirm("Go ahead and use theirs everywhere?")) return;
+    }
+    for (const a of importState.plan.areas) {
+      if (!a.untouched) importState.areaChoices[String(a.id)] = "theirs";
+    }
+    doImport();
+  };
+  document.getElementById("import-go").onclick = doImport;
+}
+function doImport() {
+  const { theirs, mine, plan, areaChoices, phaseMapping, featureChoices }
+    = importState;
+  const merged = applyMerge(mine, theirs,
+    { areaChoices, phaseMapping, featureChoices });
+  const notes = describeMerge(plan, areaChoices);
+  const j = importState.j;
+  closeImportSheet();
+
+  clearFeatures();
+  config = { ...config,
+             areas: merged.areas, authorities: merged.authorities,
+             phases: merged.phases };
+  loadFeatureCollection(featuresToGeojson(merged.features));
+  afterImport(j, notes);
 }
 
 /* ---------- snap to roads ---------- */
@@ -1161,6 +1388,19 @@ async function init() {
   }
   if (!config.authorities.length) config.authorities = place.authorities || [];
 
+  // An area with no boundary is not self-describing, and area assignment on
+  // import has nothing to work with — every feature would land in "somewhere
+  // else". A file upgraded from v1 has exactly that problem, because v1 kept
+  // the boundary outside the file. Adopt the deployment's boundary once, and
+  // autosave writes it into the network so the file carries its own outline
+  // from then on (V2_PLAN.md D1).
+  const deploymentBoundary = await store.boundary();
+  if (deploymentBoundary.length && config.areas.length
+      && !(config.areas[0].boundary || []).length) {
+    config.areas[0] = { ...config.areas[0], boundary: deploymentBoundary };
+    markDirty();
+  }
+
   (data.boundary || []).forEach((ring) => {
     L.polyline(ring, { color: BOUNDARY, weight: 1.5, dashArray: "7,6",
                        opacity: 0.8, interactive: false, pmIgnore: true })
@@ -1197,7 +1437,7 @@ async function init() {
     selectFeature(f); markDirty(); recomputeTotals(); setStatus();
   });
 
-  bindForm(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
+  bindForm(); bindImportSheet(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
   applyPhaseView();   // a fresh load must already honour upgrades
   initContextLayers();
 

@@ -189,6 +189,44 @@
         <div class="result" id="result"></div>
       </div>
     </aside>
+
+  <!-- Bringing in someone else's network. A transient full-screen sheet, so it
+       costs nothing in the resting UI and works the same on a phone. The unit
+       of choice is a whole AREA; "Advanced" is per-feature SELECTION, which is
+       a different and much simpler thing than merging. -->
+  <div id="import-sheet" class="sheet" hidden>
+    <div class="sheet-inner">
+      <h2 id="import-title">This file covers 1 area.</h2>
+      <p class="hint" id="import-sub">Choose what to bring in. Nothing is
+        replaced unless you say so.</p>
+
+      <div id="import-areas"></div>
+
+      <div id="import-seam" class="hint" hidden></div>
+
+      <details id="import-advanced">
+        <summary class="cardsum">Advanced: choose individual features</summary>
+        <p class="hint">Most people won't need this — it's easy to end up with
+          two versions of the same street.</p>
+        <div id="import-features"></div>
+      </details>
+
+      <div id="import-phases" hidden>
+        <h3>Their phases don't line up with yours</h3>
+        <p class="hint">Pick where each of their phases should land. Keeping
+          your own phase plan.</p>
+        <div id="import-phase-rows"></div>
+        <div id="import-phase-warn" class="warnchip" hidden></div>
+      </div>
+
+      <div class="btnrow sheet-actions">
+        <button id="import-cancel" class="ghost">Cancel</button>
+        <button id="import-all" class="ghost">Use theirs everywhere</button>
+        <button id="import-go" class="primary">Bring it in</button>
+      </div>
+    </div>
+  </div>
+
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

@@ -220,3 +220,29 @@ input.warn-field { border-color: #f59e0b; background: #fffbeb; }
   padding:2px 9px;font-size:12px;cursor:pointer;line-height:1.6}
 .treatment-tab.active{background:#0072B2;border-color:#0072B2;color:#fff}
 button.small{padding:2px 8px;font-size:12px}
+
+/* The import sheet: transient, full-screen, and the only new visible surface
+   the merge feature adds. It appears only while an import is being decided. */
+.sheet{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.45);
+  display:flex;align-items:center;justify-content:center;padding:16px}
+.sheet[hidden]{display:none}
+.sheet-inner{background:#fff;border-radius:10px;max-width:620px;width:100%;
+  max-height:90vh;overflow:auto;padding:18px 20px;
+  box-shadow:0 6px 30px rgba(0,0,0,.35)}
+.sheet-inner h2{margin:0 0 4px}
+.sheet-inner h3{margin:16px 0 4px;font-size:14px}
+.sheet-actions{margin-top:18px;justify-content:flex-end}
+.area-row{display:flex;align-items:center;gap:10px;padding:8px 0;
+  border-bottom:1px solid #eee;flex-wrap:wrap}
+.area-row .area-name{font-weight:600;min-width:120px}
+.area-row .area-counts{color:#555;font-size:12px;flex:1}
+.area-row.untouched{opacity:.6}
+.area-choice{display:flex;gap:10px;font-size:13px}
+.area-choice label{display:flex;align-items:center;gap:4px;cursor:pointer}
+.phase-row{display:flex;align-items:center;gap:8px;padding:5px 0;flex-wrap:wrap}
+.phase-row .from{flex:1;min-width:180px}
+.feature-pick{display:block;font-size:13px;padding:2px 0}
+@media (max-width:760px){
+  .sheet{padding:0}
+  .sheet-inner{max-height:100vh;border-radius:0;height:100%}
+}

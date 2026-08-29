@@ -238,3 +238,33 @@ test("partsKm ignores point parts", () => {
   assert.equal(partsKm([[[0.5, 0.5]]]), 0);
   assert.ok(partsKm([[[0.5, 0.2], [0.5, 0.4]]]) > 0);
 });
+
+// --------------------------------------------------------------------------
+// Per-area attribution
+// --------------------------------------------------------------------------
+test("totals are attributed to the area a feature is actually in", () => {
+  // Lumping everything into areas[0] was a stub that quietly lied the moment a
+  // network covered more than one town.
+  const EAST = { id: "east", name: "Eastville",
+                 boundary: [[[[0, 1], [0, 2], [1, 2], [1, 1], [0, 1]]]] };
+  const west = feat({ id: "fw", geometry: [[[0.5, 0.2], [0.5, 0.4]]] });
+  const east = feat({ id: "fe", geometry: [[[0.5, 1.2], [0.5, 1.4]]],
+                      treatments: [makeTreatment({ id: "te",
+                        type: "quick_build_separated", status: "proposed",
+                        phase: "p1" })] });
+  const n = net({ areas: [{ id: "a1", name: "Westville",
+                            boundary: [[[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]] },
+                          EAST],
+                  features: [west, east] });
+  const s = summarize([west, east], n);
+  const by = Object.fromEntries(s.by_area.map((a) => [a.name, a.km]));
+  assert.ok(by.Westville > 0 && by.Eastville > 0);
+  assert.ok(Math.abs(by.Westville - by.Eastville) < 1e-9);   // equal lengths
+});
+
+test("a feature in no declared area is reported as Elsewhere, not misfiled", () => {
+  const stray = feat({ id: "fx", geometry: [[[9, 9], [9, 9.2]]] });
+  const n = net({ features: [stray] });
+  const s = summarize([stray], n);
+  assert.ok(s.by_area.some((a) => a.name === "Elsewhere"));
+});

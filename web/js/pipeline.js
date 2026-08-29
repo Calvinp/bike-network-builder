@@ -71,6 +71,34 @@ export function clipFeatures(features, boundary, warnings = [], notices = []) {
   return out;
 }
 
+// Which area does a feature belong to? Majority of length for lines,
+// containment for points. Lives here rather than in merge.js because the
+// totals need it too: "how many km are in Medford" is a per-area question, and
+// lumping everything into areas[0] was a stub that quietly lied once a network
+// covered more than one town.
+export function assignAreas(features, areas) {
+  const out = new Map();
+  for (const f of features) {
+    const lines = typeof f.lines === "function"
+      ? f.lines() : (f.geometry || []).filter((p) => p.length >= 2);
+    const points = typeof f.points === "function"
+      ? f.points() : (f.geometry || []).filter((p) => p.length === 1).map((p) => p[0]);
+    let best = null, bestScore = 0;
+    for (const area of areas) {
+      if (!area.boundary || !area.boundary.length) continue;
+      let score = lines.length ? clipSegmentsLatlon(lines, area.boundary)[1] : 0;
+      // A point contributes a nominal weight, so a point-only feature still
+      // lands somewhere and a mostly-line feature isn't swung by one dot.
+      for (const pt of points) {
+        if (pointInBoundary(pt[0], pt[1], area.boundary)) score += 1e-6;
+      }
+      if (score > bestScore) { bestScore = score; best = area.id; }
+    }
+    out.set(f.id, bestScore > 0 ? best : null);
+  }
+  return out;
+}
+
 // Which phase numbers a set of phases resolves ids to.
 const phaseNumber = (net, phaseId) => {
   const p = net.phaseMap().get(phaseId);
@@ -132,6 +160,7 @@ export function summarize(features, net, { reg, units = "imperial" } = {}) {
 
   const byAuthority = new Map();
   const byArea = new Map();
+  const areaOf = assignAreas(features, net.areas);
   const quantities = new Map();
   let buildKm = 0, laneKm = 0, buildCount = 0;
   let costLow = 0, costHigh = 0;
@@ -143,8 +172,9 @@ export function summarize(features, net, { reg, units = "imperial" } = {}) {
     buildCount += 1;
     const key = x.t.authority || "";
     byAuthority.set(key, (byAuthority.get(key) || 0) + x.km);
+    const area = areaOf.get(x.f.id) ?? "";
+    byArea.set(area, (byArea.get(area) || 0) + x.km);
   }
-  byArea.set(areaId, buildKm);
 
   // Cost includes EVERY phase's work, superseded or not — building twice
   // costs twice.
@@ -191,8 +221,9 @@ export function summarize(features, net, { reg, units = "imperial" } = {}) {
     by_authority: [...byAuthority.entries()]
       .map(([id, km]) => ({ id, name: net.authority(id).name, km }))
       .sort((a, b) => b.km - a.km),
-    by_area: [...byArea.entries()].map(([id, km]) => ({
-      id, name: (net.area(id) || {}).name || "", km })),
+    by_area: [...byArea.entries()]
+      .map(([id, km]) => ({ id, name: (net.area(id) || {}).name || "Elsewhere", km }))
+      .sort((a, b) => b.km - a.km),
     quantities: [...quantities.values()].filter((q) => q.n > 0),
     cost_low: costLow,
     cost_high: costHigh,

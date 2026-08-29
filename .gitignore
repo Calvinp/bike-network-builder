@@ -33,3 +33,7 @@ Thumbs.db
 
 # Node (web/ port tooling)
 node_modules/
+
+# Network files are yours, not the repo's (V2_PLAN.md 7).
+networks/*
+!networks/README.md

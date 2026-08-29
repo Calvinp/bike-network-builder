@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Store, configForBrowser, networkFromBrowser } from "../js/store.js";
 import { pointInBoundary } from "../js/boundary.js";
-import { makeFeature, makeNetwork, makePhase, makeTreatment, parseNetwork,
-         serializeNetwork } from "../js/network_format.js";
+import { makeArea, makeFeature, makeNetwork, makePhase, makeTreatment,
+         parseNetwork, serializeNetwork } from "../js/network_format.js";
 import { featuresToGeojson } from "../js/geojson.js";
 import { zipCreate } from "../js/zip.js";
 
@@ -205,4 +205,17 @@ test("exportYamlText round trips the stored network", async () => {
   await store.loadNetwork();
   const text = await store.exportYamlText();
   assert.equal(parseNetwork(text).features[0].name, "Trail");
+});
+
+test("a boundary supplied by the UI is saved, not silently discarded", async () => {
+  // Boundaries aren't edited in the UI, but they do arrive there — adopted
+  // from the deployment on first load, or carried in by an import. Taking the
+  // stored one unconditionally threw both away on every save.
+  const existing = makeNetwork({
+    areas: [makeArea({ id: "a1", name: "Malden", boundary: [] })], features: [] });
+  const ring = [[[[0, 0], [0, 1], [1, 1], [0, 0]]]];
+  const merged = networkFromBrowser(
+    { network: { features: [] },
+      config: { areas: [{ id: "a1", name: "Malden", boundary: ring }] } }, existing);
+  assert.equal(merged.areas[0].boundary.length, 1);
 });
