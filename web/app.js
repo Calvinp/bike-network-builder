@@ -57,9 +57,9 @@ let options = {};
 let config = { areas: [], authorities: [], phases: [], units: "metric",
                costs: {}, meta: {} };
 let units = "imperial";     // DISPLAY preference; storage is always metric
-let colorMode = "phase";
+let colorMode = "treatment";
 let phaseView = "all";
-let editMode = false, dirty = false, combineFrom = null;
+let dirty = false, combineFrom = null;
 
 /* Undo/redo. Snapshots of the serialized network, bounded by bytes so a big
    network gets shallow history rather than eating the tab (see history.js).
@@ -274,7 +274,7 @@ function addFeature(props, treatments, lines, points) {
                          { color: "#444", weight: 4, renderer: networkRenderer });
     f.layer.on("click", () => {
       if (combineFrom) { if (f !== combineFrom) combineInto(combineFrom, f); return; }
-      if (!editMode) selectFeature(f);
+      selectFeature(f);
     });
     f.layer.on("pm:edit", () => {
       markDirty(); syncOverlays(f); updateArrows(f);
@@ -286,7 +286,7 @@ function addFeature(props, treatments, lines, points) {
   for (const pt of points || []) {
     const m = L.marker(pt, { icon: pointIcon(treatments[0] || defaultTreatment()),
                              draggable: true, pmIgnore: true, keyboard: false });
-    m.on("click", () => { if (!editMode) selectFeature(f); });
+    m.on("click", () => selectFeature(f));
     m.on("dragend", () => markDirty());
     m.addTo(pointsGroup);        // own group — never networkGroup (getBounds)
     f.markers.push(m);
@@ -371,6 +371,7 @@ function combineInto(target, other) {
 /* ---------- selection + property form ---------- */
 function isMobile() { return window.matchMedia("(max-width: 760px)").matches; }
 function selectFeature(f) {
+  if (selected !== f) stopEditingShape();
   const prev = selected; selected = f;
   if (prev && prev !== f) restyle(prev);
   restyle(f);
@@ -381,6 +382,7 @@ function selectFeature(f) {
   }
 }
 function deselect() {
+  stopEditingShape();
   const prev = selected; selected = null;
   if (prev) restyle(prev);
   document.getElementById("prop-form").style.display = "none";
@@ -456,6 +458,9 @@ function fillForm(f) {
     (isLine && t.travel === "one_way") ? "" : "none";
   document.getElementById("btn-snap-sel").style.display = isLine ? "" : "none";
   document.getElementById("btn-combine").style.display = isLine ? "" : "none";
+  document.getElementById("btn-edit").style.display = isLine ? "" : "none";
+  document.getElementById("btn-edit").classList.toggle(
+    "toggled", Boolean(f.layer && f.layer.pm && f.layer.pm.enabled()));
 
   // `quantity` only means something for a counted treatment, and the unit
   // comes from the registry so the label reads "How many trees".
@@ -1452,7 +1457,7 @@ function reverseSelected() {
 }
 
 /* ---------- drawing / edit mode ---------- */
-let drawDefaults = null, placingPoint = false;
+let drawDefaults = null, placingPoint = null;
 function startDraw(over) {
   // Drawing means editing the full plan — leave any phase preview first.
   if (phaseView !== "all") setPhaseView("all");
@@ -1464,11 +1469,13 @@ function startDraw(over) {
     + (snap ? " Clicks near a street snap to it; clicks away from streets "
             + "(parks, trails) stay where you put them." : ""));
 }
-function startPlacePoint() {
+function startPlacePoint(over) {
   if (phaseView !== "all") setPhaseView("all");
   deselect();
-  placingPoint = true;
-  setStatus("Click the map where the improvement goes — Esc cancels.");
+  placingPoint = over || { status: "proposed" };
+  setStatus(placingPoint.status === "existing"
+    ? "Click the map where it is — Esc cancels."
+    : "Click the map where the improvement goes — Esc cancels.");
 }
 function undoDrawVertex() {
   const d = map.pm.Draw && map.pm.Draw.Line;
@@ -1478,13 +1485,28 @@ function undoDrawVertex() {
   }
   return false;
 }
-function toggleEdit() {
-  editMode = !editMode;
-  document.getElementById("btn-edit").classList.toggle("toggled", editMode);
-  if (editMode) {
-    map.pm.enableGlobalEditMode(); deselect();
-    setStatus("Edit mode: drag the dots to reshape lines.");
-  } else { map.pm.disableGlobalEditMode(); setStatus(); }
+/* Shape editing belongs to the thing being edited. It used to be a global
+   mode toggled from the header, which meant "reshape a line" and "which line"
+   were two separate acts; now it is a button on the selected feature and only
+   that feature's vertices become draggable. */
+function editingFeature() {
+  return features.find((f) => f.layer && f.layer.pm && f.layer.pm.enabled());
+}
+function stopEditingShape() {
+  const f = editingFeature();
+  if (f) f.layer.pm.disable();
+  const btn = document.getElementById("btn-edit");
+  if (btn) btn.classList.remove("toggled");
+}
+function toggleEditShape() {
+  if (!selected || !selected.layer) return;
+  const on = selected.layer.pm.enabled();
+  stopEditingShape();
+  if (!on) {
+    selected.layer.pm.enable({ allowSelfIntersection: true });
+    document.getElementById("btn-edit").classList.add("toggled");
+    setStatus("Drag the dots to reshape this line. Click Edit shape again when done.");
+  } else setStatus();
 }
 
 /* ---------- init ---------- */
@@ -1579,9 +1601,11 @@ async function init() {
   });
   map.on("click", (e) => {
     if (!placingPoint) return;
-    placingPoint = false;
-    const f = addFeature(defaultProps({ name: "New spot" }),
-                         [defaultTreatment({ type: "speed_hump" })], [], [e.latlng]);
+    const over = placingPoint;
+    placingPoint = null;
+    const f = addFeature(
+      defaultProps({ name: over.status === "existing" ? "Existing spot" : "New spot" }),
+      [defaultTreatment({ type: "speed_hump", ...over })], [], [e.latlng]);
     selectFeature(f); markDirty(); recomputeTotals(); setStatus();
   });
 
@@ -1593,11 +1617,7 @@ async function init() {
   applyPhaseView();   // a fresh load must already honour upgrades
   initContextLayers();
 
-  document.getElementById("btn-add").onclick = () => startDraw({ status: "proposed" });
-  document.getElementById("btn-add-existing").onclick = () => startDraw(
-    { status: "existing", type: "shared_use_path", phase: null });
-  document.getElementById("btn-add-spot").onclick = startPlacePoint;
-  document.getElementById("btn-edit").onclick = toggleEdit;
+  document.getElementById("btn-edit").onclick = toggleEditShape;
   document.getElementById("btn-undo").onclick = doUndo;
   document.getElementById("btn-redo").onclick = doRedo;
   document.getElementById("btn-add-phase").onclick = addPhase;
@@ -1616,7 +1636,8 @@ async function init() {
   }
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && combineFrom) { combineFrom = null; setStatus(); }
-    if (e.key === "Escape" && placingPoint) { placingPoint = false; setStatus(); }
+    if (e.key === "Escape" && placingPoint) { placingPoint = null; setStatus(); }
+    if (e.key === "Escape") stopEditingShape();
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
     const mod = e.ctrlKey || e.metaKey;
     // Ctrl+Z while drawing removes the last clicked point; otherwise it undoes
@@ -1653,26 +1674,57 @@ async function init() {
 
   const phasesBox = document.getElementById("phases-box");
   phasesBox.open = (colorMode === "phase");
+  document.getElementById("color-mode").value = colorMode;
   document.getElementById("color-mode").addEventListener("change", (e) => {
     colorMode = e.target.value; restyleAll(); renderLegend();
     // Phases are front-and-center only when the map is coloured by them.
     phasesBox.open = (colorMode === "phase");
   });
 
-  const exportBtn = document.getElementById("btn-export");
-  const exportMenu = document.getElementById("export-menu");
-  exportBtn.addEventListener("click", (e) => {
-    e.stopPropagation(); exportMenu.hidden = !exportMenu.hidden;
-  });
-  document.addEventListener("click", () => { exportMenu.hidden = true; });
-  exportMenu.querySelectorAll("button").forEach((b) => {
-    b.addEventListener("click", (e) => {
-      e.stopPropagation(); exportMenu.hidden = true;
-      const kind = b.dataset.export;
-      if (kind === "yaml") exportYaml();
-      else if (kind === "bundle") exportBundle();
-      else exportOutput(kind);
+  // One behaviour for every header menu: click to open, click anywhere to
+  // close, and a click inside a menu that isn't a command (a select, a
+  // checkbox) leaves it open so you can change two things at once.
+  function wireMenu(buttonId, menuId, onCommand) {
+    const button = document.getElementById(buttonId);
+    const menu = document.getElementById(menuId);
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wasHidden = menu.hidden;
+      closeMenus();
+      menu.hidden = !wasHidden;
     });
+    menu.addEventListener("click", (e) => e.stopPropagation());
+    menu.querySelectorAll("button").forEach((b) => {
+      b.addEventListener("click", () => { menu.hidden = true; onCommand(b); });
+    });
+  }
+  function closeMenus() {
+    ["add-menu", "display-menu", "export-menu"].forEach((id) => {
+      const m = document.getElementById(id);
+      if (m) m.hidden = true;
+    });
+  }
+  document.addEventListener("click", closeMenus);
+
+  wireMenu("btn-add", "add-menu", (b) => {
+    switch (b.dataset.add) {
+      case "path": startDraw({ status: "proposed" }); break;
+      case "existing-path":
+        startDraw({ status: "existing", type: "shared_use_path", phase: null });
+        break;
+      case "spot": startPlacePoint({ status: "proposed" }); break;
+      case "existing-spot":
+        startPlacePoint({ status: "existing", phase: null });
+        break;
+      default: break;
+    }
+  });
+  wireMenu("btn-display", "display-menu", () => {});
+  wireMenu("btn-export", "export-menu", (b) => {
+    const kind = b.dataset.export;
+    if (kind === "yaml") exportYaml();
+    else if (kind === "bundle") exportBundle();
+    else exportOutput(kind);
   });
 
   document.getElementById("import-file").addEventListener("change", (e) => {

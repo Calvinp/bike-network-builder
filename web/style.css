@@ -246,3 +246,18 @@ button.small{padding:2px 8px;font-size:12px}
   .sheet{padding:0}
   .sheet-inner{max-height:100vh;border-radius:0;height:100%}
 }
+
+/* Menu contents that aren't plain buttons: a checkbox, and a labelled select.
+   They line up with the buttons above them so a menu reads as one list. */
+.menu .menu-check,
+.menu .menu-field {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; font-size: 13px; white-space: nowrap; cursor: pointer;
+}
+.menu .menu-field { justify-content: space-between; }
+.menu .menu-field span { color: #444; }
+.menu .menu-field select { min-width: 150px; }
+.menu.wide { min-width: 260px; }
+.menu .menu-check + button,
+.menu button + .menu-check,
+.menu button + .menu-field { border-top: 1px solid #eee; }

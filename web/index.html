@@ -11,33 +11,50 @@
 <body>
   <header>
     <div class="brand">Bike Network <span>Builder</span></div>
-    <button id="btn-add" class="ghost">+ Add path</button>
-    <button id="btn-add-existing" class="ghost">+ Add existing path</button>
-    <button id="btn-add-spot" class="ghost"
-      title="A single-point improvement: speed hump, raised crosswalk, bike parking, street trees…">+ Add spot</button>
+    <!-- Two menus rather than nine controls. The header had grown to the
+         point where it wrapped on a laptop and was unusable on a phone; the
+         things that belong together now sit together. -->
+    <div class="dropdown">
+      <button id="btn-add" class="ghost">+ Add ▾</button>
+      <div class="menu" id="add-menu" hidden>
+        <button data-add="path">Path (proposed)</button>
+        <button data-add="existing-path">Path that already exists</button>
+        <button data-add="spot"
+          title="A single-point improvement: speed hump, raised crosswalk, bike parking, street trees…">Spot (proposed)</button>
+        <button data-add="existing-spot">Spot that already exists</button>
+        <label class="menu-check"
+          title="Clicks near a street follow it and end at the area limit; clicks away from streets (parks, trails) stay exactly where you put them">
+          <input type="checkbox" id="snap" checked /> Snap to roads</label>
+      </div>
+    </div>
     <button id="btn-undo" class="ghost" title="Undo (Ctrl+Z)" disabled>↶</button>
     <button id="btn-redo" class="ghost" title="Redo (Ctrl+Y)" disabled>↷</button>
-    <button id="btn-edit" class="ghost">Edit shapes</button>
-    <label class="checkbox" title="Clicks near a street follow it and end at the city limit; clicks away from streets (parks, trails) stay exactly where you put them">
-      <input type="checkbox" id="snap" checked /> Snap to roads</label>
-    <label class="checkbox" title="How the network is color-coded, on screen and in exported maps">
-      Color by
-      <select id="color-mode">
-        <option value="phase" selected>Phase</option>
-        <option value="treatment">What is built</option>
-        <option value="single">One color</option>
-      </select></label>
-    <label class="checkbox" title="Distances and cost rates are stored in metric; this only changes what you see">
-      Units
-      <select id="units">
-        <option value="imperial" selected>miles</option>
-        <option value="metric">kilometres</option>
-      </select></label>
-    <label class="checkbox" title="Preview the network as it will exist after each phase. Totals and exports always cover the full plan.">
-      Show
-      <select id="phase-view">
-        <option value="all" selected>Full network</option>
-      </select></label>
+    <div class="dropdown">
+      <button id="btn-display" class="ghost">Display ▾</button>
+      <div class="menu wide" id="display-menu" hidden>
+        <label class="menu-field"
+          title="How the network is colour-coded, on screen and in exported maps">
+          <span>Colour by</span>
+          <select id="color-mode">
+            <option value="treatment" selected>What is built</option>
+            <option value="phase">Phase</option>
+            <option value="single">One colour</option>
+          </select></label>
+        <label class="menu-field"
+          title="Distances and cost rates are stored in metric; this only changes what you see">
+          <span>Units</span>
+          <select id="units">
+            <option value="imperial" selected>miles</option>
+            <option value="metric">kilometres</option>
+          </select></label>
+        <label class="menu-field"
+          title="Preview the network as it will exist after each phase. Totals and exports always cover the full plan.">
+          <span>Show</span>
+          <select id="phase-view">
+            <option value="all" selected>Full network</option>
+          </select></label>
+      </div>
+    </div>
     <div class="spacer"></div>
     <div class="status" id="status">Loading…</div>
     <a class="btnlike" href="help.html" target="_blank" title="How to use this tool, the file format, and how costs are estimated">Help</a>
@@ -149,6 +166,8 @@
               placeholder="e.g. the City 2030 plan" /></div>
           </details>
           <div class="btnrow">
+            <button id="btn-edit" class="ghost"
+              title="Drag the dots to reshape this line">Edit shape</button>
             <button id="btn-snap-sel" class="ghost">Snap to roads</button>
             <button id="btn-reverse" class="ghost" style="display:none"
               title="Flip which way this one-way path runs">⇄ Reverse direction</button>

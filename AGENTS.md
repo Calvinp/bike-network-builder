@@ -216,6 +216,18 @@ tests/                      pytest, incl. the Python<->JS parity checks
   drop the file in `data/layers/` **and** `web/data/layers/`, add a manifest entry.
 
 ### The app (web/app.js)
+- **The header is two menus, not nine controls** — Add (path / existing path /
+  spot / existing spot, plus Snap to roads) and Display (colour by, units,
+  show). It had grown to the point where it wrapped on a laptop and was
+  unusable on a phone. `wireMenu()` is the one behaviour for all three header
+  menus: a click inside a menu that isn't a command (a select, a checkbox)
+  leaves it open, so you can change two settings at once.
+- **Shape editing belongs to the selected feature**, not to a global mode.
+  `layer.pm.enable()` on that one layer; selecting elsewhere or pressing Escape
+  ends it. The button is hidden for a point feature, which has no shape to
+  edit — its marker is already draggable.
+- The default colour mode is `treatment` ("What is built"), which is the
+  question most people open the tool asking.
 - GOTCHA: never add decorator/plain LayerGroups to `networkGroup` —
   `FeatureGroup.getBounds()` throws on layers without getBounds and kills init;
   arrows live in `arrowsGroup`.
