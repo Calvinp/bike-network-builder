@@ -264,6 +264,21 @@ tests/                      pytest, incl. the Python<->JS parity checks
   NOT `CRASH_SEVERITY_DESCR` (which only says fatal / non-fatal / property damage).
 - The Overpass User-Agent uses the MSS contact address — keep it that way,
   Overpass etiquette wants a reachable contact.
+- **The basemap is CONFIGURATION, never a constant.** It was a hardcoded CARTO
+  URL until CARTO began requiring an API key and every tile came back stamped
+  "API KEY REQUIRED" — and a static app has nowhere to put a private key.
+  `place.json` names the tile URL and attribution now, for the live map AND the
+  PNG export. The keyless default is openstreetmap.org, which is fine for local
+  work and a small deployment; their usage policy discourages heavy use, so a
+  public deployment with real traffic should serve its own tiles. Same
+  conclusion and the same cheap static hosting as the roads tiles.
+- **Test the FRESH FIRST RUN from empty storage.** Every store test seeded a
+  network first, which left the default experience — no stored state, no seed
+  asset, an area invented from place.json — as the one path never exercised. It
+  threw inside serialize on the very first autosave, because a
+  place-synthesized area is a plain object and the serializer trusted its
+  shape. Anything reaching the serializer now goes through `makeArea` /
+  `makePhase`, and the serializer is defensive about missing collections.
 - **The browser must never call public Overpass** (V2_PLAN.md §8.5). Overpass
   is a batch tool: `build.py` and `fetch_layers.py`, where volume is bounded
   and a human is present. Snapping data reaches the browser as STATIC TILES,

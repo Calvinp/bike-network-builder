@@ -1033,7 +1033,8 @@ async function makeArtifacts(withPng) {
     .filter((s) => s && s.layer && s.data && map.hasLayer(s.layer))
     .map((s) => ({ entry: s.entry, geojson: s.data }));
   return buildArtifacts(net, rings, bounds,
-    { colorMode, renderPng: withPng ? renderPng : null, contextLayers: chosen });
+    { colorMode, renderPng: withPng ? renderPng : null, contextLayers: chosen,
+      basemap: place.basemap });
 }
 async function exportOutput(name) {
   setStatus("Preparing export… (a few seconds)");
@@ -1069,7 +1070,7 @@ async function exportBundle() {
     const phaseFiles = await buildPhaseArtifacts(
       net, await store.boundaryRings(), await store.boundary(),
       { colorMode, renderPng, features: art.features,
-        onProgress: (msg) => setStatus(msg) });
+        basemap: place.basemap, onProgress: (msg) => setStatus(msg) });
     for (const f of phaseFiles) {
       entries.push({ name: f.name, data: new Uint8Array(await f.blob.arrayBuffer()) });
     }
@@ -1502,8 +1503,14 @@ async function init() {
   map = L.map("map", { zoomControl: true });
   if (place.mapCenter) map.setView(place.mapCenter, place.mapZoom);
   else map.setView([0, 0], 2);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-    { attribution: "© OpenStreetMap, © CARTO", maxZoom: 20 }).addTo(map);
+  // The basemap comes from place.json. It used to be a hardcoded CARTO URL,
+  // which broke the day CARTO began requiring an API key — and a static app
+  // has nowhere to put a private key. Which tiles to draw is a deployment's
+  // decision now.
+  L.tileLayer(place.basemap.url, {
+    attribution: place.basemap.attribution,
+    maxZoom: place.basemap.maxZoom,
+  }).addTo(map);
   // SVG stops being viable in the low thousands of polylines, which a
   // multi-town network reaches easily. One shared canvas renderer for the
   // network keeps panning smooth; context layers already had their own.
@@ -1522,9 +1529,9 @@ async function init() {
   // A network with no areas of its own takes the deployment's, so a fresh
   // browser still says where it is on every export.
   if (!config.areas.length && place.name) {
-    config.areas = [{ id: place.id || newId("a-"), name: place.name,
-                      kind: place.kind, context: place.context,
-                      default_authority: place.defaultAuthority }];
+    config.areas = [makeArea({ id: place.id || newId("a-"), name: place.name,
+                               kind: place.kind, context: place.context,
+                               default_authority: place.defaultAuthority })];
   }
   if (!config.authorities.length) config.authorities = place.authorities || [];
 
@@ -1537,7 +1544,8 @@ async function init() {
   const deploymentBoundary = await store.boundary();
   if (deploymentBoundary.length && config.areas.length
       && !(config.areas[0].boundary || []).length) {
-    config.areas[0] = { ...config.areas[0], boundary: deploymentBoundary };
+    config.areas[0] = makeArea({ ...config.areas[0],
+                                 boundary: deploymentBoundary });
     markDirty();
   }
 

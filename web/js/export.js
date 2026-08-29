@@ -43,6 +43,7 @@ export async function buildArtifacts(net, boundaryRings, clipBoundary, {
   colorMode = "treatment",
   renderPng = null,
   contextLayers = [],
+  basemap = null,
 } = {}) {
   if (!COLOR_MODES.includes(colorMode)) {
     throw new Error(`color_mode must be one of ${COLOR_MODES.join(", ")} (got '${colorMode}')`);
@@ -66,7 +67,8 @@ export async function buildArtifacts(net, boundaryRings, clipBoundary, {
     contextLayers: embeddableLayers(contextLayers, notices),
   });
   const pngBlob = renderPng
-    ? await renderPng(features, net, { boundary: boundaryRings, colorMode })
+    ? await renderPng(features, net, { boundary: boundaryRings, colorMode,
+                                       basemapSource: basemap })
     : null;
 
   const summary = summarize(features, net);
@@ -108,6 +110,7 @@ export async function buildPhaseArtifacts(net, boundaryRings, clipBoundary, {
   colorMode = "treatment",
   renderPng = null,
   features = null,
+  basemap = null,
   onProgress = null,
 } = {}) {
   if (!renderPng) return [];
@@ -136,7 +139,7 @@ export async function buildPhaseArtifacts(net, boundaryRings, clipBoundary, {
   for (const stop of stops.slice(1)) {
     if (onProgress) onProgress(`Rendering phase ${stop.n}…`);
     const blob = await renderPng(featuresAsOfPhase(clippedNet, stop.n), net, {
-      boundary: boundaryRings, colorMode,
+      boundary: boundaryRings, colorMode, basemapSource: basemap,
       title: `${net.displayName || "Bike"} Network — Phase ${stop.n}`,
     });
     files.push({ name: `map-phase-${stop.n}.png`, blob });
@@ -151,7 +154,7 @@ export async function buildPhaseArtifacts(net, boundaryRings, clipBoundary, {
     const caption = stop.caption
       + "\n".repeat(lines - stop.caption.split("\n").length);
     frames.push(await renderPng(featuresAsOfPhase(clippedNet, stop.n), net, {
-      boundary: boundaryRings, colorMode,
+      boundary: boundaryRings, colorMode, basemapSource: basemap,
       title: `${net.displayName || "Bike"} Network — ${caption}`,
       figPx: GIF_PX,
       asImageData: true,

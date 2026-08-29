@@ -107,7 +107,7 @@ function loadTile(url) {
   });
 }
 
-async function drawBasemap(ctx, view, toPx) {
+async function drawBasemap(ctx, view, toPx, basemap) {
   // Pick the zoom whose 512px (retina) tiles land at <= ~1 source px per
   // canvas px, then fetch every tile covering the view. Any failure means no
   // basemap (like the desktop tool offline) — the plain background stays.
@@ -124,8 +124,12 @@ async function drawBasemap(ctx, view, toPx) {
   const jobs = [];
   for (let tx = txMin; tx <= txMax; tx++) {
     for (let ty = tyMin; ty <= tyMax; ty++) {
-      jobs.push({ tx, ty, img: loadTile(
-        `https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${tx}/${ty}@2x.png`) });
+      // Retina tiles if the provider offers them (a print-size PNG wants the
+      // density); otherwise the ordinary ones.
+      const template = basemap.retinaUrl || basemap.url;
+      jobs.push({ tx, ty, img: loadTile(template
+        .replace("{z}", z).replace("{x}", tx).replace("{y}", ty)
+        .replace("{s}", "a").replace("{r}", "")) });
     }
   }
   let drewAny = false;
@@ -175,6 +179,9 @@ export async function renderPng(features, net, {
   boundary = null,
   colorMode = "treatment",
   basemap = true,
+  // Which tiles to draw behind the map. Configuration, not a constant — see
+  // place.js.
+  basemapSource = null,
   title = null,
   // Long side of the image in pixels. Animation frames pass something small;
   // the extent comes from the boundary, so every frame lands on the same
@@ -238,7 +245,11 @@ export async function renderPng(features, net, {
   ctx.fillRect(0, titleH, W, H - titleH);
   let drewTiles = false;
   if (basemap) {
-    try { drewTiles = await drawBasemap(ctx, view, toPx); } catch { /* offline */ }
+    try {
+      drewTiles = await drawBasemap(ctx, view, toPx,
+        basemapSource || { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                           retinaUrl: "" });
+    } catch { /* offline */ }
   }
 
   // ---- the network ------------------------------------------------------ //

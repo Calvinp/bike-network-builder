@@ -519,10 +519,10 @@ function treatmentDict(t, defaults) {
   if (t.sides !== 2) out.sides = t.sides;
   if (t.side) out.side = t.side;
   if (t.quantity !== null && t.quantity !== undefined) out.quantity = t.quantity;
-  if (t.upgrades.length) out.upgrades = [...t.upgrades];
+  if ((t.upgrades || []).length) out.upgrades = [...t.upgrades];
   if (t.proposed_by) out.proposed_by = t.proposed_by;
   if (t.notes) out.notes = t.notes;
-  if (Object.keys(t.tags).length) out.tags = { ...t.tags };
+  if (Object.keys(t.tags || {}).length) out.tags = { ...t.tags };
   return out;
 }
 
@@ -546,7 +546,7 @@ function featureDict(f) {
   }
   Object.assign(out, defaults);
   out.treatments = f.treatments.map((t) => treatmentDict(t, defaults));
-  if (Object.keys(f.tags).length) out.tags = { ...f.tags };
+  if (Object.keys(f.tags || {}).length) out.tags = { ...f.tags };
   out.geometry = f.geometry.map(
     (part) => part.map(([lat, lon]) => [round6(lat), round6(lon)]));
   return out;
@@ -555,13 +555,16 @@ function featureDict(f) {
 const round6 = (v) => Math.round(v * 1e6) / 1e6;
 
 function areaDict(a) {
-  const out = { id: a.id, name: a.name, kind: a.kind };
+  // Defensive about collections: this is the public contract, and it should
+  // not throw because a caller handed over an area missing a field it never
+  // set. (It did, once — see store.networkFromBrowser.)
+  const out = { id: a.id, name: a.name, kind: a.kind || "municipality" };
   if (a.context) out.context = a.context;
   if (a.default_authority) out.default_authority = a.default_authority;
   if (a.updated) out.updated = a.updated;
-  if (a.contributors.length) out.contributors = [...a.contributors];
-  if (Object.keys(a.tags).length) out.tags = { ...a.tags };
-  if (a.boundary.length) {
+  if ((a.contributors || []).length) out.contributors = [...a.contributors];
+  if (Object.keys(a.tags || {}).length) out.tags = { ...a.tags };
+  if ((a.boundary || []).length) {
     out.boundary = a.boundary.map((poly) => poly.map(
       (ring) => ring.map(([lat, lon]) => [round6(lat), round6(lon)])));
   }
@@ -572,7 +575,7 @@ function phaseDict(p) {
   const out = { id: p.id, number: p.number };
   if (p.label) out.label = p.label;
   if (p.target_date) out.target_date = p.target_date;
-  if (Object.keys(p.tags).length) out.tags = { ...p.tags };
+  if (Object.keys(p.tags || {}).length) out.tags = { ...p.tags };
   return out;
 }
 

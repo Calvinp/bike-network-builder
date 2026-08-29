@@ -32,5 +32,22 @@
   "fetch": {
     "crash_city_name": "Malden"
   },
-  "_comment": "No seed_network is shipped: the repo carries no network data. A deployment that wants to open on its existing conditions adds one here and drops the file beside it."
+  "_comment": "No seed_network is shipped: the repo carries no network data. A deployment that wants to open on its existing conditions adds one here and drops the file beside it.",
+  "basemap": {
+    "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    "attribution": "\u00a9 OpenStreetMap contributors",
+    "max_zoom": 19,
+    "_comment": [
+      "Which tiles to draw behind the map. This is configuration because a",
+      "provider can start requiring an API key - CARTO did, and a static app",
+      "has nowhere to put a private key.",
+      "",
+      "openstreetmap.org's tiles are keyless and fine for local work and a",
+      "small deployment. Their tile usage policy DISCOURAGES heavy use,",
+      "though, so a public deployment with real traffic should serve its own",
+      "tiles - the same conclusion, and the same cheap static hosting, as the",
+      "roads tiles in V2_PLAN.md 8.2. Growth being a burden on a donated",
+      "public resource is a bug, not a success."
+    ]
+  }
 }

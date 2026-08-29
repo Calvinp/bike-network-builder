@@ -120,3 +120,37 @@ test("a synthetic place drives the app with no code change", async () => {
   assert.deepEqual(net.features, []);
   assert.deepEqual(net.areas, []);
 });
+
+// --------------------------------------------------------------------------
+// The basemap is configuration, not a constant
+// --------------------------------------------------------------------------
+test("a place with no basemap gets a keyless default", async () => {
+  // It was a hardcoded CARTO URL until CARTO began requiring an API key and
+  // every tile came back stamped "API KEY REQUIRED". A static app has nowhere
+  // to put a private key, so the provider has to be a deployment's choice.
+  const { DEFAULT_BASEMAP } = await import("../js/place.js");
+  const place = parsePlace({ name: "Bare" });
+  assert.equal(place.basemap.url, DEFAULT_BASEMAP.url);
+  assert.ok(!/\{key\}|apikey|api_key/i.test(place.basemap.url),
+            "the default must not need an account");
+  assert.ok(place.basemap.attribution);
+});
+
+test("a deployment can point the basemap wherever it likes", () => {
+  const place = parsePlace({ name: "T", basemap: {
+    url: "https://tiles.example.org/{z}/{x}/{y}.png",
+    attribution: "© Example", max_zoom: 17,
+    retina_url: "https://tiles.example.org/{z}/{x}/{y}@2x.png" } });
+  assert.equal(place.basemap.url, "https://tiles.example.org/{z}/{x}/{y}.png");
+  assert.equal(place.basemap.attribution, "© Example");
+  assert.equal(place.basemap.maxZoom, 17);
+  assert.ok(place.basemap.retinaUrl.endsWith("@2x.png"));
+});
+
+test("the shipped place.json ships a keyless basemap with attribution", async () => {
+  const fs = await import("node:fs");
+  const place = parsePlace(JSON.parse(fs.readFileSync(
+    new URL("../data/place.json", import.meta.url), "utf8")));
+  assert.ok(place.basemap.url.includes("{z}"));
+  assert.ok(place.basemap.attribution.length > 0);
+});

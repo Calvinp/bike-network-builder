@@ -440,3 +440,61 @@ test("the store awaits its storage, so an async adapter works", async () => {
   const net = await store.loadNetwork();
   assert.equal(net.features[0].name, "Trail");
 });
+
+// --------------------------------------------------------------------------
+// The genuinely fresh first run
+// --------------------------------------------------------------------------
+// Every other test here seeds a network first, which meant the DEFAULT
+// experience — empty storage, no seed asset, an area invented from place.json
+// — was the one path never exercised. It threw inside serialize on the first
+// autosave, because a place-synthesized area is a plain object with no
+// `contributors` or `tags` and the serializer trusted the shape it was given.
+test("a first-time visitor with nothing stored can autosave", async () => {
+  const m = new Map();
+  const store = new Store({
+    storage: { getItem: (k) => (m.has(k) ? m.get(k) : null),
+               setItem: (k, v) => m.set(k, String(v)) },
+    fetchText: async (url) => {
+      if (url.endsWith("place.json")) {
+        // No seed_network: the repo ships no network data.
+        return JSON.stringify({ name: "Malden", context: "Massachusetts",
+          assets: { boundary: "data/b.geojson",
+                    treatments: "data/treatments.json" } });
+      }
+      if (url.endsWith("treatments.json")) return TREATMENTS;
+      if (url.endsWith("b.geojson")) return BOUNDARY_FC;
+      throw new Error(`unexpected fetch: ${url}`);
+    },
+  });
+
+  const net = await store.loadNetwork();
+  assert.deepEqual(net.features, []);
+  assert.deepEqual(net.areas, []);
+
+  // Exactly what the app sends after inventing an area from the place and
+  // adopting the deployment boundary — a bare object, not a makeArea().
+  const res = await store.save({
+    network: { type: "FeatureCollection", features: [] },
+    config: { areas: [{ id: "a-1", name: "Malden", kind: "municipality",
+                        context: "Massachusetts", default_authority: "malden",
+                        boundary: await store.boundary() }],
+              authorities: [], phases: [] },
+  });
+  assert.equal(res.ok, true);
+
+  const stored = parseNetwork(m.get("bike-network-builder/network.yaml"));
+  assert.equal(stored.areas[0].name, "Malden");
+  assert.equal(stored.areas[0].boundary.length, 1);
+});
+
+test("serializing tolerates an area that never went through makeArea", async () => {
+  // The serializer is the public contract; it should not throw because a
+  // caller handed it an object missing a field it never set.
+  const bare = makeNetwork({
+    areas: [{ id: "a1", name: "Bare" }],       // no tags/contributors/boundary
+    features: [],
+  });
+  const text = serializeNetwork(bare);
+  assert.ok(text.includes("name: Bare"));
+  assert.equal(parseNetwork(text).areas[0].name, "Bare");
+});

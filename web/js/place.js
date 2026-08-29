@@ -12,6 +12,27 @@
 // to the repo root there; the same string works for both, because web/data/
 // mirrors data/.
 
+// Tiles a deployment can draw without an account. See data/place.json and
+// AGENTS.md for the scaling caveat: a public deployment should serve its own.
+export const DEFAULT_BASEMAP = {
+  url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  attribution: "© OpenStreetMap contributors",
+  maxZoom: 19,
+  // Used by the PNG export, which wants denser tiles for a print-size image.
+  retinaUrl: "",
+};
+
+export function parseBasemap(raw) {
+  const doc = (raw && typeof raw === "object") ? raw : {};
+  return {
+    url: str(doc.url, DEFAULT_BASEMAP.url),
+    attribution: str(doc.attribution, DEFAULT_BASEMAP.attribution),
+    maxZoom: Number.isFinite(Number(doc.max_zoom))
+      ? Number(doc.max_zoom) : DEFAULT_BASEMAP.maxZoom,
+    retinaUrl: str(doc.retina_url, ""),
+  };
+}
+
 const str = (v, fallback = "") =>
   (typeof v === "string" && v.trim()) ? v.trim() : fallback;
 
@@ -27,6 +48,7 @@ export function makePlace(fields = {}) {
     mapCenter: null,
     mapZoom: 13,
     tileZoom: 14,
+    basemap: null,
     fetch: {},
     ...fields,
 
@@ -74,6 +96,10 @@ export function parsePlace(raw) {
     mapZoom: Number.isFinite(Number(map.zoom)) ? Number(map.zoom) : 13,
     // Zoom level of the roads tiles, if this deployment ships any.
     tileZoom: Number.isFinite(Number(doc.tile_zoom)) ? Number(doc.tile_zoom) : 14,
+    // The BASEMAP is configuration, not a constant. A tile provider can start
+    // demanding an API key (CARTO did), and a static app cannot ship a private
+    // key — so which tiles to draw has to be a deployment's decision.
+    basemap: parseBasemap(doc.basemap),
     fetch: (doc.fetch && typeof doc.fetch === "object") ? doc.fetch : {},
   });
 }

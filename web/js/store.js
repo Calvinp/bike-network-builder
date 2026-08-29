@@ -5,8 +5,8 @@
 import "./migrate.js";                 // installs the v1 -> v2 upgrader
 import { featuresFromGeojson, featuresToGeojson } from "./geojson.js";
 import {
-  AUTHORITY_LEVELS, SIDE_VALUES, STATUSES, TRAVEL, makeNetwork, makePhase,
-  parseNetwork, serializeNetwork, validateNetwork,
+  AUTHORITY_LEVELS, SIDE_VALUES, STATUSES, TRAVEL, makeArea, makeNetwork,
+  makePhase, parseNetwork, serializeNetwork, validateNetwork,
 } from "./network_format.js";
 import { boundaryFromWays } from "./boundary.js";
 import { parsePlace } from "./place.js";
@@ -57,6 +57,11 @@ export function networkFromBrowser(data, existing) {
     tags: p.tags || {},
   }));
   return makeNetwork({
+    // Through makeArea, ALWAYS. The UI hands over whatever fields it happens
+    // to hold — a place-synthesized area has no `contributors` or `tags` — and
+    // the serializer trusts the shape it is given. Building these as plain
+    // objects meant a genuinely fresh first run (no seed network, area
+    // invented from place.json) threw inside serialize on the first autosave.
     areas: cfg.areas ? cfg.areas.map((a) => {
       // Boundaries aren't EDITED in the UI, but they do arrive there — adopted
       // from the deployment on first load, or carried in by an import — so a
@@ -65,7 +70,7 @@ export function networkFromBrowser(data, existing) {
       const stored = existing.area(a.id);
       const boundary = (a.boundary && a.boundary.length)
         ? a.boundary : ((stored && stored.boundary) || []);
-      return { ...(stored || {}), ...a, boundary };
+      return makeArea({ ...(stored || {}), ...a, boundary });
     }) : existing.areas,
     authorities: cfg.authorities || existing.authorities,
     phases: phases.length ? phases : existing.phases,
