@@ -21,7 +21,12 @@ body {
 header {
   display: flex; align-items: center; gap: 16px;
   padding: 10px 18px; background: var(--panel);
-  border-bottom: 1px solid var(--line); box-shadow: var(--shadow); z-index: 1000;
+  border-bottom: 1px solid var(--line); box-shadow: var(--shadow);
+  /* Above Leaflet's control panes (.leaflet-top is z-index 1000) AND the
+     mobile sidebar overlay (1200). `header` creates a stacking context, so an
+     open menu can never escape this number however high its own z-index is —
+     which is why the zoom buttons used to paint over an open menu. */
+  position: relative; z-index: 1500;
 }
 header .brand { font-weight: 700; font-size: 16px; letter-spacing: -.01em; }
 header .brand span { color: var(--accent); }
@@ -261,3 +266,24 @@ button.small{padding:2px 8px;font-size:12px}
 .menu .menu-check + button,
 .menu button + .menu-check,
 .menu button + .menu-field { border-top: 1px solid #eee; }
+
+/* Which controls survive a narrow screen.
+   Wide: the repeated action (+ Add path) is one click, with the rest in the
+   menu. Narrow: only the menu, and the rarely-used things move behind ⋯, so
+   the header stays ONE row on a phone instead of wrapping to three. */
+.narrow-only { display: none; }
+
+@media (max-width: 760px) {
+  /* One row, no wrapping: every item below is sized to fit 360px. */
+  header { flex-wrap: nowrap; gap: 6px; padding: 8px; overflow: visible; }
+  header .brand { display: none; }
+  header button, header .btnlike { padding: 6px 8px; font-size: 12.5px; }
+  header .spacer { flex: 1 1 0; min-width: 0; }
+  .wide-only { display: none !important; }
+  .narrow-only { display: block; }
+  /* "All changes saved" is the resting state and says nothing useful on a
+     phone; a warning or an in-progress save still shows. */
+  header .status.idle { display: none; }
+  header .status { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+}

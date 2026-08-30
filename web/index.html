@@ -14,6 +14,8 @@
     <!-- Two menus rather than nine controls. The header had grown to the
          point where it wrapped on a laptop and was unusable on a phone; the
          things that belong together now sit together. -->
+    <button id="btn-add-path" class="ghost wide-only"
+      title="Draw a proposed path">+ Add path</button>
     <div class="dropdown">
       <button id="btn-add" class="ghost">+ Add ▾</button>
       <div class="menu" id="add-menu" hidden>
@@ -57,9 +59,21 @@
     </div>
     <div class="spacer"></div>
     <div class="status" id="status">Loading…</div>
-    <a class="btnlike" href="help.html" target="_blank" title="How to use this tool, the file format, and how costs are estimated">Help</a>
-    <label class="btnlike" title="Load a network.yaml (or an exported .zip bundle) someone shared with you">
-      Import<input type="file" id="import-file" accept=".yaml,.yml,.zip" style="display:none" /></label>
+    <input type="file" id="import-file" accept=".yaml,.yml,.zip" hidden />
+    <a class="btnlike wide-only" href="help.html" target="_blank"
+      title="How to use this tool, the file format, and how costs are estimated">Help</a>
+    <button id="btn-import" class="ghost wide-only"
+      title="Load a network.yaml (or an exported .zip bundle) someone shared with you">Import</button>
+    <!-- On a phone there is no room for everything, so the things you reach
+         for rarely go behind one overflow button and the header stays a
+         single row. -->
+    <div class="dropdown narrow-only">
+      <button id="btn-more" class="ghost" title="More">⋯</button>
+      <div class="menu" id="more-menu" hidden>
+        <button data-more="help">Help</button>
+        <button data-more="import">Import a network file</button>
+      </div>
+    </div>
     <div class="dropdown">
       <button id="btn-export" class="primary">Export ▾</button>
       <div class="menu" id="export-menu" hidden>

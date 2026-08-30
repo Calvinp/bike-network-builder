@@ -216,12 +216,27 @@ tests/                      pytest, incl. the Python<->JS parity checks
   drop the file in `data/layers/` **and** `web/data/layers/`, add a manifest entry.
 
 ### The app (web/app.js)
-- **The header is two menus, not nine controls** — Add (path / existing path /
-  spot / existing spot, plus Snap to roads) and Display (colour by, units,
-  show). It had grown to the point where it wrapped on a laptop and was
-  unusable on a phone. `wireMenu()` is the one behaviour for all three header
-  menus: a click inside a menu that isn't a command (a select, a checkbox)
-  leaves it open, so you can change two settings at once.
+- **The header is menus, and it is RESPONSIVE.** Wide screens get a one-click
+  `+ Add path` (drawing is what you repeat; burying it costs a click per
+  corridor) beside the `+ Add ▾` menu. Narrow screens drop to the menu alone,
+  hide the brand and the idle status, and move Help/Import behind `⋯`, which
+  keeps the whole header to ONE row at 375 px instead of three.
+  `.wide-only` / `.narrow-only` do the switching in CSS — no resize handler.
+  `wireMenu()` is the one behaviour for all four header menus: a click inside a
+  menu that isn't a command (a select, a checkbox) leaves it open, so you can
+  change two settings at once.
+- ⚠️ **`header` sets a stacking context.** It has `position: relative;
+  z-index: 1500`, and an open `.menu` inside it can never paint above that
+  number however high its own z-index is. It was 1000, tying with Leaflet's
+  `.leaflet-top` and losing on document order — which is why the zoom buttons
+  used to render over an open menu. Anything new that must sit above the map
+  belongs in the header, or needs its own z-index above 1200 (the mobile
+  sidebar).
+- **The network canvas has `tolerance: 10`.** Leaflet hit-tests a canvas path
+  against the stroke itself, so a 4px line is a 4px target — fine zoomed in and
+  genuinely annoying zoomed out, which is exactly where you are when picking
+  one corridor out of a town. The tolerance extends the clickable band by about
+  a fingertip and costs nothing to draw.
 - **Shape editing belongs to the selected feature**, not to a global mode.
   `layer.pm.enable()` on that one layer; selecting elsewhere or pressing Escape
   ends it. The button is hidden for a point feature, which has no shape to

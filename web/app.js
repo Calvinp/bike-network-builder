@@ -967,8 +967,11 @@ function doUndo() { restoreSnapshot(history.undo()); }
 function doRedo() { restoreSnapshot(history.redo()); }
 function setStatus(msg) {
   const el = document.getElementById("status");
-  if (msg) { el.innerHTML = msg; return; }
+  if (msg) { el.innerHTML = msg; el.classList.remove("idle"); return; }
   el.innerHTML = dirty ? '<span class="dirty">Saving…</span>' : "All changes saved";
+  // The resting state is hidden on a phone, where the row has no space for a
+  // message that says nothing; anything else still shows.
+  el.classList.toggle("idle", !dirty);
 }
 function stateData() {
   return { network: featuresToGeojson(features.map(toModelFeature)),
@@ -1536,7 +1539,12 @@ async function init() {
   // SVG stops being viable in the low thousands of polylines, which a
   // multi-town network reaches easily. One shared canvas renderer for the
   // network keeps panning smooth; context layers already had their own.
-  networkRenderer = L.canvas({ padding: 0.4 });
+  // `tolerance` extends the clickable band around every line. Without it the
+  // target is the stroke itself, so a 4px line is a 4px target — workable
+  // zoomed in and genuinely annoying zoomed out, which is exactly where you
+  // are when picking a corridor out of a whole town. 10px is about a
+  // fingertip, and it costs nothing to draw.
+  networkRenderer = L.canvas({ padding: 0.4, tolerance: 10 });
   networkGroup = L.featureGroup().addTo(map);
   overlayGroup = L.layerGroup().addTo(map);
   boundaryGroup = L.featureGroup().addTo(map);
@@ -1618,6 +1626,10 @@ async function init() {
   initContextLayers();
 
   document.getElementById("btn-edit").onclick = toggleEditShape;
+  document.getElementById("btn-add-path").onclick =
+    () => startDraw({ status: "proposed" });
+  const importInput = document.getElementById("import-file");
+  document.getElementById("btn-import").onclick = () => importInput.click();
   document.getElementById("btn-undo").onclick = doUndo;
   document.getElementById("btn-redo").onclick = doRedo;
   document.getElementById("btn-add-phase").onclick = addPhase;
@@ -1699,7 +1711,7 @@ async function init() {
     });
   }
   function closeMenus() {
-    ["add-menu", "display-menu", "export-menu"].forEach((id) => {
+    ["add-menu", "display-menu", "export-menu", "more-menu"].forEach((id) => {
       const m = document.getElementById(id);
       if (m) m.hidden = true;
     });
@@ -1720,6 +1732,10 @@ async function init() {
     }
   });
   wireMenu("btn-display", "display-menu", () => {});
+  wireMenu("btn-more", "more-menu", (b) => {
+    if (b.dataset.more === "help") window.open("help.html", "_blank");
+    else document.getElementById("import-file").click();
+  });
   wireMenu("btn-export", "export-menu", (b) => {
     const kind = b.dataset.export;
     if (kind === "yaml") exportYaml();
