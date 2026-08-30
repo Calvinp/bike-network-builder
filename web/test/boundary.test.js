@@ -7,8 +7,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  pointInRing, pointInBoundary, clipPolylineLatlon, clipSegmentsLatlon,
-  ringsFromWays, boundaryFromWays, normalizeBoundary, longestPiece,
+  boundaryFromWays,
+  clipPolylineLatlon,
+  clipSegmentsLatlon,
+  longestPiece,
+  normalizeBoundary,
+  pointInBoundary,
+  pointInRing,
+  ringsFromWays,
+  splitBoundaryEdges,
 } from "../js/boundary.js";
 
 // A unit square ring in (lat, lon): lat in [0,1], lon in [0,1].
@@ -222,4 +229,58 @@ test("the shipped Malden boundary assembles into one closed polygon", async () =
   assert.ok(pointInBoundary(42.4251, -71.0662, boundary));   // Malden City Hall
   assert.ok(!pointInBoundary(42.4584, -71.0662, boundary));  // Melrose
   assert.ok(!pointInBoundary(42.3601, -71.0589, boundary));  // Boston
+});
+
+test("the border BETWEEN two areas is not an outer edge", () => {
+  // Two towns side by side are one map, not two. Drawing the line between
+  // them with the same emphasis as the outside edge makes it look like two
+  // maps pushed together.
+  const A = [[[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]];
+  const B = [[[[0, 1], [0, 2], [1, 2], [1, 1], [0, 1]]]];
+  const { outer, shared } = splitBoundaryEdges([A, B]);
+  assert.equal(shared.length, 2, "both areas see the join as shared");
+  for (const run of shared) {
+    for (const [, lon] of run) {
+      assert.equal(lon, 1, "the shared run is exactly the x=1 join");
+    }
+  }
+  // Nothing on the outside got demoted.
+  const outerLons = outer.flat().map(([, lon]) => lon);
+  assert.ok(outerLons.some((v) => v === 0), "the far edges stay outer");
+  assert.ok(outerLons.some((v) => v === 2), "including the other town's");
+});
+
+test("one area on its own is all outer edge", () => {
+  const A = [[[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]];
+  const { outer, shared } = splitBoundaryEdges([A]);
+  assert.equal(shared.length, 0);
+  assert.equal(outer.length, 1, "an untouched ring is not chopped up");
+  assert.equal(outer[0].length, 5);
+});
+
+test("a shared border is found even when the two are drawn differently", () => {
+  // The real case: Malden's outline comes from OSM and Medford's from the
+  // Census, so the same legal line is two different sets of points tens of
+  // metres apart. Vertex matching would find nothing.
+  const deg = 0.0004;                       // ~45 m at these latitudes
+  const A = [[[[42.40, -71.10], [42.44, -71.10], [42.44, -71.06],
+               [42.40, -71.06], [42.40, -71.10]]]];
+  const B = [[[[42.40, -71.06 + deg], [42.44, -71.06 + deg],
+               [42.44, -71.02], [42.40, -71.02], [42.40, -71.06 + deg]]]];
+  const { shared } = splitBoundaryEdges([A, B], 0.05);
+  assert.ok(shared.length >= 2,
+            "the near-parallel border must be recognised as shared");
+  for (const run of shared) {
+    for (const [, lon] of run) {
+      assert.ok(Math.abs(lon - -71.06) < 0.001,
+                "only the touching side counts as shared");
+    }
+  }
+});
+
+test("areas that do not touch keep every edge", () => {
+  const A = [[[[0, 0], [0, 1], [1, 1], [1, 0], [0, 0]]]];
+  const far = [[[[0, 10], [0, 11], [1, 11], [1, 10], [0, 10]]]];
+  const { shared } = splitBoundaryEdges([A, far]);
+  assert.equal(shared.length, 0, "nothing is shared with a distant town");
 });

@@ -190,6 +190,13 @@ tests/                      pytest, incl. the Python<->JS parity checks
   choice is visible rather than buried in the clipper.
 - **Everything is clipped to the boundary** so mileage/cost only count in-area
   street.
+- **The line BETWEEN two of your areas is not an edge of the network.**
+  `splitBoundaryEdges()` classifies every boundary segment as outer or shared
+  and the map draws shared ones faintly; without it a two-town network looks
+  like two maps pushed together. It cannot be done by matching vertices —
+  Malden's outline comes from OSM and Medford's from the Census, so the same
+  legal line is two different point sets tens of metres apart. Proximity is
+  what's reliable, hence the `tolMiles` (~55 m) default.
 - **The clip boundary is the union of `config.areas[].boundary`, not the
   deployment's.** `areasBoundary()` in `app.js` builds it, memoized in
   `areaClip`. It used to be `store.boundary()`, which meant adding an area in
@@ -258,6 +265,35 @@ tests/                      pytest, incl. the Python<->JS parity checks
 - GeoJSON is `[lon, lat]`; every boundary in this codebase is `[lat, lon]`.
   The flip happens once, in `toBoundary`, at the edge.
 
+### Dialogs, starting, and starting over
+
+- ⚠️ **`.sheet` is the BACKDROP, `.sheet-inner` is the card.** The backdrop is
+  fixed and `display:flex` to centre its child. Put `class="sheet"` on the card
+  and it becomes a flex container that lays its heading, hint, lists and
+  buttons out in a ROW — which is exactly how the area picker shipped, and it
+  looked broken at every screen size. A source test pins this now. Every new
+  dialog rides the same pair, so it gets the full-screen mobile treatment for
+  free.
+- **CSS class names here are global and this file is old.** `.area-row` and
+  `.area-choice` already belonged to the import sheet; the Areas card's rules
+  are scoped under `#areas-list` so they don't reach in there. Check for an
+  existing rule before inventing a class.
+- **The start sheet appears when there is nothing to edit** and the user
+  hasn't already said "start a new one" (`bnb.started` in localStorage). An
+  empty map with no explanation is a dead end — nothing to click, no hint that
+  opening a file is even possible.
+- **Reset means reset.** It clears `bnb.started`, calls `store.clear()` — which
+  DELETES the stored network rather than writing an empty one, so the next load
+  seeds from the deployment instead of resurrecting an empty file — sets
+  `dirty = false` so a pending autosave can't rewrite what was just deleted,
+  and reloads. Reloading is the point: it rebuilds every layer, index and
+  history from nothing, which is what "the same screen you'd get from zero"
+  has to mean.
+- **"Export, then reset" must not reset when the export fails**, or the option
+  chosen by the person protecting their work is the one that loses it.
+- **`.geojson` imports too**, as features only, on top of the config already
+  loaded — a GeoJSON has no areas, phases or authorities in it.
+
 ### The format
 - **Bicycle lane distance = corridor distance × `sides`**, and ONLY for
   `bike`-category treatments. `travel` (which way you can ride) and `sides`
@@ -311,6 +347,12 @@ tests/                      pytest, incl. the Python<->JS parity checks
   genuinely annoying zoomed out, which is exactly where you are when picking
   one corridor out of a town. The tolerance extends the clickable band by about
   a fingertip and costs nothing to draw.
+- **A treatment chip carries an x when there are two or more.** Removing one of
+  several used to live only on the Delete button, which reads as "delete the
+  whole thing" — so undoing "+ Add another" was hidden behind the scariest
+  control on the panel. The last chip has no x on purpose: a place with nothing
+  built or proposed there is not part of the network, and deleting it is
+  Delete's job.
 - **Shape editing belongs to the selected feature**, not to a global mode.
   `layer.pm.enable()` on that one layer; selecting elsewhere or pressing Escape
   ends it. The button is hidden for a point feature, which has no shape to

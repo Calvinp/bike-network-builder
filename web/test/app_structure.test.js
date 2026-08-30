@@ -16,6 +16,46 @@ const FILES = {
   "web/app.js": readFileSync(new URL("../app.js", import.meta.url), "utf8"),
 };
 
+const HTML = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+
+test("every .sheet is a backdrop with a .sheet-inner card inside", () => {
+  // `.sheet` is the full-screen backdrop: fixed, and `display:flex` to centre
+  // its child. Putting that class on the CARD instead makes the card a flex
+  // container, which lays its heading, hint, lists and buttons out in a ROW.
+  // The area picker shipped like that and looked broken at every size.
+  const tags = [...HTML.matchAll(/<div\b[^>]*\bclass="([^"]*)"[^>]*>/g)];
+  // Exact class token: "sheet-inner" contains "sheet" but is not it.
+  const backdrops = tags.filter((m) => m[1].split(/\s+/).includes("sheet"));
+  assert.ok(backdrops.length >= 3,
+            `expected several sheets, found ${backdrops.length}`);
+  for (const m of backdrops) {
+    const after = HTML.slice(m.index, m.index + 400);
+    assert.match(after, /class="sheet-inner"/,
+                 `a .sheet must wrap a .sheet-inner: ${m[0]}`);
+    assert.ok(!m[1].split(/\s+/).includes("sheet-inner"),
+              "the backdrop and the card are different elements");
+  }
+});
+
+test("the start screen and reset both exist, and reset warns", () => {
+  // An empty map with no explanation is a dead end, and a reset that does not
+  // say what it destroys is a trap.
+  for (const id of ["start-sheet", "reset-sheet", "start-fresh", "start-import",
+                    "reset-go", "reset-export", "reset-cancel"]) {
+    assert.match(HTML, new RegExp(`id="${id}"`), `missing #${id}`);
+  }
+});
+
+test("the import input accepts the formats the start screen offers", () => {
+  // The start screen says ".yaml or .zip, or a .geojson"; the input has to
+  // agree or the file chooser greys out what we just promised.
+  const m = HTML.match(/id="import-file"[^>]*accept="([^"]*)"/);
+  assert.ok(m, "import-file has no accept list");
+  for (const ext of [".yaml", ".zip", ".geojson"]) {
+    assert.ok(m[1].includes(ext), `import must accept ${ext}`);
+  }
+});
+
 for (const [name, src] of Object.entries(FILES)) {
   test(`${name}: arrows only ever enter the map through syncArrows`, () => {
     // Anything else re-adds a replaced path's chevron on the next edit,
@@ -105,6 +145,28 @@ for (const [name, src] of Object.entries(FILES)) {
     const body = src.slice(start, src.indexOf("\n}", start));
     assert.match(body, /trimmed: Boolean\(outside\)/,
                  "a vertex outside the areas is what makes it a trim");
+  });
+
+  test(`${name}: reset deletes the network and returns to the start screen`, () => {
+    const start = src.indexOf("async function doReset");
+    assert.ok(start > 0, "doReset not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /markStarted\(false\)/,
+                 "reset must forget that the user ever started, or the start "
+                 + "screen will not come back");
+    assert.match(body, /store\.clear\(\)/, "and actually delete the network");
+    assert.match(body, /dirty = false/,
+                 "a pending autosave would otherwise rewrite what we deleted");
+  });
+
+  test(`${name}: "export, then reset" does not reset on a failed export`, () => {
+    // Otherwise the one option chosen BY someone protecting their work is the
+    // one that loses it.
+    const i = src.indexOf('reset-export"');
+    assert.ok(i > 0, "reset-export handler not found");
+    const body = src.slice(i, i + 500);
+    assert.match(body, /catch[\s\S]{0,160}return;/,
+                 "a failed export must stop before doReset()");
   });
 
   test(`${name}: the area picker is not a file dialog`, () => {

@@ -90,6 +90,18 @@ export class IdbStorage {
     return true;
   }
 
+  // Reset needs the stored network GONE, not overwritten with an empty one:
+  // the difference is whether the next load seeds from the deployment or
+  // resurrects an empty file. The journal has to go too, or the very next
+  // getItem adopts it and undoes the reset.
+  async removeItem(key) {
+    try {
+      await idbRequest(await this._open(), "readwrite", (s) => s.delete(key));
+    } catch { /* nothing stored is the same outcome */ }
+    this._clearJournal(key);
+    return true;
+  }
+
   // Synchronous, for `pagehide`. Best effort: a network too big for the
   // journal is skipped rather than throwing during teardown.
   writeJournal(key, value) {
@@ -118,6 +130,11 @@ export class LocalStorageAdapter {
   constructor(local = globalThis.localStorage) { this.local = local; }
   getItem(key) { return this.local.getItem(key); }
   setItem(key, value) { return this.local.setItem(key, String(value)); }
+  removeItem(key) {
+    this.local.removeItem(key);
+    this.local.removeItem(key + JOURNAL_SUFFIX);
+    return true;
+  }
   writeJournal(key, value) {
     try { this.local.setItem(key, String(value)); return true; }
     catch { return false; }

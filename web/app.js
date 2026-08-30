@@ -23,7 +23,7 @@
 import { buildArtifacts, buildPhaseArtifacts, shouldSplitByArea, splitByArea }
   from "./js/export.js";
 import { boundaryFromWays, clipPolylineLatlon, normalizeBoundary,
-         pointInBoundary } from "./js/boundary.js";
+         pointInBoundary, splitBoundaryEdges } from "./js/boundary.js";
 import { featuresFromGeojson, featuresToGeojson } from "./js/geojson.js";
 import { renderPng } from "./js/render_png.js";
 import { registry } from "./js/registry.js";
@@ -463,9 +463,32 @@ function renderTreatmentTabs(f) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "treatment-tab" + (i === f.sel ? " active" : "");
-    b.textContent = treatmentLabel(t.type);
     b.title = `${t.status.replace(/_/g, " ")}`;
     b.addEventListener("click", () => { f.sel = i; fillForm(f); restyle(f); });
+
+    const label = document.createElement("span");
+    label.textContent = treatmentLabel(t.type);
+    b.appendChild(label);
+
+    // Removing one of several treatments used to live only on the Delete
+    // button, which reads as "delete the whole thing" — so the way to undo
+    // "+ Add another" was hidden behind the scariest control on the panel.
+    // The last one has no x: a place with nothing built or proposed there is
+    // not part of the network, and deleting it is Delete's job.
+    if (f.treatments.length > 1) {
+      const x = document.createElement("span");
+      x.className = "tab-x";
+      x.textContent = "×";
+      x.title = `Remove ${treatmentLabel(t.type)} from this place`;
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();          // removing is not selecting
+        f.treatments.splice(i, 1);
+        f.sel = Math.min(f.sel, f.treatments.length - 1);
+        restyle(f); fillForm(f); renderLegend();
+        markDirty(); recomputeTotals();
+      });
+      b.appendChild(x);
+    }
     box.appendChild(b);
   });
   document.getElementById("btn-add-treatment").style.display =
@@ -975,14 +998,19 @@ function redrawBoundaries() {
   boundaryGroup.clearLayers();
   const show = document.getElementById("show-boundary");
   if (show && !show.checked) return;
-  for (const a of config.areas) {
-    for (const poly of normalizeBoundary(a.boundary)) {
-      for (const ring of poly) {
-        L.polyline(ring, { color: BOUNDARY, weight: 1.5, dashArray: "7,6",
-                           opacity: 0.8, interactive: false, pmIgnore: true })
-          .addTo(boundaryGroup);
-      }
-    }
+  // The line BETWEEN two of your areas is an internal division, not an edge of
+  // the network. Drawing it with the same emphasis as the outside made a
+  // two-town map look like two maps pushed together.
+  const { outer, shared } = splitBoundaryEdges(config.areas.map((a) => a.boundary));
+  for (const run of shared) {
+    L.polyline(run, { color: BOUNDARY, weight: 1, dashArray: "2,7",
+                      opacity: 0.4, interactive: false, pmIgnore: true })
+      .addTo(boundaryGroup);
+  }
+  for (const run of outer) {
+    L.polyline(run, { color: BOUNDARY, weight: 1.5, dashArray: "7,6",
+                      opacity: 0.8, interactive: false, pmIgnore: true })
+      .addTo(boundaryGroup);
   }
 }
 /* ---------- the area picker ----------
@@ -1469,8 +1497,13 @@ function loadFeatureCollection(fc) {
                lines, points);
   }
 }
-async function importYamlFile(file) {
+async function importFile(file) {
   setStatus("Importing…");
+  // A .geojson has no areas, phases or authorities in it — it is geometry plus
+  // whatever properties the exporter wrote. It comes in as features ONLY, on
+  // top of the config already loaded, which is exactly right for "here is the
+  // shape data, keep my setup".
+  if (/\.(geojson|json)$/i.test(file.name)) return importGeojsonFile(file);
   // Raw bytes: a .zip bundle (we find the .yaml inside) and a plain YAML file
   // are told apart by content, not extension.
   const j = await store.importBytes(new Uint8Array(await file.arrayBuffer()));
@@ -1483,6 +1516,79 @@ async function importYamlFile(file) {
   // and asking a question with one possible answer is worse than not asking.
   if (!features.length) { replaceWith(j); return; }
   openImportSheet(j);
+}
+
+async function importGeojsonFile(file) {
+  try {
+    const doc = JSON.parse(await file.text());
+    const parsed = featuresFromGeojson(doc);
+    if (!parsed.length) {
+      setStatus("");
+      alert("No features found in that GeoJSON.\n\nIt should be a "
+            + "FeatureCollection of lines and points — the kind this tool "
+            + "exports under “GeoJSON (.geojson)”.");
+      return;
+    }
+    clearFeatures();
+    loadFeatureCollection(featuresToGeojson(parsed));
+    dismissStart();
+    areaClip = null; redrawBoundaries(); renderAreas();
+    renderPhases(); renderLegend(); recomputeTotals(); applyPhaseView();
+    if (networkGroup.getLayers().length) {
+      map.fitBounds(networkGroup.getBounds().pad(0.05));
+    }
+    markDirty();
+    setStatus(`Loaded ${parsed.length} feature${parsed.length === 1 ? "" : "s"}.`);
+  } catch (e) {
+    setStatus("");
+    alert(`Couldn't read that GeoJSON: ${e.message}`);
+  }
+}
+
+/* ---------- starting, and starting over ----------
+   An empty map with no explanation is a dead end: nothing to click, no hint
+   that importing is even possible. The start sheet is shown whenever there is
+   nothing to edit and the user hasn't already said "start a new one". */
+const STARTED_KEY = "bnb.started";
+const hasStarted = () => {
+  try { return localStorage.getItem(STARTED_KEY) === "1"; } catch { return false; }
+};
+const markStarted = (on) => {
+  try {
+    if (on) localStorage.setItem(STARTED_KEY, "1");
+    else localStorage.removeItem(STARTED_KEY);
+  } catch { /* private mode: the sheet reappears, which is survivable */ }
+};
+function maybeShowStart() {
+  if (features.length || hasStarted()) return;
+  const where = config.areas.map((a) => a.name).filter(Boolean).join(" and ");
+  document.getElementById("start-fresh-sub").textContent = where
+    ? `Begin with an empty map of ${where}`
+    : "Begin with an empty map";
+  document.getElementById("start-sheet").hidden = false;
+}
+function dismissStart() {
+  markStarted(true);
+  document.getElementById("start-sheet").hidden = true;
+}
+function openResetSheet() {
+  const n = features.length;
+  document.getElementById("reset-sub").textContent = n
+    ? `This deletes all ${n} feature${n === 1 ? "" : "s"} and starts from an `
+      + "empty map. Anything you haven't exported is gone for good — this is "
+      + "not undoable."
+    : "There is nothing drawn yet, so this only clears your settings and "
+      + "starts over.";
+  document.getElementById("reset-sheet").hidden = false;
+}
+async function doReset() {
+  // Wipe the store, forget that the user ever started, and reload. Reloading
+  // is the point: it rebuilds every layer, index and history from nothing,
+  // which is what "the same screen you'd get from zero" has to mean.
+  markStarted(false);
+  dirty = false;                 // don't let a pending autosave rewrite it
+  await store.clear();
+  location.reload();
 }
 
 /* Wholesale replacement — the empty-map case, and what "use theirs everywhere"
@@ -2026,6 +2132,7 @@ async function init() {
   // The baseline every undo walks back toward.
   recordHistory("");
   applyPhaseView();   // a fresh load must already honour upgrades
+  maybeShowStart();
   initContextLayers();
 
   document.getElementById("btn-edit").onclick = toggleEditShape;
@@ -2185,6 +2292,7 @@ async function init() {
   wireMenu("btn-display", "display-menu", () => {});
   wireMenu("btn-more", "more-menu", (b) => {
     if (b.dataset.more === "help") window.open("help.html", "_blank");
+    else if (b.dataset.more === "reset") openResetSheet();
     else document.getElementById("import-file").click();
   });
   wireMenu("btn-export", "export-menu", (b) => {
@@ -2195,9 +2303,27 @@ async function init() {
   });
 
   document.getElementById("import-file").addEventListener("change", (e) => {
-    if (e.target.files.length) importYamlFile(e.target.files[0]);
+    if (e.target.files.length) importFile(e.target.files[0]);
     e.target.value = "";
   });
+  document.getElementById("start-fresh").onclick = dismissStart;
+  document.getElementById("start-import").onclick = () => {
+    document.getElementById("import-file").click();
+  };
+  document.getElementById("btn-reset").onclick = openResetSheet;
+  document.getElementById("reset-cancel").onclick = () => {
+    document.getElementById("reset-sheet").hidden = true;
+  };
+  document.getElementById("reset-go").onclick = doReset;
+  document.getElementById("reset-export").onclick = async () => {
+    // Export FIRST, and only reset if it actually produced a file — otherwise
+    // "export, then reset" would happily throw the work away on a failure.
+    try { await exportBundle(); } catch (e) {
+      alert(`Export failed, so nothing was reset:\n\n${e.message}`);
+      return;
+    }
+    await doReset();
+  };
   // Last-ditch flush if the tab closes inside the autosave debounce window.
   // localStorage writes are synchronous, so this completes even during
   // teardown. Mobile browsers often kill tabs with no pagehide, so

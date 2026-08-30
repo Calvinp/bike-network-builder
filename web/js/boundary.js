@@ -270,6 +270,89 @@ export function longestPiece(pieces) {
   return best;
 }
 
+// --------------------------------------------------------------------------
+// Which parts of a boundary face the outside world
+// --------------------------------------------------------------------------
+// With two adjacent areas, the line BETWEEN them is not an edge of anything —
+// it is an internal division. Drawing it with the same emphasis as the outer
+// edge makes a two-town network look like two separate maps pushed together.
+//
+// This cannot be done by matching vertices. Malden's outline comes from OSM
+// ways and Medford's from the Census, so the shared border is the same legal
+// line described by two different sets of points, tens of metres apart. What
+// IS reliable is proximity: a stretch of Malden's border that runs along
+// Medford's border is shared, whoever drew it.
+//
+// Returns { outer, shared } as lists of [lat, lon] polylines, ready to draw.
+export function splitBoundaryEdges(boundaries, tolMiles = 0.035) {
+  const polys = boundaries.map(normalizeBoundary);
+  const out = { outer: [], shared: [] };
+  polys.forEach((mine, i) => {
+    const others = polys.filter((_, j) => j !== i);
+    if (!others.length) {
+      for (const poly of mine) for (const ring of poly) out.outer.push(ring);
+      return;
+    }
+    const otherRings = others.flatMap((poly) => allRings(poly));
+    for (const poly of mine) {
+      for (const ring of poly) {
+        let run = [ring[0]];
+        let runShared = null;
+        for (let k = 1; k < ring.length; k++) {
+          const a = ring[k - 1], b = ring[k];
+          const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+          // Shared if the midpoint hugs another area's edge, or has crossed
+          // inside it — the second case catches a border drawn slightly into
+          // the neighbour rather than alongside it.
+          const isShared = otherRings.some(
+            (r) => pointToRingMiles(mid, r) <= tolMiles)
+            || others.some((poly2) => pointInBoundary(mid[0], mid[1], poly2));
+          if (runShared === null) runShared = isShared;
+          if (isShared !== runShared) {
+            (runShared ? out.shared : out.outer).push(run);
+            run = [a];                     // the new run starts where this ends
+            runShared = isShared;
+          }
+          run.push(b);
+        }
+        if (run.length >= 2) (runShared ? out.shared : out.outer).push(run);
+      }
+    }
+  });
+  return out;
+}
+
+// Distance from a [lat, lon] point to the nearest point of a ring, in miles.
+// Flat-earth within a ring: these are municipal distances, and the error at
+// this scale is far smaller than the disagreement between two mapmakers.
+function pointToRingMiles(pt, ring) {
+  let best = Infinity;
+  for (let i = 1; i < ring.length; i++) {
+    const d = pointToSegmentMiles(pt, ring[i - 1], ring[i]);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+const MILES_PER_DEG_LAT = 69.05;
+function pointToSegmentMiles(p, a, b) {
+  // Project degrees to a local flat frame before measuring, or a degree of
+  // longitude counts the same as a degree of latitude and everything is wrong
+  // by a factor of cos(latitude) — about 1.35 at these latitudes.
+  const kx = Math.cos((p[0] * Math.PI) / 180) * MILES_PER_DEG_LAT;
+  const ky = MILES_PER_DEG_LAT;
+  const px = p[1] * kx, py = p[0] * ky;
+  const ax = a[1] * kx, ay = a[0] * ky;
+  const bx = b[1] * kx, by = b[0] * ky;
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0
+    ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2))
+    : 0;
+  const cx = ax + t * dx, cy = ay + t * dy;
+  return Math.hypot(px - cx, py - cy);
+}
+
 // Clip a multi-segment feature: each input segment contributes every one of
 // its in-boundary pieces, so a segment interrupted by a hole or a border
 // becomes several output segments. Returns [keptSegments, totalMiles].

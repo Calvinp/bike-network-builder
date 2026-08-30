@@ -309,13 +309,6 @@ button.small{padding:2px 8px;font-size:12px}
     white-space: nowrap; }
 }
 
-/* The Areas card. */
-.area-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 0;
-  border-bottom: 1px solid var(--line); }
-.area-row:last-child { border-bottom: 0; }
-.area-name { font-weight: 600; font-size: 13px; }
-.area-counts { color: var(--muted); font-size: 12px; flex: 1 1 auto; }
-.area-row button.rm { padding: 2px 7px; font-size: 12px; }
 
 /* Why a line got trimmed, said where the trimming happened rather than in the
    status line, which the next action would wipe. Above the map controls for
@@ -341,34 +334,53 @@ header .status {
   white-space: nowrap;
 }
 
-/* The area picker. A sheet rather than a sidebar panel: choosing a town is a
-   short detour, and it has to sit above the map like every other overlay. */
-#area-picker {
-  position: fixed; inset: 0; z-index: 1600; display: flex;
-  align-items: center; justify-content: center; padding: 16px;
-  background: rgba(15, 23, 42, 0.35);
-}
-#area-picker[hidden] { display: none; }
-#area-picker .sheet {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--radius); box-shadow: var(--shadow);
-  padding: 18px; width: min(520px, 100%); max-height: min(640px, 90vh);
-  overflow-y: auto;
-}
-#area-picker h2 { margin: 0 0 6px; font-size: 16px; }
-#area-picker .subhead {
-  margin: 16px 0 8px; font-size: 12px; text-transform: uppercase;
-  letter-spacing: .04em; color: var(--muted);
-}
+/* The area picker rides on the same .sheet / .sheet-inner pattern as the
+   import sheet — it used to set `class="sheet"` on the CARD, which inherits
+   that class's flex centring and laid every child out in a ROW. */
 #area-search {
   width: 100%; padding: 8px 10px; font-size: 14px; box-sizing: border-box;
   border: 1px solid var(--line); border-radius: var(--radius);
 }
 .area-choices { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.area-choices button {
-  padding: 6px 10px; font-size: 13px; white-space: nowrap;
-}
-.area-choices .added { opacity: .55; }
+.area-choices button { padding: 6px 10px; font-size: 13px; white-space: nowrap; }
+.area-choices button.added { opacity: .55; }
 .area-choices .none { color: var(--muted); font-size: 12.5px; }
-#area-picker .btnrow { margin-top: 18px; justify-content: space-between; }
 #area-picker-note:empty { display: none; }
+
+/* The start screen: two big targets, not a paragraph with links in it. */
+.start-choices { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.start-choices button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  padding: 14px 16px; text-align: left; width: 100%; line-height: 1.35;
+}
+.start-choices button b { font-size: 14px; }
+.start-choices button span { font-size: 12.5px; opacity: .8; font-weight: 400; }
+#reset-sheet .sheet-actions { flex-wrap: wrap; }
+
+/* The Areas card in the sidebar. Scoped to #areas-list: `.area-row` is also
+   the import sheet's, and styling it globally reached in there too. */
+#areas-list .area-row {
+  display: flex; align-items: baseline; gap: 8px; padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+#areas-list .area-row:last-child { border-bottom: 0; }
+#areas-list .area-name { font-weight: 600; font-size: 13px; min-width: 0; }
+#areas-list .area-counts { color: var(--muted); font-size: 12px; flex: 1 1 auto; }
+#areas-list .area-row button.rm { padding: 2px 7px; font-size: 12px; }
+
+
+/* The x on a treatment chip. Only shown when there are two or more, so it
+   never offers to empty a feature — that is Delete's job. */
+.treatment-tab { display: inline-flex; align-items: center; gap: 6px; }
+.treatment-tab .tab-x {
+  font-size: 14px; line-height: 1; opacity: .55; padding: 0 1px;
+  border-radius: 3px;
+}
+.treatment-tab .tab-x:hover { opacity: 1; background: rgba(0, 0, 0, .12); }
+
+/* The brand is decoration and the lowest-priority thing in the header, so it
+   drops out before anything wraps. Adding Reset was enough to push it onto a
+   second line at 1280px, which made the whole header taller for a word the
+   browser tab already shows. */
+header .brand { white-space: nowrap; }
+@media (max-width: 1399px) { header .brand { display: none; } }

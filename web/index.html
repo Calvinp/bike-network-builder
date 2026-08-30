@@ -68,11 +68,13 @@
     </div>
     <div class="spacer"></div>
     <div class="status" id="status">Loading…</div>
-    <input type="file" id="import-file" accept=".yaml,.yml,.zip" hidden />
+    <input type="file" id="import-file" accept=".yaml,.yml,.zip,.geojson,.json" hidden />
     <a class="btnlike wide-only" href="help.html" target="_blank"
       title="How to use this tool, the file format, and how costs are estimated">Help</a>
     <button id="btn-import" class="ghost wide-only"
       title="Load a network.yaml (or an exported .zip bundle) someone shared with you">Import</button>
+    <button id="btn-reset" class="ghost wide-only"
+      title="Clear everything and start over">Reset</button>
     <!-- On a phone there is no room for everything, so the things you reach
          for rarely go behind one overflow button and the header stays a
          single row. -->
@@ -81,6 +83,7 @@
       <div class="menu" id="more-menu" hidden>
         <button data-more="help">Help</button>
         <button data-more="import">Import a network file</button>
+        <button data-more="reset">Reset everything…</button>
       </div>
     </div>
     <div class="dropdown">
@@ -100,27 +103,66 @@
     <!-- Adding a town should not require owning a GeoJSON file. Boundaries come
        from the US Census by name; the file upload stays for the case no
        registry can cover ("our advocacy area is these six neighbourhoods"). -->
-  <div id="area-picker" hidden>
-    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="area-picker-h">
+  <div id="area-picker" class="sheet" hidden>
+    <div class="sheet-inner" role="dialog" aria-modal="true"
+         aria-labelledby="area-picker-h">
       <h2 id="area-picker-h">Add an area</h2>
       <p class="hint">Areas decide where you can draw and what gets counted.
         Adding one never changes what you have already drawn.</p>
 
       <div id="area-near-wrap">
-        <h3 class="subhead">Next to <span id="area-near-name">here</span></h3>
+        <h3>Next to <span id="area-near-name">here</span></h3>
         <div id="area-near" class="area-choices"></div>
       </div>
 
-      <h3 class="subhead">Search anywhere in the US</h3>
+      <h3>Search anywhere in the US</h3>
       <input id="area-search" type="search" autocomplete="off"
              placeholder="Town or city name — try “Somerville”" />
       <div id="area-results" class="area-choices"></div>
 
       <p class="hint" id="area-picker-note"></p>
-      <div class="btnrow">
-        <button id="area-cancel" class="ghost">Cancel</button>
+
+      <div class="btnrow sheet-actions">
         <button id="area-file-btn" class="ghost"
           title="For an area no registry has — a set of neighbourhoods, a corridor study, a campus">Use a .geojson file instead</button>
+        <button id="area-cancel" class="ghost">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shown when there is nothing to edit: a fresh browser, or straight after
+       a reset. An empty map with no explanation is a dead end. -->
+  <div id="start-sheet" class="sheet" hidden>
+    <div class="sheet-inner" role="dialog" aria-modal="true"
+         aria-labelledby="start-h">
+      <h2 id="start-h">Bike Network Builder</h2>
+      <p class="hint" id="start-sub">Draw a bike network, cost it, and share
+        it as one file.</p>
+
+      <div class="start-choices">
+        <button id="start-fresh" class="primary">
+          <b>Start a new network</b>
+          <span id="start-fresh-sub">Begin with an empty map</span>
+        </button>
+        <button id="start-import" class="ghost">
+          <b>Open a file</b>
+          <span>A network someone shared (.yaml or .zip), or a .geojson</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reset asks three questions at once, because "delete everything" and
+       "I have not exported yet" are the same moment. -->
+  <div id="reset-sheet" class="sheet" hidden>
+    <div class="sheet-inner" role="dialog" aria-modal="true"
+         aria-labelledby="reset-h">
+      <h2 id="reset-h">Start over?</h2>
+      <p class="hint" id="reset-sub"></p>
+      <div class="btnrow sheet-actions">
+        <button id="reset-cancel" class="ghost">Cancel</button>
+        <button id="reset-export" class="ghost">Export, then reset</button>
+        <button id="reset-go" class="danger">Reset</button>
       </div>
     </div>
   </div>

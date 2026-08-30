@@ -294,6 +294,20 @@ export class Store {
 
   // POST /api/state equivalent. Synchronous once the current network is in
   // hand — autosave can't be interrupted by a closing tab.
+  // Throw the saved network away. The in-memory caches go too, so a caller
+  // that does NOT reload still sees an empty deployment rather than the
+  // network it just deleted.
+  async clear() {
+    if (typeof this.storage.removeItem === "function") {
+      await this.storage.removeItem(LS_KEY);
+    } else {
+      await this.storage.setItem(LS_KEY, "");
+    }
+    this._boundary = null;
+    this._boundaryRings = null;
+    return true;
+  }
+
   async save(data) {
     if (data.network === null || data.network === undefined) return { ok: true };
     const net = networkFromBrowser(data, await this.loadNetwork());

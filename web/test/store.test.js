@@ -522,3 +522,27 @@ test("every area's boundary reaches the browser, not just the first", async () =
   assert.ok(pointInBoundary(42.423, -71.115, back.areas[1].boundary),
             "Medford's outline must still clip after a round trip");
 });
+
+test("clear() deletes the saved network rather than emptying it", async () => {
+  // Reset has to leave the store as if nobody had ever used it: the next load
+  // must seed from the deployment, not resurrect an empty file. Writing ""
+  // would look identical to the user right up until they reloaded.
+  const { store, storage } = makeStore();
+  await store.save({ config: { areas: [] }, network: { type: "FeatureCollection", features: [] } });
+  assert.ok(storage.map.size > 0, "something was stored to begin with");
+  const removed = [];
+  storage.removeItem = async (k) => { removed.push(k); storage.map.delete(k); return true; };
+  await store.clear();
+  assert.deepEqual(removed, ["bike-network-builder/network.yaml"]);
+  assert.equal(storage.map.size, 0, "nothing left, not even an empty string");
+});
+
+test("clear() still works on a storage that cannot remove", async () => {
+  // The real adapters both have removeItem; a hand-rolled one might not, and
+  // reset must not throw on the way to wiping things.
+  const { store, storage } = makeStore();
+  await store.save({ config: { areas: [] }, network: { type: "FeatureCollection", features: [] } });
+  await store.clear();
+  assert.equal(storage.map.get("bike-network-builder/network.yaml"), "",
+               "falls back to emptying it rather than throwing");
+});
