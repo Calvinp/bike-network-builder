@@ -47,12 +47,15 @@ import { History } from "./js/history.js";
 import { zipCreate } from "./js/zip.js";
 
 const BOUNDARY = BOUNDARY_COLOR;
+// The outer edge has to out-shout the basemap's own town borders.
+const BOUNDARY_STRONG = "#334155";
 
 const store = new Store();
 let baseNet = null;         // last parsed stored network (uneditable fields)
 let place = null;           // the deployment default area (data/place.json)
 
 let map, networkGroup, boundaryGroup, arrowsGroup, pointsGroup, overlayGroup;
+let maskGroup;
 let networkRenderer = null;
 let features = [];          // [{props, treatments, sel, layer, overlays, markers, arrows}]
 let selected = null;
@@ -996,22 +999,56 @@ function renderAreas() {
 function redrawBoundaries() {
   if (!boundaryGroup) return;
   boundaryGroup.clearLayers();
+  maskGroup.clearLayers();
   const show = document.getElementById("show-boundary");
   if (show && !show.checked) return;
+  drawOutsideMask();
   // The line BETWEEN two of your areas is an internal division, not an edge of
   // the network. Drawing it with the same emphasis as the outside made a
   // two-town map look like two maps pushed together.
   const { outer, shared } = splitBoundaryEdges(config.areas.map((a) => a.boundary));
   for (const run of shared) {
     L.polyline(run, { color: BOUNDARY, weight: 1, dashArray: "2,7",
-                      opacity: 0.4, interactive: false, pmIgnore: true })
+                      opacity: 0.45, interactive: false, pmIgnore: true })
       .addTo(boundaryGroup);
+  }
+  // The outer edge competes with every other administrative border the
+  // basemap already draws, so it needs to win outright: a white casing under a
+  // heavy dark dash reads as "this one is mine" at any zoom.
+  for (const run of outer) {
+    L.polyline(run, { color: "#ffffff", weight: 5, opacity: 0.75,
+                      interactive: false, pmIgnore: true }).addTo(boundaryGroup);
   }
   for (const run of outer) {
-    L.polyline(run, { color: BOUNDARY, weight: 1.5, dashArray: "7,6",
-                      opacity: 0.8, interactive: false, pmIgnore: true })
+    L.polyline(run, { color: BOUNDARY_STRONG, weight: 2.5, dashArray: "9,5",
+                      opacity: 0.95, interactive: false, pmIgnore: true })
       .addTo(boundaryGroup);
   }
+}
+
+/* Everything outside your areas goes slightly dark, so the areas read as the
+   subject of the map rather than as one more set of lines on it. One polygon
+   covering the world with a hole punched for each area — cheap, and it moves
+   and scales with the map for free.
+
+   It lives in its own group because boundaryGroup feeds fitBounds(), and a
+   world-sized rectangle in there would frame the planet. */
+function drawOutsideMask() {
+  const holes = [];
+  for (const a of config.areas) {
+    // Outer rings only: a hole inside an area (an enclave town) should stay
+    // shaded, which is what dropping the inner rings gives us.
+    for (const poly of normalizeBoundary(a.boundary)) {
+      if (poly.length && poly[0].length >= 4) holes.push(poly[0]);
+    }
+  }
+  if (!holes.length) return;
+  // Latitude stops short of the poles: Web Mercator cannot project +/-90.
+  const world = [[-85, -180], [-85, 180], [85, 180], [85, -180]];
+  L.polygon([world, ...holes], {
+    stroke: false, fillColor: "#0f172a", fillOpacity: 0.14,
+    interactive: false, pmIgnore: true,
+  }).addTo(maskGroup);
 }
 /* ---------- the area picker ----------
    Adding a town must not require owning a GeoJSON file. Almost nobody has one,
@@ -1089,7 +1126,9 @@ async function addCensusArea(area) {
       id: censusId(area), name: area.name, kind: area.kind || "municipality",
       context: area.stateName || area.state, boundary,
     })];
-    areasChanged(); markDirty(); hideClipNotice(); closeAreaPicker();
+    areasChanged(); markDirty(); hideClipNotice();
+    markStarted(true);
+    document.getElementById("area-picker").hidden = true;
     map.fitBounds(boundaryGroup.getBounds().pad(0.05));
     setStatus(`Added ${area.name}. You can draw there now.`);
   } catch (e) {
@@ -1129,6 +1168,13 @@ async function openAreaPicker() {
 }
 function closeAreaPicker() {
   document.getElementById("area-picker").hidden = true;
+  // Backing out of the picker having chosen nothing leaves an editor with no
+  // areas at all — nothing clipped, nothing counted. Offer the way in again
+  // rather than stranding the user on a map that belongs to no place.
+  if (!config.areas.length && !features.length) {
+    markStarted(false);
+    document.getElementById("start-sheet").hidden = false;
+  }
 }
 /* The bounding box of every area, padded enough that the neighbour query
    actually crosses the border into them. */
@@ -1179,7 +1225,8 @@ async function addAreaFromFile(file) {
                          file.name.replace(/[.][^.]+$/, "")) || "").trim();
     if (!name) return;
     config.areas = [...config.areas, makeArea({ id: newId("a-"), name, boundary })];
-    areasChanged(); markDirty(); hideClipNotice();
+    areasChanged(); markDirty(); hideClipNotice(); markStarted(true);
+    document.getElementById("area-picker").hidden = true;
     map.fitBounds(boundaryGroup.getBounds().pad(0.05));
     setStatus(`Added ${name}. You can draw there now.`);
   } catch (e) {
@@ -1561,11 +1608,18 @@ const markStarted = (on) => {
 };
 function maybeShowStart() {
   if (features.length || hasStarted()) return;
-  const where = config.areas.map((a) => a.name).filter(Boolean).join(" and ");
-  document.getElementById("start-fresh-sub").textContent = where
-    ? `Begin with an empty map of ${where}`
-    : "Begin with an empty map";
   document.getElementById("start-sheet").hidden = false;
+}
+/* Starting fresh must not assume WHERE. The deployment's place is a sensible
+   default for someone who opened this to work on Malden, but it is noise for
+   someone starting a network in Cleveland — and worse, it would silently lend
+   them Malden's boundary. So: drop the presumed area and ask. */
+function startFresh() {
+  config.areas = [];
+  areaClip = null;
+  redrawBoundaries(); renderAreas(); recomputeTotals();
+  document.getElementById("start-sheet").hidden = true;
+  openAreaPicker();
 }
 function dismissStart() {
   markStarted(true);
@@ -1591,15 +1645,44 @@ async function doReset() {
   location.reload();
 }
 
+/* An area with no boundary is not self-describing: nothing to draw, nothing to
+   clip against, and area assignment puts every feature in "somewhere else". A
+   file upgraded from v1 has exactly that problem, because v1 kept the boundary
+   outside the file — and so does any file written before this tool started
+   storing it. Lend it the deployment's outline once; autosave then writes it
+   into the network, so the file carries its own from then on (V2_PLAN.md D1).
+   Only for an area that IS the deployment's place: handing Malden's outline to
+   an imported Cleveland would be silently, invisibly wrong. */
+async function adoptDeploymentBoundary() {
+  const deployment = await store.boundary();
+  if (!deployment.length) return false;
+  const here = String(place.name || "").trim().toLowerCase();
+  let changed = false;
+  config.areas = config.areas.map((a) => {
+    if ((a.boundary || []).length) return a;
+    const name = String(a.name || "").trim().toLowerCase();
+    if (name && here && name !== here) return a;
+    changed = true;
+    return makeArea({ ...a, boundary: deployment });
+  });
+  if (changed) { areaClip = null; markDirty(); }
+  return changed;
+}
+
 /* Wholesale replacement — the empty-map case, and what "use theirs everywhere"
    collapses to once it has been confirmed. */
-function replaceWith(j, notes) {
+async function replaceWith(j, notes) {
   clearFeatures();
   config = { ...config, ...j.config };
   loadFeatureCollection(j.network);
-  afterImport(j, notes);
+  await afterImport(j, notes);
 }
-function afterImport(j, notes) {
+async function afterImport(j, notes) {
+  // An imported file may carry areas with no outline at all — v1 kept the
+  // boundary outside the file, and plenty of v2 files predate this tool
+  // writing it. Without this the import "worked" but left Malden with no
+  // border, no clipping and zero features until you reloaded.
+  await adoptDeploymentBoundary();
   // Undo and import both swap the area list wholesale, so the memoized
   // clip boundary and the drawn outlines have to be rebuilt with it.
   areaClip = null; redrawBoundaries(); renderAreas();
@@ -1834,7 +1917,7 @@ function bindImportSheet() {
   };
   document.getElementById("import-go").onclick = doImport;
 }
-function doImport() {
+async function doImport() {
   const { theirs, mine, plan, areaChoices, phaseMapping, featureChoices }
     = importState;
   const merged = applyMerge(mine, theirs,
@@ -1866,7 +1949,7 @@ function doImport() {
              areas: merged.areas, authorities: merged.authorities,
              phases: merged.phases, meta: merged.meta };
   loadFeatureCollection(featuresToGeojson(merged.features));
-  afterImport(j, notes);
+  await afterImport(j, notes);
 }
 
 /* ---------- snap to roads ---------- */
@@ -2021,6 +2104,9 @@ async function init() {
   networkRenderer = L.canvas({ padding: 0.4, tolerance: 10 });
   networkGroup = L.featureGroup().addTo(map);
   overlayGroup = L.layerGroup().addTo(map);
+  // Before boundaryGroup so the shading sits UNDER the outlines, and separate
+  // from it because boundaryGroup feeds fitBounds().
+  maskGroup = L.layerGroup().addTo(map);
   boundaryGroup = L.featureGroup().addTo(map);
   arrowsGroup = L.layerGroup().addTo(map);
   pointsGroup = L.layerGroup().addTo(map);
@@ -2045,13 +2131,7 @@ async function init() {
   // the boundary outside the file. Adopt the deployment's boundary once, and
   // autosave writes it into the network so the file carries its own outline
   // from then on (V2_PLAN.md D1).
-  const deploymentBoundary = await store.boundary();
-  if (deploymentBoundary.length && config.areas.length
-      && !(config.areas[0].boundary || []).length) {
-    config.areas[0] = makeArea({ ...config.areas[0],
-                                 boundary: deploymentBoundary });
-    markDirty();
-  }
+  await adoptDeploymentBoundary();
 
   redrawBoundaries();
 
@@ -2306,14 +2386,16 @@ async function init() {
     if (e.target.files.length) importFile(e.target.files[0]);
     e.target.value = "";
   });
-  document.getElementById("start-fresh").onclick = dismissStart;
+  document.getElementById("start-fresh").onclick = startFresh;
   document.getElementById("start-import").onclick = () => {
     document.getElementById("import-file").click();
   };
   document.getElementById("btn-reset").onclick = openResetSheet;
-  document.getElementById("reset-cancel").onclick = () => {
+  const closeReset = () => {
     document.getElementById("reset-sheet").hidden = true;
   };
+  document.getElementById("reset-cancel").onclick = closeReset;
+  document.getElementById("reset-x").onclick = closeReset;
   document.getElementById("reset-go").onclick = doReset;
   document.getElementById("reset-export").onclick = async () => {
     // Export FIRST, and only reset if it actually produced a file — otherwise

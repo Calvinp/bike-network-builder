@@ -384,3 +384,20 @@ header .status {
    browser tab already shows. */
 header .brand { white-space: nowrap; }
 @media (max-width: 1399px) { header .brand { display: none; } }
+
+/* Reset is destructive, so it is solid red the way Export is solid blue —
+   `button.danger` is only a red OUTLINE, which reads as one more grey control
+   in a row of grey controls. */
+button.destructive {
+  background: #b91c1c; color: #fff; border-color: #b91c1c; font-weight: 600;
+}
+button.destructive:hover { background: #991b1b; border-color: #991b1b; }
+
+/* A second way out of a dialog, where the eye looks for one. */
+.sheet-inner { position: relative; }
+.sheet-x {
+  position: absolute; top: 10px; right: 12px;
+  background: none; border: 0; font-size: 20px; line-height: 1;
+  padding: 2px 6px; color: var(--muted); cursor: pointer;
+}
+.sheet-x:hover { color: inherit; background: rgba(0, 0, 0, .07); }

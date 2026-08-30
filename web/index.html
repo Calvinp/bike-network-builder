@@ -73,7 +73,7 @@
       title="How to use this tool, the file format, and how costs are estimated">Help</a>
     <button id="btn-import" class="ghost wide-only"
       title="Load a network.yaml (or an exported .zip bundle) someone shared with you">Import</button>
-    <button id="btn-reset" class="ghost wide-only"
+    <button id="btn-reset" class="destructive wide-only"
       title="Clear everything and start over">Reset</button>
     <!-- On a phone there is no room for everything, so the things you reach
          for rarely go behind one overflow button and the header stays a
@@ -142,7 +142,7 @@
       <div class="start-choices">
         <button id="start-fresh" class="primary">
           <b>Start a new network</b>
-          <span id="start-fresh-sub">Begin with an empty map</span>
+          <span>Pick the town, city or county you want to work on</span>
         </button>
         <button id="start-import" class="ghost">
           <b>Open a file</b>
@@ -157,12 +157,13 @@
   <div id="reset-sheet" class="sheet" hidden>
     <div class="sheet-inner" role="dialog" aria-modal="true"
          aria-labelledby="reset-h">
+      <button id="reset-x" class="sheet-x" title="Close" aria-label="Close">×</button>
       <h2 id="reset-h">Start over?</h2>
       <p class="hint" id="reset-sub"></p>
       <div class="btnrow sheet-actions">
         <button id="reset-cancel" class="ghost">Cancel</button>
         <button id="reset-export" class="ghost">Export, then reset</button>
-        <button id="reset-go" class="danger">Reset</button>
+        <button id="reset-go" class="destructive">Reset</button>
       </div>
     </div>
   </div>

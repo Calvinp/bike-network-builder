@@ -74,6 +74,9 @@ function rowsToAreas(rows, layer) {
     return {
       geoid: String(a.GEOID || ""), name, kind, layer,
       state: stateAbbr(a.STATE), stateName: stateName(a.STATE),
+      // Land area, as a stand-in for "which one did they mean". There are
+      // thirty-odd Clevelands and the one people search for is the big one.
+      area: Number(a.AREALAND) || 0,
     };
   }).filter((a) => a.geoid && a.name);
 }
@@ -100,7 +103,8 @@ function dedupe(areas) {
 // without a network, and so a caller can impose its own timeout.
 async function query(layer, params, { fetchImpl = fetch, signal } = {}) {
   const url = `${BASE}/${layer}/query?` + new URLSearchParams({
-    f: "json", outFields: "NAME,BASENAME,GEOID,STATE", returnGeometry: "false",
+    f: "json", outFields: "NAME,BASENAME,GEOID,STATE,AREALAND",
+    returnGeometry: "false",
     ...params,
   });
   const res = await fetchImpl(url, { signal });
@@ -138,6 +142,10 @@ export async function searchAreas(text, opts = {}) {
   const params = {
     where: `UPPER(BASENAME) LIKE '${q.toUpperCase()}%'`,
     resultRecordCount: "40",
+    // Ask the SERVICE for the biggest first. Sorting our own page would not
+    // help: "Cleveland" matches thirty-odd places and the service's own order
+    // put Ohio's well past the 40th, so the one everyone means never arrived.
+    orderByFields: "AREALAND DESC",
   };
   const [subs, places] = await Promise.all([
     query(LAYER_COUSUB, params, opts).catch(() => []),
@@ -150,8 +158,9 @@ export async function searchAreas(text, opts = {}) {
   const exact = q.toUpperCase();
   const rank = (x) => (x.state === preferState ? 2 : 0)
     + (x.name.toUpperCase() === exact ? 1 : 0);
-  return all.sort((a, b) => rank(b) - rank(a) || a.name.localeCompare(b.name))
-    .slice(0, 25);
+  return all.sort((a, b) => rank(b) - rank(a)
+    || b.area - a.area                     // then the biggest of that name
+    || a.name.localeCompare(b.name)).slice(0, 25);
 }
 
 // GeoJSON is [lon, lat]; every boundary in this codebase is [lat, lon]. Getting

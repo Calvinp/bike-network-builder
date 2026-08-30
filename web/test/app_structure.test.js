@@ -169,6 +169,53 @@ for (const [name, src] of Object.entries(FILES)) {
                  "a failed export must stop before doReset()");
   });
 
+  test(`${name}: an imported area with no outline borrows the deployment's`, () => {
+    // v1 kept the boundary outside the file, and plenty of v2 files predate
+    // this tool writing it. Startup already lent one; import did not, so an
+    // import "succeeded" and left the area with no border, no clipping and
+    // zero features until the user happened to reload.
+    for (const fn of ["async function init()", "async function afterImport"]) {
+      const start = src.indexOf(fn);
+      assert.ok(start > 0, `${fn} not found`);
+      const body = src.slice(start, src.indexOf("\n}", start));
+      assert.match(body, /adoptDeploymentBoundary\(\)/,
+                   `${fn} must lend an outline to an area that has none`);
+    }
+  });
+
+  test(`${name}: only the deployment's OWN place borrows its outline`, () => {
+    // Handing Malden's boundary to an imported Cleveland would be silently,
+    // invisibly wrong — the map would look right and clip the wrong place.
+    const start = src.indexOf("async function adoptDeploymentBoundary");
+    assert.ok(start > 0, "adoptDeploymentBoundary not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /place\.name/, "it has to compare against the deployment");
+    assert.match(body, /name !== here/, "and decline when the names disagree");
+  });
+
+  test(`${name}: starting fresh assumes no geography`, () => {
+    // The deployment's place is a fine default for someone who opened this to
+    // work on Malden, and pure noise for someone starting in another state.
+    const start = src.indexOf("function startFresh");
+    assert.ok(start > 0, "startFresh not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /config\.areas = \[\]/, "it must drop the presumed area");
+    assert.match(body, /openAreaPicker\(\)/, "and ask where instead");
+  });
+
+  test(`${name}: the outside-mask is not in the group that frames the map`, () => {
+    // The mask is a polygon covering the WORLD with holes for the areas. In
+    // boundaryGroup it would make fitBounds() frame the planet.
+    const start = src.indexOf("function drawOutsideMask");
+    assert.ok(start > 0, "drawOutsideMask not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /addTo\(maskGroup\)/, "the mask belongs to maskGroup");
+    assert.doesNotMatch(body, /boundaryGroup/,
+                        "and must never be added to the one fitBounds reads");
+    // fitBounds still reads boundaryGroup, so the separation has to hold.
+    assert.match(src, /fitBounds\(boundaryGroup\.getBounds\(\)\)/);
+  });
+
   test(`${name}: the area picker is not a file dialog`, () => {
     // "+ Add an area" opening a file picker assumed the user has boundary
     // files lying around. Almost nobody does, and adding the next town over is

@@ -197,6 +197,15 @@ tests/                      pytest, incl. the Python<->JS parity checks
   Malden's outline comes from OSM and Medford's from the Census, so the same
   legal line is two different point sets tens of metres apart. Proximity is
   what's reliable, hence the `tolMiles` (~55 m) default.
+- **Your areas are the subject of the map, so everything else is shaded.**
+  `drawOutsideMask()` draws ONE polygon covering the world with a hole punched
+  for each area's outer ring, and the outer edge gets a white casing under a
+  heavy dark dash. Without both, the boundary was just one more administrative
+  line among the several the basemap already draws.
+  ⚠️ The mask lives in `maskGroup`, NOT `boundaryGroup`, because
+  `boundaryGroup` feeds `fitBounds()` and a world-sized rectangle in there
+  frames the planet. Inner rings are deliberately skipped: an enclave inside an
+  area should stay shaded.
 - **The clip boundary is the union of `config.areas[].boundary`, not the
   deployment's.** `areasBoundary()` in `app.js` builds it, memoized in
   `areaClip`. It used to be `store.boundary()`, which meant adding an area in
@@ -257,6 +266,12 @@ tests/                      pytest, incl. the Python<->JS parity checks
   points and 17 KB become 128 points and 3 KB. Do not raise it much — a 10 m
   tolerance can move a border street to the wrong side of the line, and this
   outline decides what gets clipped.
+- **Search results are ranked by land area**, via `orderByFields=AREALAND DESC`
+  on the service. There are thirty-odd Clevelands and sorting our own page
+  would not have helped — the service's default order put the big one past the
+  40-record limit, so it never arrived at all. Land area is a crude proxy for
+  "which one did they mean", and the state you are already working in still
+  outranks it.
 - **`census:<GEOID>` is the area id**, so the same town is never added twice
   and full resolution stays re-fetchable. `place.json` carries the real GEOID;
   it used to carry an invented one, which defeated the point. `haveArea()`
@@ -278,6 +293,21 @@ tests/                      pytest, incl. the Python<->JS parity checks
   `.area-choice` already belonged to the import sheet; the Areas card's rules
   are scoped under `#areas-list` so they don't reach in there. Check for an
   existing rule before inventing a class.
+- ⚠️ **An area with no boundary must borrow the deployment's — on IMPORT as
+  well as on startup.** `adoptDeploymentBoundary()` is the one place that does
+  it. v1 kept the boundary outside the file and plenty of v2 files predate
+  this tool writing it, so an imported area often arrives with none: no
+  outline, no clipping, and every feature assigned to "somewhere else", which
+  showed up as a successful import that left Malden with zero features until
+  the user reloaded. It lends the outline ONLY to an area whose name matches
+  `place.name` — handing Malden's boundary to an imported Cleveland would be
+  silently, invisibly wrong.
+- **Starting fresh assumes no geography.** "Start a new network" drops the
+  presumed area and opens the picker. The deployment's place is a fine default
+  for someone who opened this to work on Malden and pure noise for someone
+  starting in another state — and it would quietly lend them Malden's outline.
+  Backing out of the picker with nothing chosen returns to the start sheet
+  rather than stranding the user on a map that belongs to no place.
 - **The start sheet appears when there is nothing to edit** and the user
   hasn't already said "start a new one" (`bnb.started` in localStorage). An
   empty map with no explanation is a dead end — nothing to click, no hint that
