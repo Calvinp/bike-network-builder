@@ -1,0 +1,10 @@
+# Must be REFUSED: strings where coordinates belong.
+format: bike-network
+format_version: 2
+units: metric
+features:
+  - id: f-strings
+    name: Coordinates As Prose
+    geometry: [[["forty-two", "minus seventy-one"]]]
+    treatments:
+      - {id: t-strings, type: shared_use_path, status: existing}

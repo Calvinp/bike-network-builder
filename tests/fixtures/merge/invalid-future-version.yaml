@@ -1,0 +1,5 @@
+# Must be REFUSED: written by a newer tool than this one.
+format: bike-network
+format_version: 99
+units: metric
+features: []

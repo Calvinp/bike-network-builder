@@ -146,6 +146,10 @@ export class Store {
       text = await this.placeAsset("seed_network") ?? "";
       if (text) this.storage.setItem(LS_KEY, text);
     }
+    // Nothing stored and no seed is a legitimate empty start, and it is NOT
+    // the same thing as a user handing us an empty file — that one is refused.
+    // Parsing "" to pick up the defaults blurred the two.
+    if (!String(text).trim()) return makeNetwork({});
     return parseNetwork(text);
   }
 
@@ -360,6 +364,9 @@ export class Store {
       }
       net = parseNetwork(text);
     } catch (e) {
+      // A file that simply isn't ours already says so clearly; prefixing it
+      // with "not parseable as YAML" would blame the wrong thing.
+      if (e && e.name === "NotANetworkFile") return { ok: false, errors: [e.message] };
       return { ok: false, errors: [`Not parseable as YAML: ${e.message}`] };
     }
     const errors = validateNetwork(net);

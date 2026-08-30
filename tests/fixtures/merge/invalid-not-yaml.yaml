@@ -1,0 +1,6 @@
+# Must be REFUSED: not YAML at all.
+format: bike-network
+features:
+  - id: f1
+    name: [unclosed
+    geometry: {{{

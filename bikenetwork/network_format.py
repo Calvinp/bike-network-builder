@@ -472,6 +472,12 @@ def network_from_dict(raw: dict) -> Network:
     )
 
 
+NETWORK_KEYS = ("format", "format_version", "features", "areas", "phases",
+                "authorities")
+NOT_A_NETWORK = (
+    "This file doesn't look like a bike network: it declares no `format` and contains no areas, phases or features.")
+
+
 def parse_network(text: str) -> Network:
     """Parse v2 YAML text into a Network. A v1 file is upgraded on the way in
     (see `migrate.py`), so callers never see a v1 shape."""
@@ -481,6 +487,12 @@ def parse_network(text: str) -> Network:
     if not isinstance(raw, dict):
         raise ValueError("network.yaml must be a YAML mapping at the top level "
                          "(got a %s)." % type(raw).__name__)
+    # An empty document used to sail through: yaml gives None, None became {},
+    # and every field then took its default — including `format`. So importing
+    # an empty or unrelated file reported SUCCESS and, on an empty map, replaced
+    # the network with nothing. A file has to claim to be one of ours.
+    if not any(k in raw for k in NETWORK_KEYS):
+        raise ValueError(NOT_A_NETWORK)
     if _s(raw.get("format")) == LEGACY_FORMAT_ID or _to_int(
             raw.get("format_version"), default=FORMAT_VERSION) < 2:
         from .migrate import upgrade_v1

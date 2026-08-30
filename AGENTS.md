@@ -147,8 +147,9 @@ data/                       malden_boundary / existing_infra / committed_infra .
   layers/                   context layers + layers.json manifest
 web/                        THE APP. index.html, app.js, style.css, help.md
   js/                       place, registry, network_format, migrate, geometry,
-                            boundary, census (area lookup — the ONLY network
-                            call), geojson, costs, pipeline, merge, routing,
+                            boundary, census (area lookup) and osm (Overpass
+                            import) — the only two that touch the network,
+                            geojson, costs, pipeline, merge, routing,
                             graph (spatial index + tiles), history (undo/redo),
                             storage (IndexedDB + journal), store, zip,
                             render_common (the palette + the stacking rule),
@@ -323,6 +324,49 @@ tests/                      pytest, incl. the Python<->JS parity checks
   chosen by the person protecting their work is the one that loses it.
 - **`.geojson` imports too**, as features only, on top of the config already
   loaded — a GeoJSON has no areas, phases or authorities in it.
+
+### OSM import, and the one live query
+
+- ⚠️ **`web/js/osm.js` is the ONLY thing in the browser that may call Overpass**,
+  and only on a click. V2_PLAN §8.5 rule 1 was amended for it rather than
+  broken: load scales with towns added, not with editing time. Keep it that way
+  — never call it from a pan, a draw, a keystroke or a retry loop.
+- **The guardrails are in the SESSION, not the UI**, so no caller can skip them
+  by wiring a button differently: sequential fetches, `MIN_INTERVAL_MS` between
+  requests, a per-area cache, `MAX_AREA_SQKM` refused before any request is
+  sent, and **no automatic retry** — a 429 or 504 stops and says so, because
+  retrying under load is how a polite client becomes a hammer.
+  `place.fetch.overpass_url` overrides the endpoint so a busy deployment
+  self-hosts.
+- **The tag rules and the query are duplicated in Python**
+  (`tools/fetch_existing_infra.py`) and pinned together by
+  `tests/test_web_assets.py`. Two copies that drift are two different tools:
+  the same street would import as `buffered_painted` from one and
+  `concrete_separated` from the other.
+- **OSM results go through the ORDINARY importer.** They are serialized to a v2
+  file in memory and handed to `store.importBytes`, so the review list, the
+  additive merge and the ODbL notice all come for free instead of being
+  reimplemented. Nothing is added without the review list.
+- **Share-alike is contagious.** `mergedMeta()` keeps mine, except that ODbL
+  wins — `applyMerge` used to keep only `mine.meta`, which silently dropped the
+  licence off every OSM import landing in a network that already had features.
+  `licenseConflict()` REPORTS a clash between two declared licences and never
+  adjudicates one: whether two files may be combined depends on provenance only
+  the user knows.
+
+### The awkward files
+
+- **`tests/fixtures/merge/` is generated** by `tools/make_test_networks.py` and
+  split so every file has exactly ONE expected outcome: two that must import
+  (including the speed-hump corridor — legal in the format, never offered by
+  the editor), five that must be refused with a message naming the problem, and
+  five that must not parse at all. Both suites read them.
+- ⚠️ **They already earned their keep:** an empty document used to parse into a
+  default network that validated clean, so importing an empty or unrelated file
+  reported SUCCESS — and on an empty map replaced everything with nothing.
+  `parseNetwork` now refuses a document that declares none of the network keys,
+  and `Store.loadNetwork` treats "nothing stored" explicitly instead of parsing
+  `""` for its defaults.
 
 ### The format
 - **Bicycle lane distance = corridor distance × `sides`**, and ONLY for

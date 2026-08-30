@@ -132,3 +132,64 @@ def test_python_reads_what_js_writes():
                     ta.travel, ta.sides, ta.side, ta.quantity, ta.upgrades) == (
                    tb.id, tb.type, tb.status, tb.phase, tb.authority,
                    tb.travel, tb.sides, tb.side, tb.quantity, tb.upgrades)
+
+
+def test_osm_tag_rules_agree_between_python_and_js():
+    """The browser import and the batch tool must classify OSM tags the same.
+
+    Two copies of the same mapping that drift are two different tools: the same
+    street would come in as `buffered_painted` from one and `concrete_separated`
+    from the other, and nobody would notice until the totals disagreed.
+    """
+    import json
+
+    from tools.fetch_existing_infra import treatment_for
+
+    cases = [
+        {"highway": "cycleway"},
+        {"highway": "path", "bicycle": "designated"},
+        {"highway": "path"},
+        {"cycleway": "track"},
+        {"cycleway": "lane"},
+        {"cycleway": "opposite_lane"},
+        {"cycleway:left": "track"},
+        {"cycleway:right": "track"},
+        {"cycleway:left": "lane"},
+        {"cycleway:right": "lane"},
+        {"cycleway:right": "track", "cycleway:left": "lane"},
+        {"highway": "residential"},
+        {"highway": "footway", "bicycle": "yes"},
+        {},
+    ]
+    js = _run_node("""
+      const OSM = await import("./js/osm.js");
+      const cases = %s;
+      process.stdout.write(JSON.stringify(cases.map((t) => OSM.treatmentFor(t))));
+    """ % json.dumps(cases))
+    from_js = json.loads(js)
+    from_py = [treatment_for(t) for t in cases]
+    assert from_js == from_py, f"JS said {from_js}, Python said {from_py}"
+
+
+def test_osm_query_covers_the_same_tags_in_both():
+    """The two Overpass queries must ask for the same things."""
+    import re
+
+    from tools.fetch_existing_infra import QUERY
+
+    js_query = _run_node("""
+      const OSM = await import("./js/osm.js");
+      process.stdout.write(OSM.overpassQuery([1, 2, 3, 4]));
+    """)
+    # Compare the way-clauses with the bbox placeholder stripped out.
+    def clauses(text):
+        out = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("way["):
+                continue
+            out.append(re.sub(r"\([^)]*\)", "(BBOX)", line))
+        return sorted(out)
+
+    assert clauses(js_query) == clauses(QUERY.replace("{bbox}", "BBOX")), (
+        "the browser and the batch tool ask OSM for different things")

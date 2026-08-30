@@ -254,12 +254,50 @@ export function applyMerge(mine, theirs, {
 
   return makeNetwork({
     areas, authorities, phases, features,
-    meta: { ...mine.meta },
+    meta: mergedMeta(mine.meta, theirs.meta, features),
     costs: { ...mine.costs },
     units: mine.units,
     crs: mine.crs,
     extra: { ...mine.extra },
   });
+}
+
+// The merged file's meta is MINE — except for the licence, which does not work
+// that way. Share-alike is contagious: once ODbL content is in the file, the
+// file is a derivative database and saying otherwise does not make it one.
+// Keeping only `mine.meta` silently dropped the ODbL marker off every OSM
+// import that landed in a network that already had features, which is the one
+// case where it matters most (V2_PLAN.md 8.6).
+//
+// Attribution lives in `meta.contributors`, which the format already reserves;
+// the caller adds the OpenStreetMap entry. Nothing here invents a new field.
+export function mergedMeta(mine = {}, theirs = {}, features = []) {
+  const meta = { ...mine };
+  const anyOsm = (features || []).some(
+    (f) => (f.tags || {}).source === "osm"
+      || (f.treatments || []).some((t) => (t.tags || {}).source === "osm"));
+  if (theirs.license === "ODbL-1.0" || anyOsm) meta.license = "ODbL-1.0";
+  else if (!meta.license && theirs.license) meta.license = theirs.license;
+  return meta;
+}
+
+// Two files that each declare a DIFFERENT licence is a question this tool
+// cannot answer. ODbL absorbing an unlicensed or public-domain file is normal;
+// ODbL meeting another share-alike licence, or anything reserved, may not be
+// mergeable at all — and only the person who knows where the data came from
+// can say. So: never block, never silently launder, always say so.
+const PERMISSIVE = new Set(["", "CC0-1.0", "PDDL-1.0", "public-domain"]);
+export function licenseConflict(mine = {}, theirs = {}) {
+  const a = String(mine.license || "").trim();
+  const b = String(theirs.license || "").trim();
+  if (!a || !b || a === b) return null;
+  // Absorbing something with no strings attached into ODbL is the ordinary
+  // case and needs no warning.
+  if (a === "ODbL-1.0" && PERMISSIVE.has(b)) return null;
+  return `That file is ${b} and yours is ${a}. The result will be recorded as `
+    + `${a === "ODbL-1.0" || b === "ODbL-1.0" ? "ODbL-1.0" : a}, but whether `
+    + "these two may be combined at all depends on where the data came from — "
+    + "worth checking before you share the result.";
 }
 
 function uniqueId(wanted, used) {

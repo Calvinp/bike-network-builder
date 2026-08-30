@@ -17,7 +17,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  applyMerge, assignAreas, describeMerge, phasePlan, planMerge,
+  licenseConflict,
+  applyMerge,
+  assignAreas,
+  describeMerge,
+  mergedMeta,
+  phasePlan,
+  planMerge,
 } from "../js/merge.js";
 import { makeArea, makeFeature, makeNetwork, makePhase, makeTreatment }
   from "../js/network_format.js";
@@ -382,4 +388,59 @@ test("the additive summary counts what was actually taken, not what was offered"
   const plan = planMerge(net(), theirs);
   const lines = describeMerge(plan, {}, { additive: true, added: 1 });
   assert.ok(lines[0].startsWith("Added 1 "), lines[0]);
+});
+
+test("ODbL travels with the data it came from", () => {
+  // Share-alike is contagious: once OSM content is in the file, the file is a
+  // derivative database. applyMerge used to keep only MY meta, which silently
+  // dropped the licence off every OSM import that landed in a network that
+  // already had features — the case where it matters most.
+  const osmFeature = { tags: { source: "osm" }, treatments: [] };
+  const meta = mergedMeta({ title: "Malden" }, { license: "ODbL-1.0" },
+                          [osmFeature]);
+  assert.equal(meta.license, "ODbL-1.0");
+  assert.equal(meta.title, "Malden", "the rest of my meta is untouched");
+  // Attribution belongs in meta.contributors, which the format already
+  // reserves — this must not invent a parallel field for it.
+  assert.equal(meta.attribution, undefined);
+});
+
+test("an OSM-tagged treatment is enough to make the file ODbL", () => {
+  const f = { tags: {}, treatments: [{ tags: { source: "osm" } }] };
+  assert.equal(mergedMeta({}, {}, [f]).license, "ODbL-1.0");
+});
+
+test("a file with no OSM content keeps whatever licence it had", () => {
+  const plain = { tags: {}, treatments: [{ tags: {} }] };
+  assert.equal(mergedMeta({ license: "CC0-1.0" }, {}, [plain]).license, "CC0-1.0");
+  assert.equal(mergedMeta({}, {}, [plain]).license, undefined,
+               "and no licence is invented out of nothing");
+});
+
+test("ODbL from THEIRS wins even over my own more permissive claim", () => {
+  // You cannot merge ODbL data and keep claiming CC0 on the result.
+  const meta = mergedMeta({ license: "CC0-1.0" }, { license: "ODbL-1.0" }, []);
+  assert.equal(meta.license, "ODbL-1.0");
+});
+
+test("a licence clash is reported, not adjudicated", () => {
+  // Whether two share-alike licences may be combined depends on where the data
+  // came from, which only the person importing it knows. Never block, never
+  // silently launder, always say so.
+  const msg = licenseConflict({ license: "ODbL-1.0" },
+                              { license: "CC-BY-SA-4.0" });
+  assert.match(msg, /CC-BY-SA-4\.0/);
+  assert.match(msg, /ODbL-1\.0/);
+  assert.match(msg, /worth checking/);
+});
+
+test("the ordinary cases raise no licence noise", () => {
+  assert.equal(licenseConflict({ license: "ODbL-1.0" }, { license: "ODbL-1.0" }),
+               null, "same licence");
+  assert.equal(licenseConflict({}, { license: "ODbL-1.0" }), null,
+               "an unlicensed file of mine absorbing one that says so");
+  assert.equal(licenseConflict({ license: "ODbL-1.0" }, {}), null,
+               "and a file that says nothing");
+  assert.equal(licenseConflict({ license: "ODbL-1.0" }, { license: "CC0-1.0" }),
+               null, "public-domain data going into ODbL is normal");
 });

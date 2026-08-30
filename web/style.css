@@ -401,3 +401,12 @@ button.destructive:hover { background: #991b1b; border-color: #991b1b; }
   padding: 2px 6px; color: var(--muted); cursor: pointer;
 }
 .sheet-x:hover { color: inherit; background: rgba(0, 0, 0, .07); }
+
+/* One row per area in the OSM import sheet. */
+#osm-areas label {
+  display: flex; align-items: baseline; gap: 8px; padding: 6px 0;
+  border-bottom: 1px solid var(--line); font-size: 13px;
+}
+#osm-areas label:last-child { border-bottom: 0; }
+#osm-areas .why { color: var(--muted); font-size: 12px; }
+#osm-areas input[disabled] + span { opacity: .55; }

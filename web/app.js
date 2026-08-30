@@ -37,12 +37,15 @@ import { KM_PER_MI, MI_PER_KM } from "./js/costs.js";
 import { makeArea, makeFeature, makeNetwork, makePhase, makeTreatment,
          newId, parseNetwork, serializeNetwork }
   from "./js/network_format.js";
-import { applyMerge, describeMerge, planMerge } from "./js/merge.js";
+import { applyMerge, describeMerge, licenseConflict, planMerge }
+  from "./js/merge.js";
 import { assignAreas, partsKm, summarize } from "./js/pipeline.js";
 import { snapRoute } from "./js/routing.js";
 import { Store } from "./js/store.js";
 import { areaAt, areaBoundary, censusId, nearbyAreas, searchAreas, stateAbbr }
   from "./js/census.js";
+import { MAX_AREA_SQKM, OverpassSession, bboxAreaSqKm, bboxOfBoundary,
+         featuresFromOverpass } from "./js/osm.js";
 import { History } from "./js/history.js";
 import { zipCreate } from "./js/zip.js";
 
@@ -1592,6 +1595,113 @@ async function importGeojsonFile(file) {
   }
 }
 
+/* ---------- importing what OSM already knows ----------
+   One query per area, on a click, never automatically — see web/js/osm.js for
+   why this is allowed to call Overpass when nothing else in the browser is.
+   The results are turned into an ordinary network file and handed to the SAME
+   importer as any other file, so the review list, the additive merge and the
+   attribution notice all come for free rather than being reimplemented. */
+let overpass = null;
+function osmSession() {
+  if (!overpass) {
+    overpass = new OverpassSession({ url: (place.fetch || {}).overpass_url });
+  }
+  return overpass;
+}
+function openOsmSheet() {
+  const box = document.getElementById("osm-areas");
+  box.innerHTML = "";
+  if (!config.areas.length) {
+    box.innerHTML = '<p class="hint">No areas yet — add one first and there '
+      + "will be somewhere to look.</p>";
+  }
+  for (const a of config.areas) {
+    const bbox = bboxOfBoundary(a.boundary);
+    const sqkm = bbox ? bboxAreaSqKm(bbox) : 0;
+    const tooBig = sqkm > MAX_AREA_SQKM;
+    const why = !bbox ? "no outline yet"
+      : tooBig ? `about ${Math.round(sqkm)} km² — too large for a live query`
+      : `about ${Math.round(sqkm)} km²`;
+    const label = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = Boolean(bbox) && !tooBig;
+    cb.disabled = !bbox || tooBig;
+    cb.dataset.areaId = a.id;
+    const name = document.createElement("span");
+    name.textContent = a.name || a.id;
+    const note = document.createElement("span");
+    note.className = "why";
+    note.textContent = why;
+    label.appendChild(cb); label.appendChild(name); label.appendChild(note);
+    box.appendChild(label);
+  }
+  osmNote("");
+  document.getElementById("osm-go").disabled = !config.areas.length;
+  document.getElementById("osm-sheet").hidden = false;
+}
+const closeOsmSheet = () => {
+  document.getElementById("osm-sheet").hidden = true;
+};
+function osmNote(msg) {
+  document.getElementById("osm-note").textContent = msg || "";
+}
+/* Look each chosen area up, one at a time, and hand the result to the importer
+   as a normal network file. */
+async function runOsmImport() {
+  const picked = [...document.querySelectorAll("#osm-areas input:checked")]
+    .map((cb) => config.areas.find((a) => String(a.id) === cb.dataset.areaId))
+    .filter(Boolean);
+  if (!picked.length) { osmNote("Pick at least one area."); return; }
+
+  const go = document.getElementById("osm-go");
+  go.disabled = true;
+  const session = osmSession();
+  const found = [];
+  try {
+    for (let i = 0; i < picked.length; i++) {
+      const a = picked[i];
+      osmNote(`Looking up ${a.name}… (${i + 1} of ${picked.length})`);
+      // Sequential on purpose: parallel queries are the difference between
+      // using a shared service and leaning on it.
+      const elements = await session.elementsForArea(a);
+      const feats = featuresFromOverpass({ elements }, a.boundary, pointInBoundary);
+      for (const f of feats) found.push(f);
+    }
+  } catch (e) {
+    go.disabled = false;
+    osmNote(e.message || "The lookup failed.");
+    return;
+  }
+  go.disabled = false;
+  if (!found.length) {
+    osmNote("OpenStreetMap has no bike infrastructure mapped in "
+            + `${picked.map((a) => a.name).join(", ")} yet.`);
+    return;
+  }
+  // Deduplicate: two overlapping areas can both return the same way.
+  const byId = new Map(found.map((f) => [f.id, f]));
+  const text = serializeNetwork(makeNetwork({
+    areas: picked.map((a) => makeArea({ ...a })),
+    authorities: config.authorities.map((x) => ({ ...x })),
+    features: [...byId.values()].map((f) => makeFeature({
+      ...f, treatments: f.treatments.map((t) => makeTreatment(t)),
+    })),
+    units: config.units,
+    meta: { ...(config.meta || {}), license: "ODbL-1.0",
+            attribution: "© OpenStreetMap contributors" },
+  }));
+  closeOsmSheet();
+  const j = await store.importBytes(new TextEncoder().encode(text));
+  if (!j.ok) {
+    alert("The data came back in a shape this version can't read:\n\n"
+          + (j.errors || []).join("\n"));
+    return;
+  }
+  if (!features.length) { await replaceWith(j); return; }
+  openImportSheet(j);
+}
+
 /* ---------- starting, and starting over ----------
    An empty map with no explanation is a dead end: nothing to click, no hint
    that importing is even possible. The start sheet is shown whenever there is
@@ -1925,6 +2035,11 @@ async function doImport() {
   const notes = describeMerge(plan, areaChoices, {
     additive: plan.additive,
     added: merged.features.length - mine.features.length });
+  // Two files that each declare a different licence: say so and move on. The
+  // tool cannot know whether they may be combined, and only the person who
+  // knows the provenance can.
+  const clash = licenseConflict(mine.meta, theirs.meta);
+  if (clash) notes.push(clash);
   // OSM is ODbL: extracting geometry into a file you then share makes a
   // derivative database, which carries share-alike and attribution. Adopt the
   // licence rather than routing around it — a community-built map staying open
@@ -2231,7 +2346,13 @@ async function init() {
   snapRoomy.addEventListener("change", () => syncSnap(snapRoomy, snapMenu));
   snapMenu.addEventListener("change", () => syncSnap(snapMenu, snapRoomy));
   const importInput = document.getElementById("import-file");
-  document.getElementById("btn-import").onclick = () => importInput.click();
+  wireMenu("btn-import", "import-menu", (b) => {
+    if (b.dataset.import === "osm") openOsmSheet();
+    else importInput.click();
+  });
+  document.getElementById("osm-cancel").onclick = closeOsmSheet;
+  document.getElementById("osm-x").onclick = closeOsmSheet;
+  document.getElementById("osm-go").onclick = runOsmImport;
   document.getElementById("btn-undo").onclick = doUndo;
   document.getElementById("btn-redo").onclick = doRedo;
   document.getElementById("btn-add-phase").onclick = addPhase;
@@ -2349,7 +2470,8 @@ async function init() {
     });
   }
   function closeMenus() {
-    ["add-menu", "display-menu", "export-menu", "more-menu"].forEach((id) => {
+    ["add-menu", "display-menu", "export-menu", "more-menu",
+     "import-menu"].forEach((id) => {
       const m = document.getElementById(id);
       if (m) m.hidden = true;
     });
@@ -2373,6 +2495,7 @@ async function init() {
   wireMenu("btn-more", "more-menu", (b) => {
     if (b.dataset.more === "help") window.open("help.html", "_blank");
     else if (b.dataset.more === "reset") openResetSheet();
+    else if (b.dataset.more === "osm") openOsmSheet();
     else document.getElementById("import-file").click();
   });
   wireMenu("btn-export", "export-menu", (b) => {

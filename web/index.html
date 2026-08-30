@@ -71,8 +71,13 @@
     <input type="file" id="import-file" accept=".yaml,.yml,.zip,.geojson,.json" hidden />
     <a class="btnlike wide-only" href="help.html" target="_blank"
       title="How to use this tool, the file format, and how costs are estimated">Help</a>
-    <button id="btn-import" class="ghost wide-only"
-      title="Load a network.yaml (or an exported .zip bundle) someone shared with you">Import</button>
+    <div class="dropdown wide-only">
+      <button id="btn-import" class="ghost">Import ▾</button>
+      <div class="menu" id="import-menu" hidden>
+        <button data-import="file" title="A network someone shared, or a .geojson">From a file…</button>
+        <button data-import="osm" title="Pull the cycleways and paths OpenStreetMap already knows about">Existing bike lanes from OpenStreetMap…</button>
+      </div>
+    </div>
     <button id="btn-reset" class="destructive wide-only"
       title="Clear everything and start over">Reset</button>
     <!-- On a phone there is no room for everything, so the things you reach
@@ -83,6 +88,7 @@
       <div class="menu" id="more-menu" hidden>
         <button data-more="help">Help</button>
         <button data-more="import">Import a network file</button>
+        <button data-more="osm">Import from OpenStreetMap</button>
         <button data-more="reset">Reset everything…</button>
       </div>
     </div>
@@ -154,6 +160,32 @@
 
   <!-- Reset asks three questions at once, because "delete everything" and
        "I have not exported yet" are the same moment. -->
+  <!-- One query per area, on a click, never automatically. See web/js/osm.js
+       for why this is allowed to call Overpass when nothing else here is. -->
+  <div id="osm-sheet" class="sheet" hidden>
+    <div class="sheet-inner" role="dialog" aria-modal="true"
+         aria-labelledby="osm-h">
+      <button id="osm-x" class="sheet-x" title="Close" aria-label="Close">×</button>
+      <h2 id="osm-h">Import from OpenStreetMap</h2>
+      <p class="hint">Looks up the cycleways, paths and painted lanes OSM
+        already has inside the areas you pick, and offers them for review —
+        nothing is added until you approve it.</p>
+
+      <h3>Areas</h3>
+      <div id="osm-areas"></div>
+
+      <p class="hint" id="osm-note"></p>
+      <p class="hint"><b>Licence:</b> OpenStreetMap data is ODbL. Anything you
+        import carries share-alike and attribution, so the file records
+        “© OpenStreetMap contributors”.</p>
+
+      <div class="btnrow sheet-actions">
+        <button id="osm-cancel" class="ghost">Cancel</button>
+        <button id="osm-go" class="primary">Look up</button>
+      </div>
+    </div>
+  </div>
+
   <div id="reset-sheet" class="sheet" hidden>
     <div class="sheet-inner" role="dialog" aria-modal="true"
          aria-labelledby="reset-h">

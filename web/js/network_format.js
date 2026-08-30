@@ -338,12 +338,30 @@ export function networkFromDict(raw) {
   });
 }
 
+const NETWORK_KEYS = ["format", "format_version", "features", "areas",
+                      "phases", "authorities"];
+export const NOT_A_NETWORK = "This file doesn't look like a bike network: it declares no `format` and contains no areas, phases or features.";
+
+// Thrown when the file simply isn't one of ours, so the importer can show the
+// message as-is instead of prefixing it with "not parseable as YAML".
+export class NotANetworkFile extends Error {
+  constructor(message = NOT_A_NETWORK) {
+    super(message);
+    this.name = "NotANetworkFile";
+  }
+}
+
 export function parseNetwork(text) {
   let raw = yaml.load(text);
   if (raw === null || raw === undefined) raw = {};
   if (typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("network.yaml must be a YAML mapping at the top level.");
   }
+  // An empty document used to sail through: yaml gives null, null became {},
+  // and every field then took its default — including `format`. So importing
+  // an empty or unrelated file reported SUCCESS and, on an empty map, replaced
+  // the network with nothing. A file has to claim to be one of ours.
+  if (!NETWORK_KEYS.some((k) => k in raw)) throw new NotANetworkFile();
   if (str(raw.format) === LEGACY_FORMAT_ID
       || toInt(raw.format_version, FORMAT_VERSION) < 2) {
     // Imported synchronously: migrate.js imports newId from here, and a

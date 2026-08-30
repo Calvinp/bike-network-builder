@@ -647,9 +647,19 @@ test suite offline, and it costs nothing to keep.
 
 ### 8.5 The rules that keep this ethical
 
-1. **The browser never calls a public Overpass instance.** Not at draw time, not
-   on pan, not as a fallback. Overpass's usage policy discourages exactly this
-   pattern, and a browser tool cannot bound its own user count.
+1. **The browser never calls a public Overpass instance AUTOMATICALLY.** Not at
+   draw time, not on pan, not as a fallback. Overpass's usage policy discourages
+   exactly this pattern, and a browser tool cannot bound its own user count.
+
+   > **Amended (2026-08).** The OSM import (§7) now runs live from the browser,
+   > because the load it creates is a different shape: one query per AREA, on a
+   > click, cached for the session. That scales with towns added, not with time
+   > spent editing — ordinary Overpass use, the same as a human with JOSM.
+   > `web/js/osm.js` carries the guardrails: sequential fetches, a minimum
+   > interval, no automatic retry on 429/504, a hard size cap that refuses
+   > state-sized queries, and `place.fetch.overpass_url` so a deployment
+   > expecting volume self-hosts. Rules 2 and 4 are unchanged, and the batch
+   > tool remains the right answer for anything large.
 2. **Overpass stays a batch tool** — `build.py` and `fetch_layers.py`, where
    volume is controlled, a human is present, the existing throttle and cache
    apply, and the User-Agent carries a reachable contact. Keep it that way.

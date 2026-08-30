@@ -1,0 +1,5 @@
+# Must be REFUSED: a different tool's file that happens to be YAML.
+format: transit-network
+format_version: 2
+units: metric
+features: []
