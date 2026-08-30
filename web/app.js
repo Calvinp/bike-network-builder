@@ -1655,6 +1655,7 @@ async function runOsmImport() {
   if (!picked.length) { osmNote("Pick at least one area."); return; }
 
   const go = document.getElementById("osm-go");
+  const spots = document.getElementById("osm-spots").checked;
   go.disabled = true;
   const session = osmSession();
   const found = [];
@@ -1664,7 +1665,7 @@ async function runOsmImport() {
       osmNote(`Looking up ${a.name}… (${i + 1} of ${picked.length})`);
       // Sequential on purpose: parallel queries are the difference between
       // using a shared service and leaning on it.
-      const elements = await session.elementsForArea(a);
+      const elements = await session.elementsForArea(a, { spots });
       const feats = featuresFromOverpass({ elements }, a.boundary, pointInBoundary);
       for (const f of feats) found.push(f);
     }
@@ -1675,8 +1676,9 @@ async function runOsmImport() {
   }
   go.disabled = false;
   if (!found.length) {
-    osmNote("OpenStreetMap has no bike infrastructure mapped in "
-            + `${picked.map((a) => a.name).join(", ")} yet.`);
+    osmNote("OpenStreetMap has nothing mapped in "
+            + `${picked.map((a) => a.name).join(", ")} that this tool `
+            + "recognises yet.");
     return;
   }
   // Deduplicate: two overlapping areas can both return the same way.
@@ -1698,7 +1700,12 @@ async function runOsmImport() {
           + (j.errors || []).join("\n"));
     return;
   }
-  if (!features.length) { await replaceWith(j); return; }
+  // NO empty-map shortcut here. For a FILE import, skipping the sheet on a
+  // blank slate is kind — there is nothing to merge into, so the only question
+  // has one answer. For an OSM import the question is completely different:
+  // "which of these 116 do you actually want", which has many answers, and the
+  // sheet has just finished promising to ask it. It asked on top of an
+  // existing network and silently imported everything on an empty one.
   openImportSheet(j);
 }
 

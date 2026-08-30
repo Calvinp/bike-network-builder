@@ -343,6 +343,35 @@ tests/                      pytest, incl. the Python<->JS parity checks
   `tests/test_web_assets.py`. Two copies that drift are two different tools:
   the same street would import as `buffered_painted` from one and
   `concrete_separated` from the other.
+- ⚠️ **The OSM import has NO empty-map shortcut, and must not grow one.** A
+  FILE import skips the review sheet on a blank slate, which is kind: there is
+  nothing to merge into, so the only question has one answer. For OSM the
+  question is "which of these 116 do you actually want", which has many — and
+  the sheet has just promised to ask it. It asked on top of an existing network
+  and silently imported everything onto an empty one.
+- **Ways are chained back together by name.** OSM splits a way at every tag
+  change and many junctions, so one path arrives as a dozen "lanes" — the
+  Dr. Paul Dudley White Path came in as fourteen. `chainParts()` rejoins them;
+  pieces that genuinely do not touch stay separate PARTS of one feature rather
+  than being bridged with geometry that isn't there. Endpoints that meet are
+  identical numbers (adjacent ways share an OSM node), so there is no tolerance
+  and there must not be one — a tolerance would join paths that really stop.
+  Only NAMED ways group: "Unnamed path" is not a name, and lumping every
+  anonymous cycleway in a city together would be worse than the fragmentation.
+  Different treatments on the same street stay separate, or the map stops
+  showing the difference it exists to show.
+- ⚠️ **`cycleway=track` is `quick_build_separated`, NOT `concrete_separated`.**
+  OSM's `track` means "physically separated" and says nothing about what
+  separates it. Importing it as concrete invents a curb that may be flex posts
+  — the same over-claiming the painted-lane rule exists to prevent, pointed the
+  other way. The tags that drove each decision travel in the feature's `notes`
+  (`explainTags`) so a reviewer can see why, and the sheet says plainly that
+  the import is only as good as OSM is.
+- **Spot improvements (bike parking, humps, bollards, islands, tree rows) are
+  OPT-IN.** Malden alone returns ~100 of them and a city returns thousands;
+  every one lands in the review list, and a review list with thousands of rows
+  is one nobody reads. The batch tool always fetches them — it has nobody
+  waiting and no list to swamp.
 - **OSM results go through the ORDINARY importer.** They are serialized to a v2
   file in memory and handed to `store.importBytes`, so the review list, the
   additive merge and the ODbL notice all come for free instead of being

@@ -27,8 +27,30 @@ def way(wid, tags, pts=((0.5, 0.2), (0.5, 0.4))):
 def test_a_painted_lane_is_never_recorded_as_separated():
     assert treatment_for({"cycleway": "lane"}) == "buffered_painted"
     assert treatment_for({"cycleway:right": "lane"}) == "buffered_painted"
-    # A track IS physically separated, so it may say so.
-    assert treatment_for({"cycleway": "track"}) == "concrete_separated"
+
+
+def test_a_track_is_separated_without_claiming_what_separates_it():
+    """`cycleway=track` says "physically separated" and nothing more.
+
+    This used to import as `concrete_separated`, which invents a curb that may
+    be a line of flex posts — the same over-claiming the painted-lane rule
+    exists to prevent, just pointed the other way. Someone reviewing an import
+    of their own city spotted it immediately.
+    """
+    assert treatment_for({"cycleway": "track"}) == "quick_build_separated"
+    assert treatment_for({"cycleway:left": "track"}) == "quick_build_separated"
+
+
+def test_spot_improvements_are_recognised():
+    assert treatment_for({"amenity": "bicycle_parking"}) == "bike_parking"
+    assert treatment_for({"traffic_calming": "hump"}) == "speed_hump"
+    assert treatment_for({"traffic_calming": "table"}) == "raised_crosswalk"
+    assert treatment_for({"barrier": "bollard"}) == "bollards"
+    assert treatment_for({"natural": "tree_row"}) == "street_trees"
+    assert treatment_for({"highway": "crossing",
+                          "crossing:island": "yes"}) == "pedestrian_island"
+    # A plain crossing is not an island.
+    assert treatment_for({"highway": "crossing"}) is None
 
 
 def test_an_off_street_way_becomes_a_shared_use_path():

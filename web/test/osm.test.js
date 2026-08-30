@@ -33,8 +33,9 @@ test("OSM tags map conservatively onto treatments", () => {
   assert.equal(treatmentFor({ highway: "cycleway" }), "shared_use_path");
   assert.equal(treatmentFor({ highway: "path", bicycle: "designated" }),
                "shared_use_path");
-  assert.equal(treatmentFor({ cycleway: "track" }), "concrete_separated");
-  assert.equal(treatmentFor({ "cycleway:right": "track" }), "concrete_separated");
+  // A track is separated; OSM does not say by WHAT, so neither do we.
+  assert.equal(treatmentFor({ cycleway: "track" }), "quick_build_separated");
+  assert.equal(treatmentFor({ "cycleway:right": "track" }), "quick_build_separated");
   assert.equal(treatmentFor({ cycleway: "lane" }), "buffered_painted");
   assert.equal(treatmentFor({ "cycleway:left": "lane" }), "buffered_painted");
   assert.equal(treatmentFor({ highway: "path" }), null,
@@ -48,10 +49,29 @@ test("a track outranks a lane when a way carries both", () => {
   // Right side separated, left side painted: record the better thing, not the
   // first rule that happens to match.
   assert.equal(treatmentFor({ "cycleway:right": "track", "cycleway:left": "lane" }),
-               "concrete_separated");
+               "quick_build_separated");
 });
 
-test("the query asks for exactly the five things we map", () => {
+test("a track is separated WITHOUT claiming what separates it", () => {
+  // It used to arrive as concrete_separated, inventing a curb that may be a
+  // line of flex posts — the same over-claiming the painted-lane rule exists
+  // to prevent, pointed the other way. Someone importing their own city spotted
+  // it on a street they knew had no curb.
+  assert.notEqual(treatmentFor({ cycleway: "track" }), "concrete_separated");
+});
+
+test("spot improvements are recognised, and a plain crossing is not one", () => {
+  assert.equal(treatmentFor({ amenity: "bicycle_parking" }), "bike_parking");
+  assert.equal(treatmentFor({ traffic_calming: "hump" }), "speed_hump");
+  assert.equal(treatmentFor({ traffic_calming: "table" }), "raised_crosswalk");
+  assert.equal(treatmentFor({ barrier: "bollard" }), "bollards");
+  assert.equal(treatmentFor({ natural: "tree_row" }), "street_trees");
+  assert.equal(treatmentFor({ highway: "crossing", "crossing:island": "yes" }),
+               "pedestrian_island");
+  assert.equal(treatmentFor({ highway: "crossing" }), null);
+});
+
+test("the query asks for the five path kinds we map", () => {
   const q = overpassQuery([42.4, -71.09, 42.46, -71.02]);
   assert.match(q, /\[out:json\]\[timeout:90\]/);
   assert.match(q, /way\["highway"="cycleway"\]/);
@@ -60,6 +80,18 @@ test("the query asks for exactly the five things we map", () => {
   assert.match(q, /out geom;/);
   assert.equal((q.match(/42\.400000,-71\.090000,42\.460000,-71\.020000/g) || []).length, 5,
                "every clause is bounded by the bbox");
+  assert.doesNotMatch(q, /bicycle_parking/,
+                      "spot improvements are opt-in, not the default");
+});
+
+test("asking for spots adds them, still bounded by the bbox", () => {
+  const q = overpassQuery([42.4, -71.09, 42.46, -71.02], { spots: true });
+  for (const tag of ["bicycle_parking", "traffic_calming", "bollard",
+                     "crossing:island", "tree_row"]) {
+    assert.ok(q.includes(tag), `expected ${tag} in the query`);
+  }
+  const bounded = (q.match(/42\.400000,-71\.090000,42\.460000,-71\.020000/g) || []);
+  assert.equal(bounded.length, 10, "every clause, path and spot alike");
 });
 
 test("ways outside the area are dropped, and untagged ways ignored", () => {
@@ -185,4 +217,86 @@ test("a query is POSTed, not crammed into a URL", async () => {
   await s.elementsForArea({ id: "m", name: "Malden", boundary: MALDEN });
   assert.equal(calls[0].opts.method, "POST");
   assert.match(String(calls[0].opts.body), /out%3Ajson|out:json/);
+});
+
+test("the pieces of one named path come back as ONE feature", () => {
+  // OSM splits a way at every tag change and many junctions, so the Dr. Paul
+  // Dudley White Path arrived as fourteen separate "lanes". Adjacent ways
+  // share an OSM node, so their endpoints are identical numbers — no tolerance
+  // needed, and a tolerance would start joining paths that genuinely stop.
+  const seg = (id, pts) => ({ type: "way", id,
+    tags: { highway: "cycleway", name: "Dudley White Path" },
+    geometry: pts.map(([lat, lon]) => ({ lat, lon })) });
+  const doc = { elements: [
+    seg(1, [[42.42, -71.08], [42.43, -71.07]]),
+    seg(3, [[42.45, -71.05], [42.44, -71.06]]),   // out of order AND reversed
+    seg(2, [[42.43, -71.07], [42.44, -71.06]]),
+  ] };
+  const feats = featuresFromOverpass(doc, MALDEN, pointInBoundary);
+  assert.equal(feats.length, 1, "one path, not three");
+  assert.equal(feats[0].geometry.length, 1, "and one continuous part");
+  assert.equal(feats[0].geometry[0].length, 4, "with every vertex, once");
+  assert.equal(feats[0].treatments[0].tags.osm_way, "1 3 2",
+               "every source way is still recorded");
+});
+
+test("pieces that do not touch stay separate parts of one feature", () => {
+  // A path interrupted by a road crossing is still one path, but drawing a
+  // line through the gap would invent geometry that is not there.
+  const seg = (id, pts) => ({ type: "way", id,
+    tags: { highway: "cycleway", name: "Broken Path" },
+    geometry: pts.map(([lat, lon]) => ({ lat, lon })) });
+  const doc = { elements: [
+    seg(1, [[42.42, -71.08], [42.43, -71.07]]),
+    seg(2, [[42.44, -71.06], [42.45, -71.05]]),
+  ] };
+  const [f] = featuresFromOverpass(doc, MALDEN, pointInBoundary);
+  assert.equal(f.geometry.length, 2, "two parts, one feature");
+});
+
+test("unnamed ways are never lumped together", () => {
+  // "Unnamed path" is not a name. Grouping every anonymous cycleway in a city
+  // into one feature would be worse than the fragmentation it fixes.
+  const seg = (id) => ({ type: "way", id, tags: { highway: "cycleway" },
+    geometry: [{ lat: 42.42, lon: -71.06 }, { lat: 42.43, lon: -71.05 }] });
+  const feats = featuresFromOverpass({ elements: [seg(1), seg(2)] },
+                                     MALDEN, pointInBoundary);
+  assert.equal(feats.length, 2);
+});
+
+test("two DIFFERENT treatments on one street stay separate features", () => {
+  // Half of Main Street is separated and half is painted. Merging them by name
+  // would erase the difference the map exists to show.
+  const way = (id, tags) => ({ type: "way", id, tags: { name: "Main Street", ...tags },
+    geometry: [{ lat: 42.42, lon: -71.06 }, { lat: 42.43, lon: -71.05 }] });
+  const feats = featuresFromOverpass(
+    { elements: [way(1, { cycleway: "track" }), way(2, { cycleway: "lane" })] },
+    MALDEN, pointInBoundary);
+  assert.equal(feats.length, 2);
+  assert.deepEqual(feats.map((f) => f.treatments[0].type).sort(),
+                   ["buffered_painted", "quick_build_separated"]);
+});
+
+test("a node becomes a spot, with its count when OSM knows it", () => {
+  const doc = { elements: [
+    { type: "node", id: 11, lat: 42.42, lon: -71.06,
+      tags: { amenity: "bicycle_parking", capacity: "12" } },
+    { type: "node", id: 12, lat: 42.43, lon: -71.05,
+      tags: { amenity: "bicycle_parking", capacity: "lots" } },
+  ] };
+  const feats = featuresFromOverpass(doc, MALDEN, pointInBoundary);
+  assert.equal(feats.length, 2);
+  assert.equal(feats[0].geometry[0].length, 1, "a spot is a one-point part");
+  assert.equal(feats[0].treatments[0].quantity, 12);
+  assert.equal(feats[1].treatments[0].quantity, undefined,
+               "an unparseable capacity is left unset, never guessed");
+});
+
+test("the notes record the tags that drove the decision", () => {
+  // A reviewer looking at "separated lane" on a street they know has paint
+  // needs to see that OSM said cycleway=track, not to take our word for it.
+  const doc = { elements: [{ type: "way", id: 5, tags: { cycleway: "track" },
+    geometry: [{ lat: 42.42, lon: -71.06 }, { lat: 42.43, lon: -71.05 }] }] };
+  const [f] = featuresFromOverpass(doc, MALDEN, pointInBoundary);
+  assert.match(f.notes, /cycleway=track/);
 });

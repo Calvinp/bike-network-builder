@@ -56,30 +56,50 @@ from bikenetwork.place import load_place  # noqa: E402
 # unprotected painted lane is recorded as `buffered_painted`, never as
 # anything "separated", because calling paint protection is how a map starts
 # lying about what exists.
+# NOTE: `cycleway=track` means "physically separated" in OSM and says NOTHING
+# about what separates it. It used to arrive as `concrete_separated`, which
+# invents a curb that may be a line of flex posts — the same over-claiming this
+# table exists to avoid, just pointed the other way.
 TAG_RULES = [
-    # (predicate over tags, treatment id, human name for the query)
+    # (predicate over tags, treatment id)
     (lambda t: t.get("highway") == "cycleway", "shared_use_path"),
     (lambda t: t.get("highway") == "path" and t.get("bicycle") == "designated",
      "shared_use_path"),
     (lambda t: t.get("cycleway") == "track"
      or t.get("cycleway:left") == "track" or t.get("cycleway:right") == "track",
-     "concrete_separated"),
+     "quick_build_separated"),
     (lambda t: t.get("cycleway") in ("lane", "opposite_lane")
      or t.get("cycleway:left") == "lane" or t.get("cycleway:right") == "lane",
      "buffered_painted"),
+    # Spot improvements. Opt-in in the browser, always fetched here — a batch
+    # run has nobody waiting on it and no review list to swamp.
+    (lambda t: t.get("amenity") == "bicycle_parking", "bike_parking"),
+    (lambda t: t.get("traffic_calming") == "table", "raised_crosswalk"),
+    (lambda t: t.get("traffic_calming") in ("hump", "bump", "cushion"),
+     "speed_hump"),
+    (lambda t: t.get("barrier") == "bollard", "bollards"),
+    (lambda t: t.get("natural") == "tree_row", "street_trees"),
+    (lambda t: t.get("highway") == "crossing"
+     and t.get("crossing:island") == "yes", "pedestrian_island"),
 ]
 
-QUERY = """
-[out:json][timeout:90];
-(
-  way["highway"="cycleway"]({bbox});
-  way["highway"="path"]["bicycle"="designated"]({bbox});
-  way["cycleway"~"lane|track|opposite_lane"]({bbox});
-  way["cycleway:left"~"lane|track"]({bbox});
-  way["cycleway:right"~"lane|track"]({bbox});
-);
-out geom;
-"""
+PATH_CLAUSES = [
+    'way["highway"="cycleway"]',
+    'way["highway"="path"]["bicycle"="designated"]',
+    'way["cycleway"~"lane|track|opposite_lane"]',
+    'way["cycleway:left"~"lane|track"]',
+    'way["cycleway:right"~"lane|track"]',
+]
+SPOT_CLAUSES = [
+    'node["amenity"="bicycle_parking"]',
+    'node["traffic_calming"~"hump|bump|table|cushion"]',
+    'node["barrier"="bollard"]',
+    'node["highway"="crossing"]["crossing:island"="yes"]',
+    'way["natural"="tree_row"]',
+]
+
+QUERY = "[out:json][timeout:90];\n(\n" + "\n".join(
+    f"  {c}({{bbox}});" for c in PATH_CLAUSES + SPOT_CLAUSES) + "\n);\nout geom;"
 
 
 def treatment_for(tags: dict) -> str | None:

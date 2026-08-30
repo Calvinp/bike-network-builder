@@ -179,17 +179,39 @@ def test_osm_query_covers_the_same_tags_in_both():
 
     js_query = _run_node("""
       const OSM = await import("./js/osm.js");
-      process.stdout.write(OSM.overpassQuery([1, 2, 3, 4]));
+      process.stdout.write(OSM.overpassQuery([1, 2, 3, 4], { spots: true }));
     """)
-    # Compare the way-clauses with the bbox placeholder stripped out.
+    # Compare every clause with the bbox placeholder stripped out. Node
+    # clauses count too: the spot improvements are half the mapping now.
     def clauses(text):
         out = []
         for line in text.splitlines():
             line = line.strip()
-            if not line.startswith("way["):
+            if not (line.startswith("way[") or line.startswith("node[")):
                 continue
             out.append(re.sub(r"\([^)]*\)", "(BBOX)", line))
         return sorted(out)
 
     assert clauses(js_query) == clauses(QUERY.replace("{bbox}", "BBOX")), (
         "the browser and the batch tool ask OSM for different things")
+
+
+def test_the_browser_asks_for_spot_improvements_only_when_told_to():
+    """A city has thousands of bollards and bike racks.
+
+    Fetching them by default would hand the user a review list with thousands
+    of rows, which is a review list nobody reads. The batch tool has no such
+    problem and always fetches everything.
+    """
+    default = _run_node("""
+      const OSM = await import("./js/osm.js");
+      process.stdout.write(OSM.overpassQuery([1, 2, 3, 4]));
+    """)
+    assert "bicycle_parking" not in default
+    assert "highway\"=\"cycleway" in default
+
+    asked = _run_node("""
+      const OSM = await import("./js/osm.js");
+      process.stdout.write(OSM.overpassQuery([1, 2, 3, 4], { spots: true }));
+    """)
+    assert "bicycle_parking" in asked

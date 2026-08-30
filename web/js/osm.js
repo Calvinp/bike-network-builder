@@ -45,18 +45,36 @@ export const MAX_AREA_SQKM = 5000;
 // no caller can skip it by wiring a button up differently.
 export const MIN_INTERVAL_MS = 4000;
 
-// Mirrors tools/fetch_existing_infra.py QUERY. A parity test pins them
-// together, because two copies of a query that drift are two different tools.
-export function overpassQuery(bbox) {
+// Paths and lanes: what everyone wants, and what the import has always done.
+export const PATH_CLAUSES = [
+  'way["highway"="cycleway"]',
+  'way["highway"="path"]["bicycle"="designated"]',
+  'way["cycleway"~"lane|track|opposite_lane"]',
+  'way["cycleway:left"~"lane|track"]',
+  'way["cycleway:right"~"lane|track"]',
+];
+
+// Spot improvements: OPT-IN, because a city has thousands of these and a
+// review list with thousands of rows is a review list nobody reads. Someone
+// who specifically wants the bike parking can ask for it.
+export const SPOT_CLAUSES = [
+  'node["amenity"="bicycle_parking"]',
+  'node["traffic_calming"~"hump|bump|table|cushion"]',
+  'node["barrier"="bollard"]',
+  'node["highway"="crossing"]["crossing:island"="yes"]',
+  'way["natural"="tree_row"]',
+];
+
+// Mirrors tools/fetch_existing_infra.py. A parity test pins them together,
+// because two copies of a query that drift are two different tools.
+export function overpassQuery(bbox, { spots = false } = {}) {
   const [s, w, n, e] = bbox.map((v) => Number(v).toFixed(6));
   const box = `${s},${w},${n},${e}`;
+  const clauses = [...PATH_CLAUSES, ...(spots ? SPOT_CLAUSES : [])]
+    .map((c) => `  ${c}(${box});`).join("\n");
   return `[out:json][timeout:90];
 (
-  way["highway"="cycleway"](${box});
-  way["highway"="path"]["bicycle"="designated"](${box});
-  way["cycleway"~"lane|track|opposite_lane"](${box});
-  way["cycleway:left"~"lane|track"](${box});
-  way["cycleway:right"~"lane|track"](${box});
+${clauses}
 );
 out geom;`;
 }
@@ -65,17 +83,46 @@ out geom;`;
 // identical to the Python tool's TAG_RULES: an unprotected painted lane is
 // recorded as `buffered_painted`, never as anything "separated", because
 // calling paint protection is how a map starts lying about what exists.
+//
+// ⚠️ `cycleway=track` means "physically separated" in OSM and says NOTHING
+// about what separates it. It used to arrive here as `concrete_separated`,
+// which invented a curb that may be a line of flex posts — the same
+// over-claiming this table exists to avoid, just pointed the other way. It now
+// arrives as `quick_build_separated`: still separated, no construction
+// claimed. The raw tag travels in `notes` so a reviewer can correct it.
 export function treatmentFor(tags = {}) {
   const t = tags || {};
   if (t.highway === "cycleway") return "shared_use_path";
   if (t.highway === "path" && t.bicycle === "designated") return "shared_use_path";
   if (t.cycleway === "track" || t["cycleway:left"] === "track"
-      || t["cycleway:right"] === "track") return "concrete_separated";
+      || t["cycleway:right"] === "track") return "quick_build_separated";
   if (t.cycleway === "lane" || t.cycleway === "opposite_lane"
       || t["cycleway:left"] === "lane" || t["cycleway:right"] === "lane") {
     return "buffered_painted";
   }
+  // Spot improvements, only present when the caller asked for them.
+  if (t.amenity === "bicycle_parking") return "bike_parking";
+  if (t.traffic_calming === "table") return "raised_crosswalk";
+  if (["hump", "bump", "cushion"].includes(t.traffic_calming)) return "speed_hump";
+  if (t.barrier === "bollard") return "bollards";
+  if (t.natural === "tree_row") return "street_trees";
+  if (t.highway === "crossing" && t["crossing:island"] === "yes") {
+    return "pedestrian_island";
+  }
   return null;
+}
+
+// Which tags actually drove the decision, for the notes field. A reviewer
+// looking at "separated lane" on a street they know has paint needs to see
+// that OSM said `cycleway=track`, not to take our word for it.
+const EXPLAIN_KEYS = ["highway", "bicycle", "cycleway", "cycleway:left",
+                      "cycleway:right", "amenity", "traffic_calming", "barrier",
+                      "natural", "crossing:island", "surface", "capacity"];
+export function explainTags(tags = {}) {
+  const parts = EXPLAIN_KEYS
+    .filter((k) => tags[k] !== undefined && tags[k] !== "")
+    .map((k) => `${k}=${tags[k]}`);
+  return parts.length ? `OSM: ${parts.join(", ")}` : "";
 }
 
 // [south, west, north, east] around a [lat, lon] multipolygon.
@@ -107,40 +154,140 @@ export function bboxAreaSqKm(bbox) {
   return Math.abs(height * width);
 }
 
-// Overpass ways -> plain feature objects, ready for makeFeature(). Keeps a way
-// with ANY point inside the area; the importer clips properly afterwards.
+// OSM splits a way at every tag change and many junctions, so one path
+// arrives as a dozen pieces. Chaining them back together is what makes the
+// Dr. Paul Dudley White Path one feature instead of fourteen.
+//
+// Endpoints that meet are IDENTICAL, not merely close: adjacent ways share the
+// same OSM node, so its coordinates are the same number in both. No tolerance
+// is needed, and adding one would start joining paths that genuinely stop.
+const endKey = (pt) => `${pt[0]},${pt[1]}`;
+
+export function chainParts(parts) {
+  const pool = (parts || []).filter((p) => p && p.length >= 2).map((p) => [...p]);
+  const runs = [];
+  while (pool.length) {
+    const run = pool.shift();
+    let joined = true;
+    while (joined) {
+      joined = false;
+      for (let i = 0; i < pool.length; i++) {
+        const p = pool[i];
+        const runHead = endKey(run[0]);
+        const runTail = endKey(run[run.length - 1]);
+        const pHead = endKey(p[0]);
+        const pTail = endKey(p[p.length - 1]);
+        if (runTail === pHead) run.push(...p.slice(1));
+        else if (runTail === pTail) run.push(...[...p].reverse().slice(1));
+        else if (runHead === pTail) run.unshift(...p.slice(0, -1));
+        else if (runHead === pHead) run.unshift(...[...p].reverse().slice(0, -1));
+        else continue;
+        pool.splice(i, 1);
+        joined = true;
+        break;
+      }
+    }
+    runs.push(run);
+  }
+  return runs;
+}
+
+// Overpass elements -> plain feature objects, ready for makeFeature().
+//
+// Ways with the SAME NAME and the same treatment become one feature whose
+// geometry has several parts, with touching pieces chained first. Unnamed ways
+// stay separate: "Unnamed path" is not a name, and lumping every anonymous
+// cycleway in a city into one feature would be worse than the fragmentation.
 export function featuresFromOverpass(result, boundary, pointInBoundary) {
-  const out = [];
+  const inArea = (pts) => !boundary || !boundary.length || !pointInBoundary
+    || pts.some(([lat, lon]) => pointInBoundary(lat, lon, boundary));
+
+  const lines = new Map();     // group key -> {name, type, tags, ids, parts}
+  const points = [];
   for (const el of (result && result.elements) || []) {
+    const tags = el.tags || {};
+    const type = treatmentFor(tags);
+    if (!type) continue;
+    const id = String(el.id ?? "");
+
+    if (el.type === "node") {
+      if (typeof el.lat !== "number" || typeof el.lon !== "number") continue;
+      if (!inArea([[el.lat, el.lon]])) continue;
+      points.push(makeOsmFeature({
+        id, type, tags,
+        name: tags.name || defaultNameFor(type),
+        geometry: [[[el.lat, el.lon]]],
+        quantity: countFor(type, tags),
+      }));
+      continue;
+    }
     if (el.type !== "way") continue;
     const pts = (el.geometry || [])
       .filter((g) => g && typeof g.lat === "number" && typeof g.lon === "number")
       .map((g) => [g.lat, g.lon]);
-    if (pts.length < 2) continue;
-    if (boundary && boundary.length && pointInBoundary
-        && !pts.some(([lat, lon]) => pointInBoundary(lat, lon, boundary))) {
-      continue;
-    }
-    const tags = el.tags || {};
-    const type = treatmentFor(tags);
-    if (!type) continue;
-    const wid = String(el.id ?? out.length + 1);
-    out.push({
-      id: `osm-w${wid}`,
-      name: tags.name || tags.ref || `Unnamed path ${wid}`,
-      on_street: tags.name || "",
-      notes: tags.description || "",
-      treatments: [{
-        id: `osm-t${wid}`,
-        type,
-        status: "existing",
-        tags: { source: "osm", osm_way: wid },
-      }],
-      geometry: [pts],
-      tags: { source: "osm" },
-    });
+    if (pts.length < 2 || !inArea(pts)) continue;
+
+    const name = tags.name || tags.ref || "";
+    // Only NAMED ways are grouped; the id keeps anonymous ones apart.
+    const key = name ? `${name}\u0000${type}` : `\u0000${id}`;
+    const group = lines.get(key) || { name, type, tags, ids: [], parts: [] };
+    group.ids.push(id);
+    group.parts.push(pts);
+    lines.set(key, group);
   }
-  return out;
+
+  const out = [];
+  for (const g of lines.values()) {
+    const parts = chainParts(g.parts);
+    out.push(makeOsmFeature({
+      id: g.ids[0], type: g.type, tags: g.tags,
+      name: g.name || `Unnamed path ${g.ids[0]}`,
+      onStreet: g.tags.name || "",
+      geometry: parts,
+      ways: g.ids,
+    }));
+  }
+  return [...out, ...points];
+}
+
+const DEFAULT_NAMES = {
+  bike_parking: "Bike parking",
+  speed_hump: "Speed hump",
+  raised_crosswalk: "Raised crossing",
+  bollards: "Bollards",
+  street_trees: "Street trees",
+  pedestrian_island: "Pedestrian island",
+};
+const defaultNameFor = (type) => DEFAULT_NAMES[type] || "Existing spot";
+
+// `capacity` is how many bikes a rack holds, which is exactly the quantity a
+// counted treatment wants. Anything unparseable is left unset rather than
+// guessed at.
+function countFor(type, tags) {
+  if (type !== "bike_parking") return undefined;
+  const n = parseInt(tags.capacity, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+function makeOsmFeature({ id, type, tags, name, onStreet = "", geometry,
+                          quantity, ways }) {
+  const treatment = {
+    id: `osm-t${id}`,
+    type,
+    status: "existing",
+    tags: { source: "osm", osm_way: (ways || [id]).join(" ") },
+  };
+  if (quantity !== undefined) treatment.quantity = quantity;
+  const why = explainTags(tags);
+  return {
+    id: `osm-w${id}`,
+    name,
+    on_street: onStreet,
+    notes: [tags.description || "", why].filter(Boolean).join(" \u00b7 "),
+    treatments: [treatment],
+    geometry,
+    tags: { source: "osm" },
+  };
 }
 
 export class OverpassError extends Error {
@@ -197,8 +344,8 @@ export class OverpassSession {
   }
 
   // Everything OSM knows about bikes inside one area. Cached per area id.
-  async elementsForArea(area, { signal } = {}) {
-    const key = String(area.id || area.name || "");
+  async elementsForArea(area, { signal, spots = false } = {}) {
+    const key = `${area.id || area.name || ""}|${spots ? "spots" : "paths"}`;
     if (this.cache.has(key)) return this.cache.get(key);
     const bbox = bboxOfBoundary(area.boundary);
     if (!bbox) {
@@ -213,7 +360,7 @@ export class OverpassSession {
         + `which is past the ${MAX_AREA_SQKM} km² limit for a live query. `
         + "Import its towns separately, or use tools/fetch_existing_infra.py.");
     }
-    const doc = await this.run(overpassQuery(bbox), { signal });
+    const doc = await this.run(overpassQuery(bbox, { spots }), { signal });
     const elements = (doc && doc.elements) || [];
     this.cache.set(key, elements);
     return elements;
