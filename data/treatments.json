@@ -86,7 +86,7 @@
       "category": "calming",
       "measure": "counted",
       "unit": "humps",
-      "geometry": ["point", "line"],
+      "geometry": ["point"],
       "cost": null,
       "style": { "glyph": "∩", "stack_rank": 20 }
     },
@@ -167,7 +167,7 @@
       "category": "access",
       "measure": "counted",
       "unit": "bollards",
-      "geometry": ["point", "line"],
+      "geometry": ["point"],
       "cost": null,
       "style": { "glyph": "⇕", "stack_rank": 32 }
     },

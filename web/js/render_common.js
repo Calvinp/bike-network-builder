@@ -88,6 +88,16 @@ export function strokeColor(t, colorMode, phaseNumberOf) {
 //
 // `zoom` may be omitted (exports render at a fixed scale); pass it in the
 // editor so a zoomed-out map degrades to a single stroke instead of mush.
+// A treatment DRAWS as a run of glyphs rather than a stroke when the registry
+// gives it a glyph and no colour — which is exactly the counted, point-natured
+// vocabulary (street trees, bollards, parking removal). On a line those used to
+// fall back to POINT_PROPOSED_COLOR and paint a black dashed stroke, so a row of
+// street trees looked like an unrecognised bike facility.
+export function drawsAsGlyphs(type) {
+  const spec = registry().get(type);
+  return Boolean(spec.glyph) && !spec.color;
+}
+
 export function featureStrokes(feature, colorMode, { phaseNumberOf, zoom } = {}) {
   const specs = registry().sortedForDraw(feature.treatments.map((t) => t.type));
   // Re-associate each spec with its treatment. sortedForDraw is stable and
@@ -114,6 +124,68 @@ export function featureStrokes(feature, colorMode, { phaseNumberOf, zoom } = {})
     dashed: t.status !== "existing",
     dashArray: dashFor(t.status),
   }));
+}
+
+// What a LINE feature draws: the strokes that are really strokes, plus the
+// counted treatments drawn as glyphs spaced along it.
+//
+// A line carrying only counted treatments (a row of street trees) gets no
+// stroke at all, so `spine` asks for a hairline underneath — it keeps the
+// feature visible as one object and, in the editor, keeps it clickable.
+export function featureLayers(feature, colorMode, opts = {}) {
+  const all = featureStrokes(feature, colorMode, opts);
+  const strokes = all.filter((s) => !drawsAsGlyphs(s.treatment.type));
+  // Glyph runs take pointColor, not the stroke colour: they ARE spots, just
+  // spread along a line, and a standalone spot of the same treatment must not
+  // come out a different colour from a row of them.
+  const glyphRuns = all.filter((s) => drawsAsGlyphs(s.treatment.type))
+    .map((s) => ({ ...s, color: pointColor(s.treatment),
+                   glyph: treatmentGlyph(s.treatment.type) }));
+  return { strokes, glyphRuns, spine: strokes.length === 0 && glyphRuns.length > 0 };
+}
+
+// Points spaced along a polyline part for a glyph run, in [lat, lon].
+//
+// Spacing is GEOGRAPHIC, not per-vertex: a part drawn with three clicks and one
+// drawn with forty must produce the same row of trees. `everyKm` is a target —
+// the real spacing is evened out so the run starts and ends inside the part
+// rather than trailing off.
+// Exports render at one fixed scale, so they use one fixed spacing; the
+// editor varies it with zoom. The cap is what keeps a whole-city PNG from
+// disappearing under tree glyphs.
+export const EXPORT_GLYPH_KM = 0.08;
+export const EXPORT_GLYPH_MAX = 20;
+
+export function glyphRunPoints(part, everyKm = 0.06, max = 24) {
+  if (!part || part.length < 2) return [];
+  const seg = [];
+  let total = 0;
+  for (let i = 1; i < part.length; i++) {
+    const d = haversineKm(part[i - 1], part[i]);
+    seg.push(d); total += d;
+  }
+  if (total <= 0) return [];
+  const n = Math.max(1, Math.min(max, Math.round(total / Math.max(everyKm, 1e-6))));
+  const step = total / (n + 1);            // n interior points, evenly spread
+  const out = [];
+  let target = step, walked = 0, i = 0;
+  while (out.length < n && i < seg.length) {
+    if (walked + seg[i] < target) { walked += seg[i]; i++; continue; }
+    const f = seg[i] > 0 ? (target - walked) / seg[i] : 0;
+    const [aLat, aLon] = part[i], [bLat, bLon] = part[i + 1];
+    out.push([aLat + (bLat - aLat) * f, aLon + (bLon - aLon) * f]);
+    target += step;
+  }
+  return out;
+}
+
+const EARTH_KM = 6371.0088;
+function haversineKm([lat1, lon1], [lat2, lon2]) {
+  const r = Math.PI / 180;
+  const dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_KM * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
 // Status is carried by line STYLE, which leaves colour free for phase or

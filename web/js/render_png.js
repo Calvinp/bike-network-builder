@@ -10,7 +10,8 @@ import { supersededIds } from "./network_format.js";
 import { registry } from "./registry.js";
 import {
   BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR,
-  UNDER_CONSTRUCTION_COLOR, dashFor, featureStrokes, labelText, phaseColor,
+  EXPORT_GLYPH_KM, EXPORT_GLYPH_MAX, UNDER_CONSTRUCTION_COLOR, dashFor,
+  drawsAsGlyphs, featureLayers, glyphRunPoints, labelText, phaseColor,
   pointColor, treatmentColor, treatmentGlyph, treatmentLabel,
 } from "./render_common.js";
 
@@ -269,8 +270,10 @@ export async function renderPng(features, net, {
 
   // Every treatment is drawn: STACKED STROKES on one geometry, widest first.
   // strokesByFeature preserves that order, and nothing reads treatments[0].
+  const layersByFeature = new Map(features.map(
+    (f) => [f, featureLayers(f, colorMode, { phaseNumberOf })]));
   const strokesByFeature = new Map(features.map(
-    (f) => [f, featureStrokes(f, colorMode, { phaseNumberOf })]));
+    (f) => [f, layersByFeature.get(f).strokes]));
 
   for (const f of features) {
     for (const t of f.treatments) {
@@ -281,7 +284,25 @@ export async function renderPng(features, net, {
         const n = phaseNumberOf(t.phase);
         if (n !== null) seen.phases.add(n);
       }
-      if (f.lines().length) seen.types.add(t.type);
+      if (f.lines().length) {
+        if (drawsAsGlyphs(t.type)) {
+          // A row of street trees is a run of spots, not a corridor: it
+          // belongs in the points legend and draws as repeated glyphs.
+          seen.points.add(t.type);
+          const run = layersByFeature.get(f).glyphRuns
+            .find((g) => g.treatment === t);
+          for (const part of f.lines()) {
+            for (const pt of glyphRunPoints(part, EXPORT_GLYPH_KM,
+                                            EXPORT_GLYPH_MAX)) {
+              const [mx, my] = lonlatToMercator(pt[0], pt[1]);
+              pointDraws.push({ mx, my, glyph: treatmentGlyph(t.type),
+                                color: run ? run.color : pointColor(t) });
+            }
+          }
+        } else {
+          seen.types.add(t.type);
+        }
+      }
       if (f.points().length) {
         seen.points.add(t.type);
         for (const pt of f.points()) {
@@ -322,6 +343,15 @@ export async function renderPng(features, net, {
   // Pass 2: the strokes themselves, widest first so the highest-ranked
   // treatment ends up on top.
   for (const f of features) {
+    const { spine, glyphRuns } = layersByFeature.get(f);
+    // Nothing but counted treatments: lay a hairline so the run reads as one
+    // object spanning a block rather than as unexplained scattered glyphs.
+    if (spine && glyphRuns.length) {
+      for (const seg of mercByPath.get(f)) {
+        stroke(ctx, seg, toPx, { color: glyphRuns[0].color, lwPt: 1.2,
+                                 dashPt: [1, 5], alpha: 0.55 });
+      }
+    }
     const strokes = strokesByFeature.get(f);
     for (const stroke_ of strokes) {
       const t = stroke_.treatment;

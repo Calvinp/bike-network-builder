@@ -7,9 +7,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BASE_WEIGHT, MAX_STACKED, MIN_STACK_ZOOM, dashFor, featureStrokes,
-         labelText, mapPalette, strokeColor, treatmentColor, treatmentGlyph,
-         treatmentLabel } from "../js/render_common.js";
+import {
+  BASE_WEIGHT,
+  MAX_STACKED,
+  MIN_STACK_ZOOM,
+  dashFor,
+  featureLayers,
+  featureStrokes,
+  glyphRunPoints,
+  labelText,
+  mapPalette,
+  pointColor,
+  strokeColor,
+  treatmentColor,
+  treatmentGlyph,
+  treatmentLabel,
+} from "../js/render_common.js";
 import { makeFeature, makeTreatment } from "../js/network_format.js";
 import { setRegistry } from "../js/registry.js";
 
@@ -147,4 +160,61 @@ test("the map palette includes every registry colour", () => {
   const palette = mapPalette();
   assert.ok(palette.includes(treatmentColor("concrete_separated")));
   assert.ok(palette.includes("#ffffff"));
+});
+
+test("a counted treatment on a line draws as glyphs, not as a stroke", () => {
+  // The bug: treatmentColor falls back to POINT_PROPOSED_COLOR for a treatment
+  // with no colour, so a row of street trees painted a black dashed LINE and
+  // read as an unrecognised bike facility.
+  const f = { treatments: [{ type: "street_trees", status: "proposed", phase: null }] };
+  const { strokes, glyphRuns, spine } = featureLayers(f, "treatment", {});
+  assert.equal(strokes.length, 0, "a counted treatment is not a stroke");
+  assert.equal(glyphRuns.length, 1);
+  assert.equal(glyphRuns[0].glyph, treatmentGlyph("street_trees"));
+  assert.equal(spine, true, "with no stroke it needs a hairline to be visible");
+});
+
+test("a corridor keeps its stroke and carries its glyph run alongside", () => {
+  const f = { treatments: [
+    { type: "quick_build_separated", status: "proposed", phase: null },
+    { type: "street_trees", status: "proposed", phase: null },
+  ] };
+  const { strokes, glyphRuns, spine } = featureLayers(f, "treatment", {});
+  assert.deepEqual(strokes.map((s) => s.treatment.type), ["quick_build_separated"]);
+  assert.deepEqual(glyphRuns.map((g) => g.treatment.type), ["street_trees"]);
+  assert.equal(spine, false, "a real stroke already shows the extent");
+});
+
+test("glyph runs take the point colour, so one tree matches a row of them", () => {
+  const existing = { treatments: [{ type: "street_trees", status: "existing" }] };
+  const proposed = { treatments: [{ type: "street_trees", status: "proposed", phase: null }] };
+  assert.equal(featureLayers(existing, "treatment", {}).glyphRuns[0].color,
+               pointColor({ status: "existing" }));
+  assert.equal(featureLayers(proposed, "treatment", {}).glyphRuns[0].color,
+               pointColor({ status: "proposed" }));
+});
+
+test("glyph spacing is geographic, not per-vertex", () => {
+  // The same line described with 2 points and with 41 must produce the same
+  // row of trees — otherwise how you happened to click changes the drawing.
+  const coarse = [[42.4, -71.0], [42.409, -71.0]];
+  const fine = [];
+  for (let i = 0; i <= 40; i++) fine.push([42.4 + (0.009 * i) / 40, -71.0]);
+  const a = glyphRunPoints(coarse, 0.25, 24);
+  const b = glyphRunPoints(fine, 0.25, 24);
+  assert.equal(a.length, b.length);
+  a.forEach((pt, i) => {
+    assert.ok(Math.abs(pt[0] - b[i][0]) < 1e-6, `point ${i} lat differs`);
+  });
+});
+
+test("glyph runs stay inside the line and respect the cap", () => {
+  const part = [[42.4, -71.0], [42.5, -71.0]];      // ~11 km
+  const pts = glyphRunPoints(part, 0.06, 20);
+  assert.equal(pts.length, 20, "the cap is what stops a city map filling up");
+  for (const [lat] of pts) {
+    assert.ok(lat > 42.4 && lat < 42.5, "no glyph outside the part it belongs to");
+  }
+  assert.deepEqual(glyphRunPoints([[42.4, -71.0]], 0.06), [],
+                   "a single point is not a run");
 });

@@ -82,8 +82,58 @@ for (const [name, src] of Object.entries(FILES)) {
               "expected a notice for a trimmed line, an outside line, and an "
               + "outside spot");
     // The way out has to be attached to the message that raises the problem.
-    assert.match(src, /clip-notice-add"\)\.onclick = pickArea/,
+    assert.match(src, /clip-notice-add"\)\.onclick = openAreaPicker/,
                  "the notice must offer adding an area");
+    // And when we can name the town the line ran into, the button says so —
+    // "Add Medford" is a decision; "Add an area..." is a chore.
+    const start = src.indexOf("function showClipNotice");
+    assert.ok(start > 0, "showClipNotice not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /areaAt\(/,
+                 "showClipNotice must look up which area the line ran into");
+    assert.match(body, /btn\.textContent = `Add \$\{found\.name\}`/,
+                 "and offer that area by name");
+  });
+
+  test(`${name}: a trim is detected by geometry, not by vertex count`, () => {
+    // Clipping a two-point line that starts in the next town returns a
+    // two-point line with its first vertex moved onto the border: same
+    // count, same piece. Counting vertices reported "not trimmed", so the
+    // user lost half of what they drew and was told nothing.
+    const start = src.indexOf("function clipToAreas");
+    assert.ok(start > 0, "clipToAreas not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /trimmed: Boolean\(outside\)/,
+                 "a vertex outside the areas is what makes it a trim");
+  });
+
+  test(`${name}: the area picker is not a file dialog`, () => {
+    // "+ Add an area" opening a file picker assumed the user has boundary
+    // files lying around. Almost nobody does, and adding the next town over is
+    // the ordinary case, not an advanced one.
+    assert.match(src, /btn-add-area"\)\.onclick = openAreaPicker/,
+                 "Add an area must open the picker, not a file input");
+    const start = src.indexOf("async function openAreaPicker");
+    assert.ok(start > 0, "openAreaPicker not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /nearbyAreas\(/,
+                 "the picker must open already showing the neighbours");
+    // The upload path stays: no registry has \"these six neighbourhoods\".
+    assert.match(src, /area-file-btn"\)\.onclick/,
+                 "the .geojson escape hatch must remain reachable");
+  });
+
+  test(`${name}: a failed lookup never looks like a broken editor`, () => {
+    // The Census is optional. Every call site has to degrade to a sentence and
+    // the file option, not to a stack trace or a dead dialog.
+    for (const fn of ["async function openAreaPicker", "async function addCensusArea"]) {
+      const start = src.indexOf(fn);
+      assert.ok(start > 0, `${fn} not found`);
+      const body = src.slice(start, src.indexOf("\n}", start));
+      assert.match(body, /catch/, `${fn} must handle the service being down`);
+    }
+    assert.match(src, /function offlineNote/,
+                 "one shared explanation for an unreachable service");
   });
 
   test(`${name}: swapping the area list rebuilds the memoized clip`, () => {

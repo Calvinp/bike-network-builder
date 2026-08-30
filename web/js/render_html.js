@@ -5,7 +5,8 @@
 // plugins — that crashed the folium map at runtime once).
 import {
   BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR,
-  UNDER_CONSTRUCTION_COLOR, chevron, dashFor, escapeHtml, featureStrokes,
+  EXPORT_GLYPH_KM, EXPORT_GLYPH_MAX, UNDER_CONSTRUCTION_COLOR, chevron,
+  dashFor, drawsAsGlyphs, escapeHtml, featureLayers, glyphRunPoints,
   phaseColor, pointColor, treatmentColor, treatmentGlyph, treatmentLabel,
 } from "./render_common.js";
 import { registry } from "./registry.js";
@@ -107,8 +108,11 @@ export function renderHtml(features, net, {
   const points = [];
   for (const f of features) {
     const lines = f.lines();
-    const strokes = featureStrokes(f, colorMode, { phaseNumberOf });
-    for (const stroke of strokes) {
+    // Counted treatments on a LINE (a row of street trees) draw as repeated
+    // glyphs, not as a stroke — see featureLayers.
+    const { strokes, glyphRuns, spine } = featureLayers(f, colorMode,
+                                                        { phaseNumberOf });
+    for (const stroke of [...strokes, ...glyphRuns]) {
       const t = stroke.treatment;
       const spec = registry().get(t.type);
       const phase = phaseOf(t);
@@ -126,7 +130,31 @@ export function renderHtml(features, net, {
         + (f.length_km ? `<br>${f.length_km.toFixed(2)} km` : "")
         + (f.notes ? `<br><i>${escapeHtml(f.notes)}</i>` : "");
 
-      if (lines.length) {
+      if (lines.length && drawsAsGlyphs(t.type)) {
+        // A row of them reads as spots, so it goes in the legend as one.
+        legendRows.push({ t, isLine: false });
+        // With no real stroke on the feature there is nothing to show its
+        // extent or carry its popup, so lay a hairline under the glyphs.
+        if (spine && stroke === glyphRuns[0]) {
+          groupFor(t).push({
+            latlngs: lines.length === 1 ? lines[0] : lines,
+            color: stroke.color, weight: 2, dash: "1,6",
+            popup, tooltip: escapeHtml(f.name), arrows: [],
+            id: t.id || "", upgrades: (t.upgrades || []).join(" "),
+            phase: t.status === "proposed" && phase ? phase.number : null,
+          });
+        }
+        for (const part of lines) {
+          for (const pt of glyphRunPoints(part, EXPORT_GLYPH_KM, EXPORT_GLYPH_MAX)) {
+            points.push({
+              lat: pt[0], lon: pt[1],
+              glyph: treatmentGlyph(t.type), color: stroke.color,
+              tooltip: escapeHtml(f.name || treatmentLabel(t.type)), popup,
+              phase: t.status === "proposed" ? (phase ? phase.number : 1) : null,
+            });
+          }
+        }
+      } else if (lines.length) {
         legendRows.push({ t, isLine: true });
         groupFor(t).push({
           latlngs: lines.length === 1 ? lines[0] : lines,

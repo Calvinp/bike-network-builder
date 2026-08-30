@@ -97,7 +97,35 @@
 
   <div class="main">
     <div id="map"></div>
-    <div id="clip-notice" hidden>
+    <!-- Adding a town should not require owning a GeoJSON file. Boundaries come
+       from the US Census by name; the file upload stays for the case no
+       registry can cover ("our advocacy area is these six neighbourhoods"). -->
+  <div id="area-picker" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="area-picker-h">
+      <h2 id="area-picker-h">Add an area</h2>
+      <p class="hint">Areas decide where you can draw and what gets counted.
+        Adding one never changes what you have already drawn.</p>
+
+      <div id="area-near-wrap">
+        <h3 class="subhead">Next to <span id="area-near-name">here</span></h3>
+        <div id="area-near" class="area-choices"></div>
+      </div>
+
+      <h3 class="subhead">Search anywhere in the US</h3>
+      <input id="area-search" type="search" autocomplete="off"
+             placeholder="Town or city name — try “Somerville”" />
+      <div id="area-results" class="area-choices"></div>
+
+      <p class="hint" id="area-picker-note"></p>
+      <div class="btnrow">
+        <button id="area-cancel" class="ghost">Cancel</button>
+        <button id="area-file-btn" class="ghost"
+          title="For an area no registry has — a set of neighbourhoods, a corridor study, a campus">Use a .geojson file instead</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="clip-notice" hidden>
       <span id="clip-notice-text"></span>
       <button id="clip-notice-add" class="ghost">Add an area…</button>
       <button id="clip-notice-x" class="ghost" title="Dismiss">✕</button>

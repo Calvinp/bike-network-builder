@@ -6,6 +6,7 @@ import { renderHtml } from "../js/render_html.js";
 import { makeFeature, makeNetwork, makePhase, makeTreatment }
   from "../js/network_format.js";
 import { setRegistry } from "../js/registry.js";
+import { treatmentGlyph } from "../js/render_common.js";
 
 setRegistry(JSON.parse(readFileSync(
   new URL("../data/treatments.json", import.meta.url), "utf8")));
@@ -115,4 +116,57 @@ test("an unknown treatment still renders rather than breaking the export", () =>
     id: "t1", type: "transit:bus_lane", status: "proposed", phase: "p1" })] });
   const html = renderHtml([f], net({ features: [f] }), { colorMode: "treatment" });
   assert.ok(html.includes("transit: bus lane"));
+});
+
+const dataOf = (html) => JSON.parse(html.match(/var DATA = (\{[\s\S]*?\});\n/)[1]);
+const linesOf = (data) => data.groups.flatMap((g) => g.features || []);
+
+test("a row of street trees exports as glyphs, not as a line", () => {
+  // The complaint this fixes: a counted treatment on a line drew as a black
+  // dashed STROKE, so a row of trees read as an unrecognised bike facility.
+  // It has to leave as points in the export too, or a shared map disagrees
+  // with the editor that produced it.
+  const trees = feat({
+    id: "f2", name: "Elm Street",
+    treatments: [makeTreatment({ id: "t2", type: "street_trees",
+                                 status: "proposed", phase: "p1" })],
+    geometry: [[[42.40, -71.10], [42.44, -71.10]]],   // ~4.5 km
+  });
+  const data = dataOf(renderHtml([trees], net({ features: [trees] }),
+                                 { colorMode: "treatment" }));
+  assert.ok(data.spots.length >= 3,
+            `expected a run of glyphs, got ${data.spots.length}`);
+  assert.equal(data.spots[0].glyph, treatmentGlyph("street_trees"));
+
+  // Spread ALONG the line, and inside it.
+  const lats = data.spots.map((sp) => sp.lat);
+  assert.ok(Math.max(...lats) - Math.min(...lats) > 0.01, "spaced along the line");
+  for (const lat of lats) assert.ok(lat > 42.40 && lat < 42.44, "and inside it");
+
+  // The only line drawn is the hairline that shows the run's extent — thin,
+  // dotted, and in the glyph's colour, so it reads as an annotation rather
+  // than as a facility.
+  const lines = linesOf(data);
+  assert.equal(lines.length, 1, "no facility stroke for a counted treatment");
+  assert.ok(lines[0].weight <= 2, "the spine is a hairline, not a 4px stroke");
+});
+
+test("a corridor with trees keeps its stroke AND gets the glyphs", () => {
+  const both = feat({
+    id: "f3",
+    treatments: [
+      makeTreatment({ id: "t3", type: "quick_build_separated",
+                      status: "proposed", phase: "p1" }),
+      makeTreatment({ id: "t4", type: "street_trees",
+                      status: "proposed", phase: "p1" }),
+    ],
+    geometry: [[[42.40, -71.10], [42.44, -71.10]]],
+  });
+  const data = dataOf(renderHtml([both], net({ features: [both] }),
+                                 { colorMode: "treatment" }));
+  assert.ok(data.spots.length >= 3, "the trees still draw as a run of glyphs");
+  const lines = linesOf(data);
+  assert.equal(lines.length, 1, "one stroke: the bike lane");
+  assert.equal(lines[0].color, "#0072B2", "the corridor keeps its own colour");
+  assert.ok(lines[0].weight >= 4, "and its own weight — no spine needed here");
 });

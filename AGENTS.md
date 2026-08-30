@@ -147,7 +147,8 @@ data/                       malden_boundary / existing_infra / committed_infra .
   layers/                   context layers + layers.json manifest
 web/                        THE APP. index.html, app.js, style.css, help.md
   js/                       place, registry, network_format, migrate, geometry,
-                            boundary, geojson, costs, pipeline, merge, routing,
+                            boundary, census (area lookup — the ONLY network
+                            call), geojson, costs, pipeline, merge, routing,
                             graph (spatial index + tiles), history (undo/redo),
                             storage (IndexedDB + journal), store, zip,
                             render_common (the palette + the stacking rule),
@@ -207,12 +208,55 @@ tests/                      pytest, incl. the Python<->JS parity checks
   every area is now REFUSED, and a spot outside is refused without leaving
   placing mode.
 - **Every refusal and every trim says so**, in `#clip-notice` — a bar that
-  outlives the next `setStatus()` and carries an `Add an area…` button. Trimming
-  is correct but invisible, and the remedy for "I meant to draw that" is a wider
-  boundary, so the message that raises the problem also carries the way out.
+  outlives the next `setStatus()`. Trimming is correct but invisible, and the
+  remedy for "I meant to draw that" is a wider boundary, so the message that
+  raises the problem also carries the way out. When the dropped part can be
+  located, the notice NAMES the town (`areaAt`) and the button becomes
+  **"Add Medford"**; when it cannot, it stays "Add an area…" and opens the
+  picker. Best-effort: no network, no name, and the generic button still works.
+- ⚠️ **A trim is detected by GEOMETRY, not by vertex count.** Clipping a
+  two-point line that starts in the next town returns a two-point line with its
+  first vertex moved onto the border: same count, same single piece. The count
+  test said "not trimmed", so the user lost half of what they drew and was told
+  nothing. `clipToAreas` reports a trim when any drawn vertex lies outside the
+  areas — that vertex IS the thing being cut off, and it names the town too.
 - **State roads matter a lot.** Route 60 (Pleasant/Centre/Eastern/Salem) and
   Route 99 (Broadway) are ~half the draft network. `jurisdiction: state` paths
   draw solid magenta in phase mode and are excluded from city cost totals.
+
+### Areas come from the Census, not from a file dialog
+
+- **`web/js/census.js` looks an area up by NAME** against US Census TIGERweb
+  (ArcGIS REST, public, CORS-enabled). The picker opens already listing the
+  towns that touch your current areas — `nearbyAreas(bbox)` — because "I'll do
+  Medford too this weekend" is the ordinary case. Free-text search covers the
+  rest, ranked so the state you are already working in wins (there is a
+  Somerville in five states).
+- ⚠️ **This is the ONLY outbound call the editor makes**, and only when the
+  user opens the picker or asks to add a town — never on load, never per-tile.
+  That is the same rule the roads graph follows by being static tiles: static
+  files can't be DDoSed by your own users. Do not move Census lookups onto a
+  path that runs per tile, per pan, or per keystroke (the search box is
+  debounced for exactly this reason).
+- **Nothing here is required.** Every call is wrapped, every failure degrades
+  to a sentence plus the `.geojson` upload, which still covers "our advocacy
+  area is these six neighbourhoods" — an area no registry will ever have.
+- **Layer 1 is County Subdivisions, layer 4 is Incorporated Places.** Both are
+  queried and the results deduped by name+state, preferring the subdivision —
+  in New England that IS the town — except when it is a "CCD", a statistical
+  division the Census invented for states without real ones, where the
+  incorporated place is the right answer.
+- **Boundaries are fetched simplified** (`maxAllowableOffset` ≈ 3 m): 427
+  points and 17 KB become 128 points and 3 KB. Do not raise it much — a 10 m
+  tolerance can move a border street to the wrong side of the line, and this
+  outline decides what gets clipped.
+- **`census:<GEOID>` is the area id**, so the same town is never added twice
+  and full resolution stays re-fetchable. `place.json` carries the real GEOID;
+  it used to carry an invented one, which defeated the point. `haveArea()`
+  falls back to name+state so a network saved before that fix still recognises
+  its own town.
+- GeoJSON is `[lon, lat]`; every boundary in this codebase is `[lat, lon]`.
+  The flip happens once, in `toBoundary`, at the edge.
 
 ### The format
 - **Bicycle lane distance = corridor distance × `sides`**, and ONLY for
@@ -285,10 +329,26 @@ tests/                      pytest, incl. the Python<->JS parity checks
   is the point: a street tree can be one tree or a row of them.
   A value already in the file that the list excludes is still SHOWN (marked
   "unusual here") rather than silently retyped.
-- ⚠️ **Known gap:** a counted/glyph treatment on a LINE (a row of street trees)
-  still draws as a black dashed stroke, because `treatmentColor()` falls back
-  to `POINT_PROPOSED_COLOR` when a treatment has no colour. Drawing it as
-  repeated glyphs ALONG the line is the natural fix and is not implemented.
+- **A counted treatment on a LINE draws as a run of GLYPHS, not a stroke.**
+  `featureLayers()` splits a feature's treatments: those the registry gives a
+  colour are strokes, those it gives a glyph and no colour are glyph runs. A
+  row of street trees used to paint a black dashed line — `treatmentColor()`
+  falls back to `POINT_PROPOSED_COLOR` for a treatment with no colour — and so
+  read as an unrecognised bike facility. Every renderer (editor, HTML, PNG)
+  goes through `featureLayers`; none of them call `featureStrokes` directly.
+  - Glyph runs take `pointColor`, NOT the stroke colour, so one street tree and
+    a row of them are the same colour.
+  - Spacing is GEOGRAPHIC (`glyphRunPoints`), not per-vertex: a line drawn with
+    three clicks and one drawn with forty must produce the same row. The editor
+    varies the spacing with zoom and rebuilds on `zoomend` via `restyleAll`;
+    exports use one fixed `EXPORT_GLYPH_KM`, capped by `EXPORT_GLYPH_MAX` so a
+    whole-city PNG does not vanish under tree glyphs.
+  - A feature with ONLY counted treatments has no stroke, so it gets a
+    `spine`: a 2px dotted hairline in the glyph's colour. It is what shows the
+    run's extent and, in the editor, what you click.
+- **`speed_hump` and `retractable_bollards` are point-only.** Nobody builds a
+  corridor of speed humps, and retractable bollards gate ONE opening. A plain
+  `bollards` row along a path edge is real, so that one stays both.
 - GOTCHA: never add decorator/plain LayerGroups to `networkGroup` —
   `FeatureGroup.getBounds()` throws on layers without getBounds and kills init;
   arrows live in `arrowsGroup`.

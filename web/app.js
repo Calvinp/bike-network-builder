@@ -29,7 +29,8 @@ import { renderPng } from "./js/render_png.js";
 import { registry } from "./js/registry.js";
 import {
   BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, PHASE_COLORS, SINGLE_COLOR,
-  UNDER_CONSTRUCTION_COLOR, featureStrokes, pointColor, treatmentGlyph,
+  UNDER_CONSTRUCTION_COLOR, featureLayers, glyphRunPoints, pointColor,
+  treatmentGlyph,
   treatmentLabel,
 } from "./js/render_common.js";
 import { KM_PER_MI, MI_PER_KM } from "./js/costs.js";
@@ -40,6 +41,8 @@ import { applyMerge, describeMerge, planMerge } from "./js/merge.js";
 import { assignAreas, partsKm, summarize } from "./js/pipeline.js";
 import { snapRoute } from "./js/routing.js";
 import { Store } from "./js/store.js";
+import { areaAt, areaBoundary, censusId, nearbyAreas, searchAreas, stateAbbr }
+  from "./js/census.js";
 import { History } from "./js/history.js";
 import { zipCreate } from "./js/zip.js";
 
@@ -126,21 +129,62 @@ const phaseNumberOf = (id) => {
   const p = config.phases.find((x) => x.id === id);
   return p ? p.number : null;
 };
-function strokesFor(f) {
-  return featureStrokes({ treatments: f.treatments }, colorMode,
-                        { phaseNumberOf, zoom: map ? map.getZoom() : undefined });
+function layersFor(f) {
+  return featureLayers({ treatments: f.treatments }, colorMode,
+                       { phaseNumberOf, zoom: map ? map.getZoom() : undefined });
 }
 function strokeOpts(s, isSelected) {
   return { color: s.color, weight: s.weight + (isSelected ? 3 : 0),
-           dashArray: s.dashArray, opacity: 0.95, lineCap: "round" };
+           dashArray: s.dashArray, opacity: s.opacity === undefined ? 0.95 : s.opacity,
+           lineCap: "round" };
+}
+/* A line whose treatments are ALL counted (a row of street trees) has no
+   stroke of its own. It still needs a body: something to show it is one object
+   spanning a block, and something to click. A hairline in the glyph's own
+   colour reads as an annotation rather than as a facility — which is the whole
+   complaint about the old black dashed line. */
+function spineStroke(run) {
+  return { color: run.color, weight: 2, dashArray: "1,6", opacity: 0.55 };
+}
+/* Glyphs are spaced by DISTANCE, so how far apart they look depends on zoom.
+   Recomputed on zoomend (restyleAll), which keeps a row of trees legible when
+   you zoom in and stops it turning into a smear when you zoom out. */
+function glyphSpacingKm() {
+  const z = map ? map.getZoom() : 15;
+  return Math.min(2, Math.max(0.04, 0.06 * Math.pow(2, 16 - z)));
+}
+function glyphIcon(run) {
+  return L.divIcon({ className: "run-glyph", iconSize: [16, 16], iconAnchor: [8, 8],
+    html: `<div style="color:${run.color}">${run.glyph}</div>` });
+}
+/* Rebuild the glyph markers for a line feature's counted treatments. */
+function syncGlyphs(f, runs) {
+  f.glyphs.forEach((m) => overlayGroup.removeLayer(m));
+  f.glyphs = [];
+  if (!f.layer || !runs.length) return;
+  const everyKm = glyphSpacingKm();
+  const parts = segsOf(f.layer).map((seg) => seg.map((p) => [p.lat, p.lng]));
+  runs.forEach((run) => {
+    const icon = glyphIcon(run);
+    parts.forEach((part) => {
+      glyphRunPoints(part, everyKm).forEach((pt) => {
+        const m = L.marker(pt, { icon, interactive: false, keyboard: false,
+                                 pmIgnore: true });
+        overlayGroup.addLayer(m);
+        f.glyphs.push(m);
+      });
+    });
+  });
 }
 /* The stroke count changes whenever treatments are added or removed, so the
    overlay layers are rebuilt rather than restyled. */
 function restyle(f) {
   if (!f.layer) { syncMarkers(f); return; }
-  const strokes = strokesFor(f);
+  const { strokes, glyphRuns, spine } = layersFor(f);
   const isSel = selected === f;
-  f.layer.setStyle(strokeOpts(strokes[0] || { color: "#444", weight: 4 }, isSel));
+  const base = strokes[0]
+    || (spine ? spineStroke(glyphRuns[0]) : { color: "#444", weight: 4 });
+  f.layer.setStyle(strokeOpts(base, isSel));
   f.overlays.forEach((o) => overlayGroup.removeLayer(o));
   f.overlays = strokes.slice(1).map((s) => {
     const o = L.polyline(f.layer.getLatLngs(), {
@@ -150,6 +194,7 @@ function restyle(f) {
     return o;
   });
   if (isSel) { f.layer.bringToFront(); f.overlays.forEach((o) => o.bringToFront()); }
+  syncGlyphs(f, glyphRuns);
   syncMarkers(f);
 }
 function restyleAll() { features.forEach(restyle); }
@@ -159,6 +204,9 @@ function syncOverlays(f) {
   if (!f.layer) return;
   const ll = f.layer.getLatLngs();
   f.overlays.forEach((o) => o.setLatLngs(ll));
+  // Glyphs sit AT positions along the line rather than sharing its geometry,
+  // so reshaping has to place them again, not just hand them new latlngs.
+  syncGlyphs(f, layersFor(f).glyphRuns);
 }
 function pointIcon(t) {
   return L.divIcon({ className: "spot-glyph", iconSize: [18, 18], iconAnchor: [9, 9],
@@ -268,7 +316,7 @@ function defaultProps(over) {
    Leaflet latlngs. A feature may have either or both. */
 function addFeature(props, treatments, lines, points) {
   const f = { props, treatments, sel: 0, layer: null, overlays: [],
-              markers: [], arrows: null };
+              glyphs: [], markers: [], arrows: null };
   if (lines && lines.length) {
     f.layer = L.polyline(lines.length === 1 ? lines[0] : lines,
                          { color: "#444", weight: 4, renderer: networkRenderer });
@@ -300,6 +348,7 @@ function addFeature(props, treatments, lines, points) {
 function removeFeature(f) {
   if (f.layer) networkGroup.removeLayer(f.layer);
   f.overlays.forEach((o) => overlayGroup.removeLayer(o));
+  f.glyphs.forEach((m) => overlayGroup.removeLayer(m));
   f.markers.forEach((m) => pointsGroup.removeLayer(m));
   if (f.arrows) arrowsGroup.removeLayer(f.arrows);
   features = features.filter((x) => x !== f);
@@ -317,6 +366,7 @@ function clearFeatures() {
   features.forEach((f) => {
     if (f.layer) networkGroup.removeLayer(f.layer);
     f.overlays.forEach((o) => overlayGroup.removeLayer(o));
+    f.glyphs.forEach((m) => overlayGroup.removeLayer(m));
     f.markers.forEach((m) => pointsGroup.removeLayer(m));
     if (f.arrows) arrowsGroup.removeLayer(f.arrows);
   });
@@ -795,7 +845,7 @@ function applyPhaseView() {
       if (show && !networkGroup.hasLayer(f.layer)) networkGroup.addLayer(f.layer);
       if (!show && networkGroup.hasLayer(f.layer)) networkGroup.removeLayer(f.layer);
     }
-    f.overlays.forEach((o) => {
+    [...f.overlays, ...f.glyphs].forEach((o) => {
       if (show && !overlayGroup.hasLayer(o)) overlayGroup.addLayer(o);
       if (!show && overlayGroup.hasLayer(o)) overlayGroup.removeLayer(o);
     });
@@ -838,11 +888,20 @@ function areasChanged() {
 function clipToAreas(latlngs) {
   const boundary = areasBoundary();
   const geom = latlngs.map((p) => (p.lat === undefined ? p : [p.lat, p.lng]));
-  if (!boundary.length) return { pieces: [geom], trimmed: false };
+  if (!boundary.length) return { pieces: [geom], trimmed: false, outside: null };
   const [pieces] = clipPolylineLatlon(geom, boundary);
   const before = geom.length;
   const after = pieces.reduce((n, pc) => n + pc.length, 0);
-  return { pieces, trimmed: pieces.length !== 1 || after < before };
+  // A vertex that did NOT survive names the place the user was trying to reach.
+  const outside = geom.find((pt) => !pointInBoundary(pt[0], pt[1], boundary));
+  // Counting vertices is not enough to notice a trim. Clipping a two-point
+  // line that starts in the next town returns a two-point line with its first
+  // vertex moved onto the border: same count, same piece, but the user lost
+  // half of what they drew and was told nothing. A vertex outside the areas is
+  // the honest test — that IS the thing being cut off.
+  return { pieces,
+           trimmed: Boolean(outside) || pieces.length !== 1 || after < before,
+           outside: outside || null };
 }
 function insideAreas(latlng) {
   const boundary = areasBoundary();
@@ -852,10 +911,26 @@ const areaNames = () => config.areas.map((a) => a.name).filter(Boolean).join(" o
 /* A notice with a way out. Trimming is correct but invisible, and the fix for
    "I meant to draw that" is a wider boundary — so the message that explains it
    also carries the button that widens. */
-function showClipNotice(text) {
+function showClipNotice(text, outsidePoint) {
   const bar = document.getElementById("clip-notice");
   document.getElementById("clip-notice-text").textContent = text;
+  const btn = document.getElementById("clip-notice-add");
+  btn.textContent = "Add an area…";
+  btn.onclick = openAreaPicker;
   bar.hidden = false;
+  // Name the town the line actually ran into, so the button is "Add Medford"
+  // rather than a menu to go hunting in. Best-effort: no network, no name, and
+  // the generic button still works.
+  if (!outsidePoint) return;
+  const shownFor = outsidePoint;
+  areaAt(outsidePoint[0], outsidePoint[1], netOpts()).then((found) => {
+    if (!found || bar.hidden || shownFor !== outsidePoint) return;
+    if (haveArea(found)) return;
+    document.getElementById("clip-notice-text").textContent =
+      `${text} The rest is in ${found.name}.`;
+    btn.textContent = `Add ${found.name}`;
+    btn.onclick = () => addCensusArea(found);
+  }).catch(() => {});
 }
 function hideClipNotice() { document.getElementById("clip-notice").hidden = true; }
 
@@ -910,9 +985,145 @@ function redrawBoundaries() {
     }
   }
 }
-/* Add an area from a boundary file. GeoJSON because it works offline and on
-   every platform; a Census or OSM search would be friendlier and needs a
-   network call, so it waits for the hosted side. */
+/* ---------- the area picker ----------
+   Adding a town must not require owning a GeoJSON file. Almost nobody has one,
+   and "I'll also do Medford this weekend" is the ordinary case, not an
+   advanced one. Boundaries come from the Census by name, the picker opens
+   already showing the neighbours, and the file upload stays for the case no
+   registry can cover. */
+const NET_TIMEOUT = 15000;
+function netOpts() {
+  const ctl = new AbortController();
+  setTimeout(() => ctl.abort(), NET_TIMEOUT);
+  return { signal: ctl.signal };
+}
+/* The state the user is already working in, so a search for "Somerville"
+   offers the one next door before the other four. */
+function currentState() {
+  for (const a of config.areas) {
+    if (a.context) {
+      const abbr = stateAbbr(String(a.id).replace(/^census:/, "").slice(0, 2));
+      if (abbr) return abbr;
+    }
+    const m = String(a.id).match(/^census:(\d{2})/);
+    if (m) return stateAbbr(m[1]);
+  }
+  return "";
+}
+/* Do we already cover this town? The id is the real answer, but it cannot be
+   the only one: a network may predate the census id it should have had, or
+   carry an area someone uploaded or typed by hand. Name-plus-state catches
+   those without ever confusing two Springfields in different states. */
+const norm = (v) => String(v || "").trim().toLowerCase();
+function haveArea(cand) {
+  const wanted = censusId(cand);
+  return config.areas.some((a) => {
+    if (String(a.id) === wanted) return true;
+    if (norm(a.name) !== norm(cand.name)) return false;
+    // Same name: only the same place if the state agrees, or neither says.
+    const ctx = norm(a.context);
+    if (!ctx) return true;
+    return ctx === norm(cand.stateName) || ctx === norm(cand.state);
+  });
+}
+
+function pickerNote(msg) {
+  document.getElementById("area-picker-note").textContent = msg || "";
+}
+function renderChoices(box, list, { empty }) {
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = `<span class="none">${empty}</span>`;
+    return;
+  }
+  for (const area of list) {
+    const already = haveArea(area);
+    const b = document.createElement("button");
+    b.className = "ghost" + (already ? " added" : "");
+    b.textContent = already
+      ? `${area.name} ✓`
+      : `${area.name}${area.state ? `, ${area.state}` : ""}`;
+    b.title = already
+      ? "Already one of your areas"
+      : `Add ${area.name}${area.kind ? ` (${area.kind})` : ""}`;
+    b.disabled = already;
+    b.addEventListener("click", () => addCensusArea(area));
+    box.appendChild(b);
+  }
+}
+async function addCensusArea(area) {
+  if (haveArea(area)) return;
+  pickerNote(`Fetching the boundary of ${area.name}…`);
+  try {
+    const boundary = await areaBoundary(area, netOpts());
+    if (!boundary.length) { pickerNote(`No boundary came back for ${area.name}.`); return; }
+    config.areas = [...config.areas, makeArea({
+      id: censusId(area), name: area.name, kind: area.kind || "municipality",
+      context: area.stateName || area.state, boundary,
+    })];
+    areasChanged(); markDirty(); hideClipNotice(); closeAreaPicker();
+    map.fitBounds(boundaryGroup.getBounds().pad(0.05));
+    setStatus(`Added ${area.name}. You can draw there now.`);
+  } catch (e) {
+    pickerNote(offlineNote(e, `Couldn't fetch ${area.name}'s boundary.`));
+  }
+}
+/* A failed lookup must never look like a broken editor: the tool works fine
+   without the Census, and the file upload is right there. */
+function offlineNote(err, lead) {
+  const aborted = err && (err.name === "AbortError" || /abort/i.test(err.message || ""));
+  return `${lead} ${aborted ? "The Census service didn't answer in time."
+    : "The Census service couldn't be reached."}`
+    + " You can try again, or load a .geojson file instead.";
+}
+async function openAreaPicker() {
+  const dlg = document.getElementById("area-picker");
+  dlg.hidden = false;
+  pickerNote("");
+  document.getElementById("area-search").value = "";
+  document.getElementById("area-results").innerHTML = "";
+  document.getElementById("area-search").focus();
+
+  const near = document.getElementById("area-near");
+  const wrap = document.getElementById("area-near-wrap");
+  const bbox = areasBbox();
+  document.getElementById("area-near-name").textContent =
+    config.areas.map((a) => a.name).filter(Boolean).join(" and ") || "here";
+  if (!bbox) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  near.innerHTML = '<span class="none">Looking up the towns next to you…</span>';
+  try {
+    const list = await nearbyAreas(bbox, netOpts());
+    renderChoices(near, list, { empty: "Nothing adjacent came back." });
+  } catch (e) {
+    near.innerHTML = `<span class="none">${offlineNote(e, "Couldn't list nearby areas.")}</span>`;
+  }
+}
+function closeAreaPicker() {
+  document.getElementById("area-picker").hidden = true;
+}
+/* The bounding box of every area, padded enough that the neighbour query
+   actually crosses the border into them. */
+function areasBbox() {
+  let s = 90, w = 180, n = -90, e = -180, any = false;
+  for (const a of config.areas) {
+    for (const poly of normalizeBoundary(a.boundary)) {
+      for (const ring of poly) {
+        for (const [lat, lon] of ring) {
+          any = true;
+          if (lat < s) s = lat; if (lat > n) n = lat;
+          if (lon < w) w = lon; if (lon > e) e = lon;
+        }
+      }
+    }
+  }
+  if (!any) return null;
+  const pad = 0.004;      // ~450 m: over the line, not into the next county
+  return [s - pad, w - pad, n + pad, e + pad];
+}
+
+/* Add an area from a boundary file — the escape hatch for an area no registry
+   has: a set of neighbourhoods, a corridor study, a campus. */
 async function addAreaFromFile(file) {
   try {
     const doc = JSON.parse(await file.text());
@@ -1740,11 +1951,29 @@ async function init() {
 
   loadFeatureCollection(data.network);
 
-  if (networkGroup.getLayers().length) {
-    map.fitBounds(networkGroup.getBounds().pad(0.05));
-  } else if (boundaryGroup.getLayers().length) {
-    map.fitBounds(boundaryGroup.getBounds());
-  }
+  // Frame whatever there is to look at: the network, or failing that the
+  // areas. A deployment with no `map` in place.json has nothing else to go on.
+  const fitToContent = () => {
+    if (networkGroup.getLayers().length) {
+      map.fitBounds(networkGroup.getBounds().pad(0.05));
+    } else if (boundaryGroup.getLayers().length) {
+      map.fitBounds(boundaryGroup.getBounds());
+    }
+  };
+  fitToContent();
+  // ...but the container can be sized AFTER load: a pane that opens later, a
+  // tab restored in the background, a split view being dragged. Leaflet
+  // measures a zero-size container, clamps to zoom 0, and leaves the user
+  // looking at the whole planet with no idea why. Re-measure when a size
+  // arrives, and frame the content once, the first time there is a size to
+  // frame it against — refitting on every resize would fight the user's own
+  // panning.
+  let everSized = map.getContainer().clientWidth > 0;
+  new ResizeObserver(() => {
+    if (!map.getContainer().clientWidth) return;
+    map.invalidateSize();
+    if (!everSized) { everSized = true; fitToContent(); }
+  }).observe(map.getContainer());
   map.on("zoomend", () => { syncArrowVisibility(); restyleAll(); });
   syncArrowVisibility();
 
@@ -1757,17 +1986,18 @@ async function init() {
       geom = await snapPoints(drawn) || drawn;
     }
     // Clip once, here, for snapped and freehand lines alike.
-    const { pieces, trimmed } = clipToAreas(geom);
+    const { pieces, trimmed, outside } = clipToAreas(geom);
     if (!pieces.length) {
       // Refusing beats the old behaviour, which created an invisible stub with
       // a default name that you could not find or select to delete.
       showClipNotice(`That is entirely outside ${areaNames() || "your areas"}, `
-        + "so nothing was added.");
+        + "so nothing was added.", outside);
       setStatus();
       return;
     }
     if (trimmed) {
-      showClipNotice(`Trimmed to the edge of ${areaNames() || "your areas"}.`);
+      showClipNotice(`Trimmed to the edge of ${areaNames() || "your areas"}.`,
+                     outside);
     } else { hideClipNotice(); }
     const f = addFeature(defaultProps(), [defaultTreatment(drawDefaults)],
                          pieces.map((pc) => pc.map((c) => L.latLng(c[0], c[1]))), []);
@@ -1778,7 +2008,7 @@ async function init() {
     const over = placingPoint;
     if (!insideAreas(e.latlng)) {
       showClipNotice(`That spot is outside ${areaNames() || "your areas"}, `
-        + "so nothing was added.");
+        + "so nothing was added.", [e.latlng.lat, e.latlng.lng]);
       return;   // stay in placing mode: the next click can land inside
     }
     placingPoint = null;
@@ -1824,10 +2054,36 @@ async function init() {
   document.getElementById("unnamed-warn").onclick = selectNextUnnamed;
   document.getElementById("group-by").addEventListener("change", recomputeTotals);
   const areaInput = document.getElementById("area-file");
-  const pickArea = () => areaInput.click();
-  document.getElementById("btn-add-area").onclick = pickArea;
-  document.getElementById("clip-notice-add").onclick = pickArea;
+  document.getElementById("btn-add-area").onclick = openAreaPicker;
+  document.getElementById("clip-notice-add").onclick = openAreaPicker;
   document.getElementById("clip-notice-x").onclick = hideClipNotice;
+  document.getElementById("area-cancel").onclick = closeAreaPicker;
+  document.getElementById("area-file-btn").onclick = () => {
+    closeAreaPicker(); areaInput.click();
+  };
+  document.getElementById("area-picker").addEventListener("click", (e) => {
+    if (e.target.id === "area-picker") closeAreaPicker();   // click the backdrop
+  });
+  let searchSeq = 0, searchTimer = null;
+  document.getElementById("area-search").addEventListener("input", (e) => {
+    const text = e.target.value;
+    clearTimeout(searchTimer);
+    // Debounced: one request per pause in typing, not one per keystroke.
+    searchTimer = setTimeout(async () => {
+      const seq = ++searchSeq;
+      const box = document.getElementById("area-results");
+      if (text.trim().length < 2) { box.innerHTML = ""; return; }
+      box.innerHTML = '<span class="none">Searching…</span>';
+      try {
+        const list = await searchAreas(text, { ...netOpts(), preferState: currentState() });
+        if (seq !== searchSeq) return;      // a later keystroke already won
+        renderChoices(box, list, { empty: `Nothing found for “${text}”.` });
+      } catch (err) {
+        if (seq !== searchSeq) return;
+        box.innerHTML = `<span class="none">${offlineNote(err, "Search failed.")}</span>`;
+      }
+    }, 350);
+  });
   areaInput.addEventListener("change", (e) => {
     if (e.target.files.length) addAreaFromFile(e.target.files[0]);
     e.target.value = "";

@@ -30,8 +30,13 @@ export function boxesOverlap(a, b) {
 // covers, who builds things, and the phase plan.
 export function configForBrowser(net) {
   return {
+    // The BOUNDARY comes too. It used to be dropped to keep this payload small,
+    // back when there was one area and the deployment's own boundary stood in
+    // for it. With several areas that silently lost every outline but the
+    // first on reload — the second town had nothing to draw and nothing to
+    // clip against, so drawing there stopped working the moment you refreshed.
     areas: net.areas.map((a) => ({ id: a.id, name: a.name, kind: a.kind,
-                                   context: a.context,
+                                   context: a.context, boundary: a.boundary,
                                    default_authority: a.default_authority })),
     authorities: net.authorities.map((a) => ({ id: a.id, name: a.name,
                                                level: a.level, note: a.note })),

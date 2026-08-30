@@ -498,3 +498,27 @@ test("serializing tolerates an area that never went through makeArea", async () 
   assert.ok(text.includes("name: Bare"));
   assert.equal(parseNetwork(text).areas[0].name, "Bare");
 });
+
+test("every area's boundary reaches the browser, not just the first", async () => {
+  // The editor clips drawing to the union of its areas and draws their
+  // outlines, so an area that arrives without a boundary is an area you
+  // cannot draw in. This was silently true of the SECOND area and every one
+  // after it: the deployment's own boundary stood in for area[0], so the bug
+  // only appeared once someone added a second town and reloaded.
+  const sq = (lat, lon) => [[[[lat, lon], [lat, lon + 0.01],
+                              [lat + 0.01, lon + 0.01], [lat, lon]]]];
+  const net = makeNetwork({
+    areas: [makeArea({ id: "census:1", name: "Malden", boundary: sq(42.42, -71.06) }),
+            makeArea({ id: "census:2", name: "Medford", boundary: sq(42.42, -71.12) })],
+    features: [],
+  });
+  const cfg = configForBrowser(net);
+  assert.equal(cfg.areas.length, 2);
+  for (const a of cfg.areas) {
+    assert.ok((a.boundary || []).length, `${a.name} reached the UI with no outline`);
+  }
+  // And it survives the trip back, so a reload doesn't quietly drop it.
+  const back = networkFromBrowser({ config: cfg, network: featuresToGeojson([]) }, net);
+  assert.ok(pointInBoundary(42.423, -71.115, back.areas[1].boundary),
+            "Medford's outline must still clip after a round trip");
+});

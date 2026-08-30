@@ -400,6 +400,13 @@ site yet and the stale-reader population is currently one machine.
 
 **Boundaries come from three sources behind one abstraction:**
 
+> **Status (2026-08):** sources 1 and 3 are built (`web/js/census.js`, the area
+> picker, the `.geojson` upload). Source 2 (OSM boundary relations) is not, so
+> the picker is US-only today; the upload is the escape hatch everywhere else.
+> Verified against the live service: CORS works, layer 1 is County
+> Subdivisions and layer 4 Incorporated Places, and a Malden-bbox query returns
+> exactly its eight neighbours.
+
 1. **US Census (TIGERweb)** — states, counties, county subdivisions, places,
    tracts as queryable GeoJSON over ArcGIS REST. Verify layer ids and CORS
    against the live service at implementation time. In New England, **county
@@ -414,6 +421,8 @@ site yet and the stale-reader population is currently one machine.
 default area, so the common user never picks anything. Drawing past its edge
 behaves exactly as it does today — the line is clipped at the boundary with the
 existing notice — except the notice now carries a one-click **"Add Medford"**.
+(Built. The notice resolves the dropped part's town with `areaAt` and names it;
+if the lookup fails it degrades to "Add an area…", which opens the picker.)
 Nothing is auto-added silently (that would quietly change what the totals mean),
 and nothing has to be chosen up front. The picker in the menu exists for people
 who deliberately want a different or wider area.
