@@ -22,7 +22,8 @@
 
 import { buildArtifacts, buildPhaseArtifacts, shouldSplitByArea, splitByArea }
   from "./js/export.js";
-import { clipPolylineLatlon, longestPiece } from "./js/boundary.js";
+import { boundaryFromWays, clipPolylineLatlon, normalizeBoundary,
+         pointInBoundary } from "./js/boundary.js";
 import { featuresFromGeojson, featuresToGeojson } from "./js/geojson.js";
 import { renderPng } from "./js/render_png.js";
 import { registry } from "./js/registry.js";
@@ -36,7 +37,7 @@ import { makeArea, makeFeature, makeNetwork, makePhase, makeTreatment,
          newId, parseNetwork, serializeNetwork }
   from "./js/network_format.js";
 import { applyMerge, describeMerge, planMerge } from "./js/merge.js";
-import { partsKm, summarize } from "./js/pipeline.js";
+import { assignAreas, partsKm, summarize } from "./js/pipeline.js";
 import { snapRoute } from "./js/routing.js";
 import { Store } from "./js/store.js";
 import { History } from "./js/history.js";
@@ -46,7 +47,6 @@ const BOUNDARY = BOUNDARY_COLOR;
 
 const store = new Store();
 let baseNet = null;         // last parsed stored network (uneditable fields)
-let clipBoundary = null;    // assembled area multipolygon (clipping)
 let place = null;           // the deployment default area (data/place.json)
 
 let map, networkGroup, boundaryGroup, arrowsGroup, pointsGroup, overlayGroup;
@@ -438,8 +438,20 @@ function fillForm(f) {
 
   opt(document.getElementById("f-status"), options.statuses || [], t.status,
       (v) => v.replace(/_/g, " "));
-  opt(document.getElementById("f-type"),
-      (options.treatments || []).map((x) => x.id), t.type, treatmentLabel);
+  // Offer the treatments that suit this feature's geometry. Without this the
+  // same list appeared on both, so you could put bike parking on a corridor
+  // (drawn as a black dashed line, because a counted treatment carries no
+  // colour) or a separated bike lane on a spot (drawn as a black dot). The
+  // five treatments that are genuinely either — street trees, bollards, speed
+  // humps, parking removal, other — appear on both, which is the whole point.
+  const kind = f.layer ? "line" : "point";
+  const fits = registry().forGeometry(kind).map((x) => x.id);
+  // A file may legitimately carry a combination this list excludes; show it
+  // rather than silently retyping the user's data.
+  const typeIds = fits.includes(t.type) ? fits : [t.type, ...fits];
+  opt(document.getElementById("f-type"), typeIds, t.type,
+      (id) => treatmentLabel(id)
+        + (registry().get(id).appliesTo(kind) ? "" : "  (unusual here)"));
   opt(document.getElementById("f-auth"),
       config.authorities.map((a) => a.id), t.authority,
       (id) => (config.authorities.find((a) => a.id === id) || {}).name || id);
@@ -452,7 +464,7 @@ function fillForm(f) {
 
   // travel/sides describe a line. On a point they mean nothing, so they go
   // away rather than sitting there inviting a value the file would reject.
-  const isLine = Boolean(f.layer);
+  const isLine = f.layer !== null && f.layer !== undefined;
   document.getElementById("line-only-fields").style.display = isLine ? "" : "none";
   document.getElementById("btn-reverse").style.display =
     (isLine && t.travel === "one_way") ? "" : "none";
@@ -643,6 +655,9 @@ function toModelFeature(f) {
                        geometry: [...lines, ...pts], length_km: featureKm(f) });
 }
 function recomputeTotals() {
+  // The Areas card carries a per-area feature count, so it goes stale on every
+  // add, delete and reshape unless it is rebuilt alongside the totals.
+  renderAreas();
   const net = liveNetwork();
   const s = summarize(net.features, net, { units });
   const num = (id, v) => { document.getElementById(id).textContent = v; };
@@ -791,6 +806,146 @@ function applyPhaseView() {
     if (!show && selected === f) deselect();
   });
   syncArrows(shownSet);
+}
+
+/* ---------- areas ----------
+   Which areas exist decides what gets drawn, counted and exported, so it is a
+   real editing decision — and until now there was no way to see it, change it,
+   or even find out that it was the reason a line got cut short. */
+let areaClip = null;   // memoized union of every area boundary
+function areasBoundary() {
+  if (areaClip) return areaClip;
+  // Concatenating multipolygons is a union here: pointInBoundary succeeds on
+  // ANY polygon, and holes are resolved per-polygon, so one area cannot punch
+  // a hole in its neighbour.
+  // normalizeBoundary first: an area may carry a bare ring, one polygon, or a
+  // multipolygon depending on where it came from (adopted from the deployment,
+  // parsed from a file, uploaded as GeoJSON). Unioning without normalizing
+  // treats a ring as a polygon and silently clips against nothing.
+  areaClip = [];
+  for (const a of config.areas) {
+    for (const poly of normalizeBoundary(a.boundary)) areaClip.push(poly);
+  }
+  return areaClip;
+}
+function areasChanged() {
+  areaClip = null;
+  redrawBoundaries(); renderAreas(); recomputeTotals();
+}
+/* Clip a drawn line to the areas. Returns every in-boundary piece — a line
+   that leaves and comes back is two pieces of one feature, not one piece with
+   the middle quietly joined up. [] means it was entirely outside. */
+function clipToAreas(latlngs) {
+  const boundary = areasBoundary();
+  const geom = latlngs.map((p) => (p.lat === undefined ? p : [p.lat, p.lng]));
+  if (!boundary.length) return { pieces: [geom], trimmed: false };
+  const [pieces] = clipPolylineLatlon(geom, boundary);
+  const before = geom.length;
+  const after = pieces.reduce((n, pc) => n + pc.length, 0);
+  return { pieces, trimmed: pieces.length !== 1 || after < before };
+}
+function insideAreas(latlng) {
+  const boundary = areasBoundary();
+  return !boundary.length || pointInBoundary(latlng.lat, latlng.lng, boundary);
+}
+const areaNames = () => config.areas.map((a) => a.name).filter(Boolean).join(" or ");
+/* A notice with a way out. Trimming is correct but invisible, and the fix for
+   "I meant to draw that" is a wider boundary — so the message that explains it
+   also carries the button that widens. */
+function showClipNotice(text) {
+  const bar = document.getElementById("clip-notice");
+  document.getElementById("clip-notice-text").textContent = text;
+  bar.hidden = false;
+}
+function hideClipNotice() { document.getElementById("clip-notice").hidden = true; }
+
+function renderAreas() {
+  const box = document.getElementById("areas-list");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!config.areas.length) {
+    box.innerHTML = '<p class="hint">No areas yet — nothing is being clipped '
+      + "or counted.</p>";
+    return;
+  }
+  const owner = assignAreas(features.map(toModelFeature), config.areas);
+  config.areas.forEach((a, i) => {
+    const row = document.createElement("div");
+    row.className = "area-row";
+    const name = document.createElement("span");
+    name.className = "area-name";
+    name.textContent = a.name || a.id;
+    const counts = document.createElement("span");
+    counts.className = "area-counts";
+    const n = [...owner.values()].filter((v) => v === a.id).length;
+    counts.textContent = `${n} feature${n === 1 ? "" : "s"}`
+      + ((a.boundary || []).length ? "" : " · no outline, nothing clipped to it");
+    const rm = document.createElement("button");
+    rm.className = "rm danger"; rm.textContent = "Remove";
+    rm.title = "Stop covering this area. Nothing you already drew is deleted.";
+    rm.addEventListener("click", () => {
+      if (!confirm(`Stop covering ${a.name}?\n\nNothing you already drew is `
+                   + "deleted, but new drawing will stop at the remaining "
+                   + "boundaries.")) return;
+      config.areas.splice(i, 1);
+      areasChanged(); markDirty();
+    });
+    row.appendChild(name); row.appendChild(counts); row.appendChild(rm);
+    box.appendChild(row);
+  });
+}
+/* Redraw the dashed outlines from whatever areas the network now has. */
+function redrawBoundaries() {
+  if (!boundaryGroup) return;
+  boundaryGroup.clearLayers();
+  const show = document.getElementById("show-boundary");
+  if (show && !show.checked) return;
+  for (const a of config.areas) {
+    for (const poly of normalizeBoundary(a.boundary)) {
+      for (const ring of poly) {
+        L.polyline(ring, { color: BOUNDARY, weight: 1.5, dashArray: "7,6",
+                           opacity: 0.8, interactive: false, pmIgnore: true })
+          .addTo(boundaryGroup);
+      }
+    }
+  }
+}
+/* Add an area from a boundary file. GeoJSON because it works offline and on
+   every platform; a Census or OSM search would be friendlier and needs a
+   network call, so it waits for the hosted side. */
+async function addAreaFromFile(file) {
+  try {
+    const doc = JSON.parse(await file.text());
+    const ways = [];
+    const walk = (g) => {
+      if (!g) return;
+      if (g.type === "Feature") return walk(g.geometry);
+      if (g.type === "FeatureCollection") return (g.features || []).forEach(walk);
+      if (g.type === "GeometryCollection") return (g.geometries || []).forEach(walk);
+      const c = g.coordinates || [];
+      const ring = (r) => ways.push(r.map(([lo, la]) => [la, lo]));
+      if (g.type === "LineString") ring(c);
+      else if (g.type === "MultiLineString" || g.type === "Polygon") c.forEach(ring);
+      else if (g.type === "MultiPolygon") c.forEach((poly) => poly.forEach(ring));
+    };
+    walk(doc);
+    const boundary = boundaryFromWays(ways);
+    if (!boundary.length) {
+      alert("Couldn't find a closed boundary in that file.\n\nIt should be a "
+            + "GeoJSON Polygon or MultiPolygon — or the boundary ways of one, "
+            + "which get chained into rings.");
+      return;
+    }
+    const name = (prompt("What is this area called?",
+                         file.name.replace(/[.][^.]+$/, "")) || "").trim();
+    if (!name) return;
+    config.areas = [...config.areas, makeArea({ id: newId("a-"), name, boundary })];
+    areasChanged(); markDirty(); hideClipNotice();
+    map.fitBounds(boundaryGroup.getBounds().pad(0.05));
+    setStatus(`Added ${name}. You can draw there now.`);
+  } catch (e) {
+    alert(`Couldn't read that file: ${e.message}`);
+  }
 }
 
 /* ---------- legend ---------- */
@@ -948,7 +1103,10 @@ function restoreSnapshot(text) {
                phases: net.phases, meta: net.meta, costs: net.costs,
                units: net.units };
     loadFeatureCollection(featuresToGeojson(net.features));
-    renderPhases(); renderLegend(); recomputeTotals(); applyPhaseView();
+    // Undo and import both swap the area list wholesale, so the memoized
+  // clip boundary and the drawn outlines have to be rebuilt with it.
+  areaClip = null; redrawBoundaries(); renderAreas();
+  renderPhases(); renderLegend(); recomputeTotals(); applyPhaseView();
     dirty = true;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(autosave, AUTOSAVE_MS);
@@ -1125,6 +1283,9 @@ function replaceWith(j, notes) {
   afterImport(j, notes);
 }
 function afterImport(j, notes) {
+  // Undo and import both swap the area list wholesale, so the memoized
+  // clip boundary and the drawn outlines have to be rebuilt with it.
+  areaClip = null; redrawBoundaries(); renderAreas();
   renderPhases(); renderLegend(); recomputeTotals(); applyPhaseView();
   if (networkGroup.getLayers().length) {
     map.fitBounds(networkGroup.getBounds().pad(0.05));
@@ -1415,15 +1576,11 @@ async function snapPoints(pts) {
       }
       return null;
     }
-    let route = snapRoute(pts, source.graph.adj, source.graph.coord, 0.02,
-                          source.index);
-    clipBoundary = clipBoundary || await store.boundary();
-    // A snapped preview wants ONE continuous line, so take the longest
-    // in-boundary run rather than every piece — joining pieces across a gap
-    // would draw a road that isn't there. Measurement still clips properly.
-    const [pieces] = clipPolylineLatlon(route, clipBoundary);
-    const clipped = longestPiece(pieces);
-    if (clipped.length >= 2) route = clipped;
+    const route = snapRoute(pts, source.graph.adj, source.graph.coord, 0.02,
+                            source.index);
+    // Snapping no longer clips. It used to, which meant only SNAPPED lines
+    // stopped at the border and only the longest piece survived; clipping is
+    // now one rule applied to everything at commit time. See clipToAreas.
     return route.length >= 2 ? route : null;
   } catch (e) { snapUnavailable = true; console.error(e); return null; }
 }
@@ -1579,11 +1736,7 @@ async function init() {
     markDirty();
   }
 
-  (data.boundary || []).forEach((ring) => {
-    L.polyline(ring, { color: BOUNDARY, weight: 1.5, dashArray: "7,6",
-                       opacity: 0.8, interactive: false, pmIgnore: true })
-      .addTo(boundaryGroup);
-  });
+  redrawBoundaries();
 
   loadFeatureCollection(data.network);
 
@@ -1603,21 +1756,41 @@ async function init() {
       setStatus("Snapping to roads…");
       geom = await snapPoints(drawn) || drawn;
     }
+    // Clip once, here, for snapped and freehand lines alike.
+    const { pieces, trimmed } = clipToAreas(geom);
+    if (!pieces.length) {
+      // Refusing beats the old behaviour, which created an invisible stub with
+      // a default name that you could not find or select to delete.
+      showClipNotice(`That is entirely outside ${areaNames() || "your areas"}, `
+        + "so nothing was added.");
+      setStatus();
+      return;
+    }
+    if (trimmed) {
+      showClipNotice(`Trimmed to the edge of ${areaNames() || "your areas"}.`);
+    } else { hideClipNotice(); }
     const f = addFeature(defaultProps(), [defaultTreatment(drawDefaults)],
-                         [geom.map((c) => L.latLng(c[0], c[1]))], []);
+                         pieces.map((pc) => pc.map((c) => L.latLng(c[0], c[1]))), []);
     selectFeature(f); markDirty(); recomputeTotals(); setStatus();
   });
   map.on("click", (e) => {
     if (!placingPoint) return;
     const over = placingPoint;
+    if (!insideAreas(e.latlng)) {
+      showClipNotice(`That spot is outside ${areaNames() || "your areas"}, `
+        + "so nothing was added.");
+      return;   // stay in placing mode: the next click can land inside
+    }
     placingPoint = null;
+    hideClipNotice();
     const f = addFeature(
       defaultProps({ name: over.status === "existing" ? "Existing spot" : "New spot" }),
       [defaultTreatment({ type: "speed_hump", ...over })], [], [e.latlng]);
     selectFeature(f); markDirty(); recomputeTotals(); setStatus();
   });
 
-  bindForm(); bindImportSheet(); renderPhases(); renderLegend(); recomputeTotals(); setStatus();
+  bindForm(); bindImportSheet(); renderPhases(); renderAreas(); renderLegend();
+  recomputeTotals(); setStatus();
   // Startup is over; from here, edits count.
   restoring = false;
   // The baseline every undo walks back toward.
@@ -1628,6 +1801,18 @@ async function init() {
   document.getElementById("btn-edit").onclick = toggleEditShape;
   document.getElementById("btn-add-path").onclick =
     () => startDraw({ status: "proposed" });
+  document.getElementById("btn-add-existing-path").onclick =
+    () => startDraw({ status: "existing", type: "shared_use_path", phase: null });
+  document.getElementById("btn-add-spot").onclick =
+    () => startPlacePoint({ status: "proposed" });
+  document.getElementById("btn-add-existing-spot").onclick =
+    () => startPlacePoint({ status: "existing", phase: null });
+  // Two snap checkboxes (one per header tier) driving one setting.
+  const snapRoomy = document.getElementById("snap-roomy");
+  const snapMenu = document.getElementById("snap");
+  const syncSnap = (from, to) => { to.checked = from.checked; };
+  snapRoomy.addEventListener("change", () => syncSnap(snapRoomy, snapMenu));
+  snapMenu.addEventListener("change", () => syncSnap(snapMenu, snapRoomy));
   const importInput = document.getElementById("import-file");
   document.getElementById("btn-import").onclick = () => importInput.click();
   document.getElementById("btn-undo").onclick = doUndo;
@@ -1638,6 +1823,16 @@ async function init() {
   document.getElementById("btn-combine").onclick = startCombine;
   document.getElementById("unnamed-warn").onclick = selectNextUnnamed;
   document.getElementById("group-by").addEventListener("change", recomputeTotals);
+  const areaInput = document.getElementById("area-file");
+  const pickArea = () => areaInput.click();
+  document.getElementById("btn-add-area").onclick = pickArea;
+  document.getElementById("clip-notice-add").onclick = pickArea;
+  document.getElementById("clip-notice-x").onclick = hideClipNotice;
+  areaInput.addEventListener("change", (e) => {
+    if (e.target.files.length) addAreaFromFile(e.target.files[0]);
+    e.target.value = "";
+  });
+  document.getElementById("show-boundary").addEventListener("change", redrawBoundaries);
   const unitsSel = document.getElementById("units");
   if (unitsSel) {
     unitsSel.value = units;

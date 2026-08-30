@@ -189,6 +189,27 @@ tests/                      pytest, incl. the Python<->JS parity checks
   choice is visible rather than buried in the clipper.
 - **Everything is clipped to the boundary** so mileage/cost only count in-area
   street.
+- **The clip boundary is the union of `config.areas[].boundary`, not the
+  deployment's.** `areasBoundary()` in `app.js` builds it, memoized in
+  `areaClip`. It used to be `store.boundary()`, which meant adding an area in
+  the editor did not widen where you could draw — the Areas card would have
+  been a lie. Anything that swaps the area list wholesale (`restoreSnapshot`
+  for undo, `afterImport`) must set `areaClip = null`.
+  Always run an area's boundary through `normalizeBoundary()` before reading
+  it: one may arrive as a bare ring, a polygon, or a multipolygon depending on
+  whether it was adopted from the deployment, parsed from a file, or uploaded
+  as GeoJSON, and iterating the wrong depth clips against nothing.
+- **Drawing is clipped at COMMIT, once, for snapped and freehand lines alike**
+  (`clipToAreas`). Clipping used to live inside `snapPoints`, which meant only
+  snapped lines stopped at the border, only the longest piece survived, and a
+  line drawn wholly outside became an invisible stub carrying a default name
+  that the user could neither see nor select to delete. A line entirely outside
+  every area is now REFUSED, and a spot outside is refused without leaving
+  placing mode.
+- **Every refusal and every trim says so**, in `#clip-notice` — a bar that
+  outlives the next `setStatus()` and carries an `Add an area…` button. Trimming
+  is correct but invisible, and the remedy for "I meant to draw that" is a wider
+  boundary, so the message that raises the problem also carries the way out.
 - **State roads matter a lot.** Route 60 (Pleasant/Centre/Eastern/Salem) and
   Route 99 (Broadway) are ~half the draft network. `jurisdiction: state` paths
   draw solid magenta in phase mode and are excluded from city cost totals.
@@ -217,11 +238,20 @@ tests/                      pytest, incl. the Python<->JS parity checks
 
 ### The app (web/app.js)
 - **The header is menus, and it is RESPONSIVE.** Wide screens get a one-click
-  `+ Add path` (drawing is what you repeat; burying it costs a click per
-  corridor) beside the `+ Add ▾` menu. Narrow screens drop to the menu alone,
-  hide the brand and the idle status, and move Help/Import behind `⋯`, which
-  keeps the whole header to ONE row at 375 px instead of three.
-  `.wide-only` / `.narrow-only` do the switching in CSS — no resize handler.
+  THREE tiers, all CSS, no resize handler. ROOMY (>=1150 px) shows all four
+  add buttons and the Snap toggle, no menu at all — which of the four you add
+  over and over depends on what you are doing that day, so none of them should
+  cost an extra click. CRAMPED (<1150 px) collapses them into `+ Add ▾`.
+  NARROW (<=760 px) also hides the brand and the idle status and moves
+  Help/Import behind `⋯`, keeping the header to ONE row at 375 px.
+  `.roomy-only` / `.cramped-only` / `.narrow-only` do the switching.
+- **The header must stay one row at every width.** Four buttons leave far less
+  slack than the menu did, so the two things that can grow without bound are
+  pinned: header buttons never wrap a label (`white-space: nowrap`) and
+  `.status` shrinks and ellipsizes (`flex: 1 1 0; min-width: 0`). Without that
+  a long status message wrapped the header onto two rows at 1400 px.
+- **Two Snap checkboxes, one setting.** `#snap` (in the Add menu) and
+  `#snap-roomy` (the roomy header) mirror each other on change; read `#snap`.
   `wireMenu()` is the one behaviour for all four header menus: a click inside a
   menu that isn't a command (a select, a checkbox) leaves it open, so you can
   change two settings at once.
@@ -243,6 +273,22 @@ tests/                      pytest, incl. the Python<->JS parity checks
   edit — its marker is already draggable.
 - The default colour mode is `treatment` ("What is built"), which is the
   question most people open the tool asking.
+- **The treatment picker is filtered by the feature's geometry**, via
+  `registry().forGeometry("line" | "point")`. The FORMAT allows any treatment
+  on any geometry and always will — a file from another tool is not wrong for
+  saying so — but offering the full list on both let you put bike parking on a
+  corridor (drawn as a black dashed line, because a counted treatment carries
+  no colour) or a separated bike lane on a spot (drawn as a black dot). The
+  registry has declared `geometry` all along; the UI simply never asked. The
+  six treatments that are genuinely either — speed humps, bollards, retractable
+  bollards, street trees, parking removal, other — appear on both lists, which
+  is the point: a street tree can be one tree or a row of them.
+  A value already in the file that the list excludes is still SHOWN (marked
+  "unusual here") rather than silently retyped.
+- ⚠️ **Known gap:** a counted/glyph treatment on a LINE (a row of street trees)
+  still draws as a black dashed stroke, because `treatmentColor()` falls back
+  to `POINT_PROPOSED_COLOR` when a treatment has no colour. Drawing it as
+  repeated glyphs ALONG the line is the natural fix and is not implemented.
 - GOTCHA: never add decorator/plain LayerGroups to `networkGroup` —
   `FeatureGroup.getBounds()` throws on layers without getBounds and kills init;
   arrows live in `arrowsGroup`.

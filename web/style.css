@@ -80,7 +80,7 @@ header select { font: inherit; font-size: 13px; padding: 3px 6px;
 .dropdown .menu button:hover { background: #eef2ff; color: var(--accent); }
 
 /* Layout */
-.main { flex: 1; display: flex; min-height: 0; }
+.main { flex: 1; display: flex; min-height: 0; position: relative; }
 #map { flex: 1; min-width: 0; }
 .sidebar {
   width: 340px; background: var(--panel); border-left: 1px solid var(--line);
@@ -273,6 +273,17 @@ button.small{padding:2px 8px;font-size:12px}
    the header stays ONE row on a phone instead of wrapping to three. */
 .narrow-only { display: none; }
 
+/* Three tiers of header.
+   ROOMY (>=1150px): all four add buttons, no menu — you might be adding any
+   of them over and over, so none of them should cost an extra click.
+   CRAMPED (<1150px): the Add menu instead.
+   NARROW (<=760px): plus Help/Import behind the overflow button. */
+.cramped-only { display: none; }
+@media (max-width: 1149px) {
+  .roomy-only { display: none !important; }
+  .cramped-only { display: block; }
+}
+
 @media (max-width: 760px) {
   /* One row, no wrapping: every item below is sized to fit 360px. */
   header { flex-wrap: nowrap; gap: 6px; padding: 8px; overflow: visible; }
@@ -286,4 +297,36 @@ button.small{padding:2px 8px;font-size:12px}
   header .status.idle { display: none; }
   header .status { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; }
+}
+
+/* The Areas card. */
+.area-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 0;
+  border-bottom: 1px solid var(--line); }
+.area-row:last-child { border-bottom: 0; }
+.area-name { font-weight: 600; font-size: 13px; }
+.area-counts { color: var(--muted); font-size: 12px; flex: 1 1 auto; }
+.area-row button.rm { padding: 2px 7px; font-size: 12px; }
+
+/* Why a line got trimmed, said where the trimming happened rather than in the
+   status line, which the next action would wipe. Above the map controls for
+   the same stacking reason the header is. */
+/* Bottom-LEFT of the map: bottom-right is Leaflet's attribution and top-left
+   is the zoom control, and anchoring left keeps it off the sidebar entirely. */
+#clip-notice { position: absolute; left: 14px; bottom: 18px; z-index: 1400; display: flex; align-items: center; gap: 10px;
+  max-width: min(560px, calc(100% - 24px));
+  background: #fffbeb; border: 1px solid #fcd34d; border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 9px 12px; font-size: 13px; }
+#clip-notice[hidden] { display: none; }
+#clip-notice button { padding: 4px 9px; font-size: 12.5px; white-space: nowrap; }
+
+/* One row at every width. Four add buttons leave much less slack than the
+   single menu did, so the two things that can grow without bound have to be
+   pinned: a button must never wrap its label into a second line, and the
+   status message must shrink and ellipsize rather than shove the row over.
+   Without this a long status ("Click the map where the improvement goes…")
+   wrapped the whole header onto two rows on a 1400px screen. */
+header button, header .btnlike, header label.checkbox { white-space: nowrap; }
+header .status {
+  flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
 }

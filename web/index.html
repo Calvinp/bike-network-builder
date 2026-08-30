@@ -14,9 +14,18 @@
     <!-- Two menus rather than nine controls. The header had grown to the
          point where it wrapped on a laptop and was unusable on a phone; the
          things that belong together now sit together. -->
-    <button id="btn-add-path" class="ghost wide-only"
-      title="Draw a proposed path">+ Add path</button>
-    <div class="dropdown">
+    <!-- Three tiers. Roomy screens show all four, because which one you are
+         adding over and over depends on what you are doing that day. Medium
+         screens keep only the menu. -->
+    <button id="btn-add-path" class="ghost roomy-only">+ Add path</button>
+    <button id="btn-add-existing-path" class="ghost roomy-only">+ Existing path</button>
+    <button id="btn-add-spot" class="ghost roomy-only"
+      title="A single-point improvement: speed hump, raised crosswalk, bike parking, street trees…">+ Add spot</button>
+    <button id="btn-add-existing-spot" class="ghost roomy-only">+ Existing spot</button>
+    <label class="checkbox roomy-only"
+      title="Clicks near a street follow it; clicks away from streets (parks, trails) stay exactly where you put them">
+      <input type="checkbox" id="snap-roomy" checked /> Snap</label>
+    <div class="dropdown cramped-only">
       <button id="btn-add" class="ghost">+ Add ▾</button>
       <div class="menu" id="add-menu" hidden>
         <button data-add="path">Path (proposed)</button>
@@ -88,6 +97,11 @@
 
   <div class="main">
     <div id="map"></div>
+    <div id="clip-notice" hidden>
+      <span id="clip-notice-text"></span>
+      <button id="clip-notice-add" class="ghost">Add an area…</button>
+      <button id="clip-notice-x" class="ghost" title="Dismiss">✕</button>
+    </div>
     <button id="mobile-details" class="fab" title="Totals, path details, phases, legend">☰ Details</button>
     <div id="peek" class="peek">
       <span id="peek-name"></span>
@@ -192,6 +206,22 @@
             <button id="btn-delete" class="danger">Delete</button>
           </div>
         </div>
+      </div>
+
+      <div class="card">
+        <details id="areas-box" open>
+          <summary class="cardsum">Areas</summary>
+          <p class="hint">The places this network covers. Drawing stops at their
+            edge, and only what is inside them is counted and exported.</p>
+          <div id="areas-list"></div>
+          <div class="btnrow" style="margin-top:10px">
+            <button id="btn-add-area" class="ghost"
+              title="Load a boundary from a .geojson file">+ Add an area…</button>
+            <label class="checkbox"><input type="checkbox" id="show-boundary" checked />
+              Show outlines</label>
+          </div>
+          <input type="file" id="area-file" accept=".geojson,.json" hidden />
+        </details>
       </div>
 
       <div class="card">

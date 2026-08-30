@@ -88,6 +88,14 @@ export class Registry {
 
   all() { return [...this._byId.values()]; }
 
+  // The treatments that make sense on a given geometry ("point" or "line").
+  // The FORMAT allows any treatment on any geometry and always will — a file
+  // written by another tool is not wrong for saying so. This is what the
+  // editor OFFERS, which is a different question: a separated bike lane on a
+  // single point, or bike parking spread along a corridor, is almost always a
+  // slip, and the registry has known which is which all along.
+  forGeometry(kind) { return this.all().filter((t) => t.appliesTo(kind)); }
+
   // The ids in `used` this version doesn't recognise, sorted. The UI turns
   // these into "this file uses N kinds of improvement this version doesn't
   // know about".

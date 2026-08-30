@@ -37,6 +37,90 @@ for (const [name, src] of Object.entries(FILES)) {
                  + "listener, so the first paint already honours upgrades");
   });
 
+  test(`${name}: clipping reads the user's areas, not the deployment`, () => {
+    // The clip boundary used to be store.boundary() — whatever the deployment
+    // shipped — which meant adding an area in the editor did not widen where
+    // you could draw. It has to come from config.areas or the Areas card is a
+    // lie.
+    const start = src.indexOf("function areasBoundary()");
+    assert.ok(start > 0, "areasBoundary() not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /config\.areas/,
+                 "the clip boundary must be built from config.areas");
+    assert.doesNotMatch(src, /store\.boundary\(\)[\s\S]{0,80}clipPolyline/,
+                        "clipping must not fall back to the deployment boundary");
+  });
+
+  test(`${name}: snapping does not clip`, () => {
+    // Clipping used to live inside snapPoints, so only SNAPPED lines stopped
+    // at the border and freehand ones silently escaped it. One rule, one place.
+    const start = src.indexOf("async function snapPoints");
+    assert.ok(start > 0, "snapPoints not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.doesNotMatch(body, /clipPolylineLatlon|longestPiece/,
+                        "snapPoints must only snap; clipToAreas does the clipping");
+  });
+
+  test(`${name}: a line drawn entirely outside the areas creates nothing`, () => {
+    // It used to create an invisible stub carrying a default name, which the
+    // user could neither see nor select to delete.
+    const start = src.indexOf('map.on("pm:create"');
+    assert.ok(start > 0, "pm:create handler not found");
+    const body = src.slice(start, start + 1600);
+    assert.match(body, /clipToAreas/, "the draw commit must clip");
+    assert.match(body, /if \(!pieces\.length\)[\s\S]{0,400}return;/,
+                 "an all-outside line must bail out before addFeature");
+    assert.ok(body.indexOf("showClipNotice") < body.indexOf("addFeature"),
+              "and it must say why, rather than failing silently");
+  });
+
+  test(`${name}: every clip refusal or trim explains itself`, () => {
+    // Trimming is correct but invisible; the message is the only thing that
+    // tells the user their boundary, not the tool, decided this.
+    const notices = [...src.matchAll(/showClipNotice\(/g)];
+    assert.ok(notices.length >= 3,
+              "expected a notice for a trimmed line, an outside line, and an "
+              + "outside spot");
+    // The way out has to be attached to the message that raises the problem.
+    assert.match(src, /clip-notice-add"\)\.onclick = pickArea/,
+                 "the notice must offer adding an area");
+  });
+
+  test(`${name}: swapping the area list rebuilds the memoized clip`, () => {
+    // areaClip is memoized, so undo and import both have to invalidate it or
+    // drawing keeps obeying the areas you just replaced.
+    for (const fn of ["function restoreSnapshot", "function afterImport"]) {
+      const start = src.indexOf(fn);
+      assert.ok(start > 0, `${fn} not found`);
+      const body = src.slice(start, src.indexOf("\n}", start));
+      assert.match(body, /areaClip = null/,
+                   `${fn} must invalidate the memoized clip boundary`);
+    }
+  });
+
+  test(`${name}: the treatment picker is filtered by the feature's geometry`, () => {
+    // Same list on both geometries let you put bike parking on a corridor (a
+    // black dashed line) or a separated lane on a spot (a black dot).
+    const start = src.indexOf("function fillForm");
+    assert.ok(start > 0, "fillForm not found");
+    const body = src.slice(start, src.indexOf("\n}\n", start));
+    assert.match(body, /forGeometry\(kind\)/,
+                 "the type options must come from registry().forGeometry");
+    assert.match(body, /fits\.includes\(t\.type\) \? fits : \[t\.type/,
+                 "a file's existing combination must still be shown, not "
+                 + "silently retyped");
+  });
+
+  test(`${name}: the per-area feature counts are rebuilt with the totals`, () => {
+    // The Areas card counts features per area, so it goes stale on every add,
+    // delete and reshape unless recomputeTotals rebuilds it too.
+    const start = src.indexOf("function recomputeTotals");
+    assert.ok(start > 0, "recomputeTotals not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /renderAreas\(\)/,
+                 "recomputeTotals must rebuild the Areas card");
+  });
+
   test(`${name}: the legend is rebuilt when the set of treatments can change`, () => {
     for (const fn of ["function addFeature", "function removeFeature"]) {
       const start = src.indexOf(fn);

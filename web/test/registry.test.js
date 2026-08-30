@@ -124,3 +124,24 @@ test("the shipped file is valid with a version", () => {
   assert.ok(DOC.registry_version >= 1);
   assert.ok(DOC.treatments.length > 10);
 });
+
+test("forGeometry offers only treatments that suit the geometry", () => {
+  const reg = Registry.fromDoc({
+    registry_version: 1,
+    treatments: [
+      { id: "lane", geometry: ["line"] },
+      { id: "hump", geometry: ["point"] },
+      { id: "trees", geometry: ["point", "line"] },
+    ],
+  });
+  assert.deepEqual(reg.forGeometry("line").map((t) => t.id), ["lane", "trees"]);
+  assert.deepEqual(reg.forGeometry("point").map((t) => t.id), ["hump", "trees"]);
+});
+
+test("forGeometry defaults an unspecified geometry to both", () => {
+  // The format stays lenient about vocabulary: a treatment that says nothing
+  // about geometry must remain offerable, not vanish from every menu.
+  const reg = Registry.fromDoc({ treatments: [{ id: "mystery" }] });
+  assert.deepEqual(reg.forGeometry("line").map((t) => t.id), ["mystery"]);
+  assert.deepEqual(reg.forGeometry("point").map((t) => t.id), ["mystery"]);
+});
