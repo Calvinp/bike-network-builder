@@ -1602,9 +1602,15 @@ async function importGeojsonFile(file) {
    importer as any other file, so the review list, the additive merge and the
    attribution notice all come for free rather than being reimplemented. */
 let overpass = null;
+let osmAbort = null;
 function osmSession() {
   if (!overpass) {
-    overpass = new OverpassSession({ url: (place.fetch || {}).overpass_url });
+    overpass = new OverpassSession({
+      url: (place.fetch || {}).overpass_url,
+      // The store's own persistence, so a fetched town survives a reload and
+      // never has to be asked for twice.
+      cache: store.storage,
+    });
   }
   return overpass;
 }
@@ -1649,11 +1655,12 @@ function updateOsmWeight() {
     .filter((a) => a && isHeavy(bboxOfBoundary(a.boundary), { spots }))
     .map((a) => a.name);
   if (!heavy.length) { osmNote(""); return; }
-  osmNote(`${heavy.join(" and ")} ${heavy.length === 1 ? "is" : "are"} large `
-    + "for a live query. OpenStreetMap's public service may refuse it however "
-    + "politely we ask — if it does, try one area at a time, or use "
-    + "tools/fetch_existing_infra.py, or point the tool at your own Overpass "
-    + "endpoint.");
+  osmNote(`${heavy.join(" and ")} ${heavy.length === 1 ? "is" : "are"} large, `
+    + "so this may take a few minutes of waiting for a free slot. That is "
+    + "fine — waiting is what keeps a shared service usable, and anything "
+    + "that arrives is cached, so nothing is ever fetched twice. For a very "
+    + "large city, adding its boroughs or districts as separate areas works "
+    + "better than one giant query.");
 }
 const closeOsmSheet = () => {
   document.getElementById("osm-sheet").hidden = true;
@@ -1670,39 +1677,66 @@ async function runOsmImport() {
   if (!picked.length) { osmNote("Pick at least one area."); return; }
 
   const go = document.getElementById("osm-go");
+  const stop = document.getElementById("osm-stop");
   const spots = document.getElementById("osm-spots").checked;
   go.disabled = true;
+  stop.hidden = false;
+  osmAbort = new AbortController();
   const session = osmSession();
+
+  // Whatever comes back is KEPT. A run over five boroughs that fails on the
+  // fourth used to throw away the first three, so the retry asked the service
+  // for them all over again — the single most wasteful thing this tool could
+  // do to a rate limit.
   const found = [];
-  try {
-    for (let i = 0; i < picked.length; i++) {
-      const a = picked[i];
-      osmNote(`Looking up ${a.name}… (${i + 1} of ${picked.length})`);
-      // Sequential on purpose: parallel queries are the difference between
-      // using a shared service and leaning on it.
+  const failed = [];
+  const done = [];
+  for (let i = 0; i < picked.length; i++) {
+    const a = picked[i];
+    const where = `${a.name} (${i + 1} of ${picked.length})`;
+    osmNote(`Looking up ${where}…`);
+    try {
       const elements = await session.elementsForArea(a, {
         spots,
-        // Overpass tells us when the next slot frees up; say so rather than
-        // looking frozen. This is the tool being polite, not being slow.
+        signal: osmAbort.signal,
+        // Overpass says when the next slot frees up. Waiting costs it nothing;
+        // an error message costs it a button press. Say what we are doing.
         onWait: (secs) => osmNote(
           `OpenStreetMap is busy — waiting ${secs}s for a free slot, then `
-          + `looking up ${a.name}…`),
+          + `${where}. You can stop and keep whatever has arrived.`),
       });
       const feats = featuresFromOverpass({ elements }, a.boundary, pointInBoundary);
       for (const f of feats) found.push(f);
+      done.push(a.name);
+    } catch (e) {
+      if (e && e.name === "AbortError") break;
+      failed.push({ name: a.name, why: e.message || "the lookup failed" });
     }
-  } catch (e) {
-    go.disabled = false;
-    osmNote(e.message || "The lookup failed.");
-    return;
   }
+  osmAbort = null;
+  stop.hidden = true;
   go.disabled = false;
+
   if (!found.length) {
-    osmNote("OpenStreetMap has nothing mapped in "
-            + `${picked.map((a) => a.name).join(", ")} that this tool `
-            + "recognises yet.");
+    osmNote(failed.length
+      ? `Nothing came back. ${failed[0].why}`
+      : "OpenStreetMap has nothing mapped in "
+        + `${picked.map((a) => a.name).join(", ")} that this tool recognises.`);
     return;
   }
+  if (failed.length) {
+    // Untick what worked, so pressing Look up again asks ONLY for what didn't.
+    const ok = new Set(done);
+    for (const cb of document.querySelectorAll("#osm-areas input")) {
+      const area = config.areas.find((x) => String(x.id) === cb.dataset.areaId);
+      if (area && ok.has(area.name)) cb.checked = false;
+    }
+    osmNote(`Got ${done.join(", ")}. Couldn't get `
+      + `${failed.map((f) => f.name).join(", ")}: ${failed[0].why} `
+      + "Those are still ticked — press Look up again to retry just them. "
+      + "What already arrived is below and costs nothing to keep.");
+  }
+
   // Deduplicate: two overlapping areas can both return the same way.
   const byId = new Map(found.map((f) => [f.id, f]));
   const text = serializeNetwork(makeNetwork({
@@ -1713,9 +1747,9 @@ async function runOsmImport() {
     })),
     units: config.units,
     meta: { ...(config.meta || {}), license: "ODbL-1.0",
-            attribution: "© OpenStreetMap contributors" },
+            attribution: "\u00a9 OpenStreetMap contributors" },
   }));
-  closeOsmSheet();
+  if (!failed.length) closeOsmSheet();
   const j = await store.importBytes(new TextEncoder().encode(text));
   if (!j.ok) {
     alert("The data came back in a shape this version can't read:\n\n"
@@ -2384,6 +2418,9 @@ async function init() {
   document.getElementById("osm-cancel").onclick = closeOsmSheet;
   document.getElementById("osm-x").onclick = closeOsmSheet;
   document.getElementById("osm-go").onclick = runOsmImport;
+  document.getElementById("osm-stop").onclick = () => {
+    if (osmAbort) osmAbort.abort();
+  };
   document.getElementById("btn-undo").onclick = doUndo;
   document.getElementById("btn-redo").onclick = doRedo;
   document.getElementById("btn-add-phase").onclick = addPhase;

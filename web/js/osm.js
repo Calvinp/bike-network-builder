@@ -17,7 +17,10 @@
 //  * Never automatic. Only from the OSM import sheet, only on a click.
 //  * Areas are fetched ONE AT A TIME, never in parallel.
 //  * A minimum interval between requests, enforced here rather than by the UI.
-//  * An in-session cache, so re-importing the same town costs nothing.
+//  * A PERSISTENT cache. Re-importing a town you already fetched — after a
+//    reload, after a failure, after changing your mind — costs the service
+//    nothing. This matters more than any throttle: the requests that actually
+//    burn a rate limit are the repeats.
 //  * It ASKS BEFORE IT FIRES. Overpass publishes a /status endpoint saying how
 //    many slots are free and, if none are, when the next one frees up. Waiting
 //    for a slot is what a well-behaved client does; guessing an interval and
@@ -57,9 +60,9 @@ export const HEAVY_AREA_SQKM = 120;
 // service's limits.
 export const MIN_INTERVAL_MS = 4000;
 
-// How long we are willing to sit waiting for a slot before giving up and
-// telling the user. Longer than this and they deserve the choice.
-export const MAX_SLOT_WAIT_MS = 90000;
+// Cached elements go stale — OSM changes, and an import claiming to reflect
+// "what is on the ground" should not be quoting last month.
+export const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Overpass /status is plain text. Two shapes matter:
 //
@@ -336,6 +339,24 @@ export function isHeavy(bbox, { spots = false } = {}) {
   return sqkm > HEAVY_AREA_SQKM || (spots && sqkm > HEAVY_AREA_SQKM / 3);
 }
 
+// A sleep that a cancel button can interrupt. Checking every second rather
+// than one long timer is what makes "waiting 4 minutes for a slot" abortable.
+function defaultSleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = () => {
+      if (signal && signal.aborted) {
+        const e = new Error("aborted");
+        e.name = "AbortError";
+        return reject(e);
+      }
+      if (Date.now() - started >= ms) return resolve();
+      setTimeout(tick, Math.min(1000, ms - (Date.now() - started)));
+    };
+    tick();
+  });
+}
+
 export class OverpassError extends Error {
   constructor(message, { retryable = false } = {}) {
     super(message);
@@ -348,16 +369,39 @@ export class OverpassError extends Error {
 // the instance so the app holds exactly one and every path shares its limits.
 export class OverpassSession {
   constructor({ url = DEFAULT_ENDPOINT, fetchImpl, now = () => Date.now(),
-                sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+                sleep = defaultSleep, cache = null } = {}) {
     this.url = url || DEFAULT_ENDPOINT;
     this.fetchImpl = fetchImpl || ((...a) => fetch(...a));
     this.now = now;
     this.sleep = sleep;
+    // Something with async getItem/setItem. Optional: without it the memory
+    // cache still works for the life of the page.
+    this.store = cache;
     // null, not 0: `if (this.lastAt)` would treat a first request at t=0 as
     // "never sent" forever. Real clocks never return 0, which is exactly the
     // kind of bug that survives until someone injects a fake one.
     this.lastAt = null;
     this.cache = new Map();       // area id -> elements
+  }
+
+  async readCache(key) {
+    if (!this.store) return null;
+    try {
+      const raw = await this.store.getItem(key);
+      if (!raw) return null;
+      const doc = JSON.parse(raw);
+      if (!doc || !Array.isArray(doc.elements)) return null;
+      if (this.now() - Number(doc.at || 0) > CACHE_MAX_AGE_MS) return null;
+      return doc.elements;
+    } catch { return null; }      // a bad cache entry is not an error
+  }
+
+  async writeCache(key, elements) {
+    if (!this.store) return;
+    try {
+      await this.store.setItem(key,
+        JSON.stringify({ at: this.now(), elements }));
+    } catch { /* out of quota: the import still worked */ }
   }
 
   // Where the service publishes its slot availability.
@@ -368,6 +412,13 @@ export class OverpassSession {
   // Ask how busy the service is, and wait for a slot rather than firing into a
   // queue that is already full. Entirely advisory: a status endpoint that is
   // missing, unreachable or in an unfamiliar format must never block an import.
+  //
+  // It waits for however long the service says, however long that is. That
+  // looks like the impatient choice to cap it and hand back an error, but the
+  // opposite is true: waiting costs the service NOTHING (one status read, then
+  // a timer), while an error puts a button in front of a person who will press
+  // it again. The wait is cancellable, which is the affordance that actually
+  // belongs here.
   async waitForSlot({ signal, onWait } = {}) {
     let text;
     try {
@@ -380,15 +431,8 @@ export class OverpassSession {
     }
     const secs = slotWaitSeconds(text);
     if (secs === null || secs <= 0) return secs;
-    const ms = Math.min(secs * 1000 + 500, MAX_SLOT_WAIT_MS);
-    if (secs * 1000 > MAX_SLOT_WAIT_MS) {
-      throw new OverpassError(
-        `OpenStreetMap's query service has no free slot for another ${secs} `
-        + "seconds. Try again then — this tool won't sit and poll it.",
-        { retryable: true });
-    }
     if (onWait) onWait(secs);
-    await this.sleep(ms);
+    await this.sleep(secs * 1000 + 500, signal);
     return secs;
   }
 
@@ -430,10 +474,17 @@ export class OverpassSession {
     return res.json();
   }
 
-  // Everything OSM knows about bikes inside one area. Cached per area id.
+  // Everything OSM knows about bikes inside one area, cached per area.
+  //
+  // The cache is the politest thing in this file. A user who imports Boston,
+  // reloads, and imports again should cost the service one query, not two —
+  // and after a failed multi-area run, the areas that DID come back must not
+  // be fetched a second time.
   async elementsForArea(area, { signal, spots = false, onWait } = {}) {
-    const key = `${area.id || area.name || ""}|${spots ? "spots" : "paths"}`;
+    const key = `osm:${area.id || area.name || ""}:${spots ? "spots" : "paths"}`;
     if (this.cache.has(key)) return this.cache.get(key);
+    const stored = await this.readCache(key);
+    if (stored) { this.cache.set(key, stored); return stored; }
     const bbox = bboxOfBoundary(area.boundary);
     if (!bbox) {
       throw new OverpassError(
@@ -451,6 +502,7 @@ export class OverpassSession {
                                { signal, onWait });
     const elements = (doc && doc.elements) || [];
     this.cache.set(key, elements);
+    await this.writeCache(key, elements);
     return elements;
   }
 }

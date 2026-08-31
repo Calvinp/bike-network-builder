@@ -331,6 +331,18 @@ tests/                      pytest, incl. the Python<->JS parity checks
   and only on a click. V2_PLAN §8.5 rule 1 was amended for it rather than
   broken: load scales with towns added, not with editing time. Keep it that way
   — never call it from a pan, a draw, a keystroke or a retry loop.
+- ⚠️ **The kindest thing here is the CACHE, not the throttle.** Fetched
+  elements are persisted (`readCache`/`writeCache`, 7-day expiry), so importing
+  a city, reloading and importing again costs the service ONE query. The
+  requests that actually burn a rate limit are the repeats — a failed run that
+  discards what already arrived is the most wasteful thing this tool can do,
+  which is why a multi-area run keeps its partial results and re-ticks only the
+  areas that failed.
+- **A wait is not capped, and that is deliberate.** Waiting costs the service
+  one status read and a timer; an error costs it a button press from someone
+  who will press it again. The wait is cancellable instead, which is the
+  affordance that actually belongs there. Do not "improve" this by adding a
+  timeout that hands back a retry button.
 - **It ASKS BEFORE IT FIRES.** `waitForSlot()` reads Overpass's `/status`
   endpoint, which says how many slots are free and when the next one frees up,
   and waits rather than firing into a full queue. Status is ADVISORY: a mirror
@@ -341,12 +353,17 @@ tests/                      pytest, incl. the Python<->JS parity checks
   backends, so the status you read may not describe the backend your query
   lands on — a 429 straight after "2 slots available now" is normal. The slot
   check reduces 429s; it cannot eliminate them.
-- **A big area is flagged BEFORE the button** (`isHeavy`). Boston is ~230 km²
-  and importing it twice within a few minutes was enough to earn a 429. The
-  honest answer at city scale is the batch tool or a self-hosted endpoint, and
-  the sheet says so rather than letting the user find out after a 40-second
-  wait. Note the size cap (`MAX_AREA_SQKM`) is a REFUSAL and this is a WARNING:
-  plenty of people have a legitimate reason to import a city.
+- **A big area is flagged BEFORE the button** (`isHeavy`), as a WARNING — the
+  size cap (`MAX_AREA_SQKM`) is the refusal. Someone building a network for
+  Dallas or Seattle is the user this tool is FOR, and a city's cycleways are a
+  tiny slice of OSM; that is an ordinary Overpass query, not a bulk download.
+  What made it fail was our own waste, not its size. The sheet now says it may
+  take a few minutes of waiting, that waiting is the point, and that adding a
+  huge city's boroughs as separate areas works better than one giant query.
+- ⚠️ **Never auto-slice a bbox into a grid to get under a limit.** Splitting by
+  REAL areas is modelling (you probably want per-borough totals anyway);
+  splitting by tiles to make many small requests is working around a limit that
+  exists to say "don't do this here", and it sends more total load, not less.
 - **The guardrails are in the SESSION, not the UI**, so no caller can skip them
   by wiring a button differently: sequential fetches, `MIN_INTERVAL_MS` between
   requests, a per-area cache, `MAX_AREA_SQKM` refused before any request is

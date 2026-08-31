@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  MAX_AREA_SQKM, MAX_SLOT_WAIT_MS, MIN_INTERVAL_MS, OverpassError,
+  CACHE_MAX_AGE_MS, MAX_AREA_SQKM, MIN_INTERVAL_MS, OverpassError,
   OverpassSession, bboxAreaSqKm, bboxOfBoundary, featuresFromOverpass,
   PATH_CLAUSES, SPOT_CLAUSES, isHeavy, overpassQuery, slotWaitSeconds,
   treatmentFor,
@@ -350,18 +350,17 @@ test("a queued slot is waited for, and the caller is told", async () => {
   assert.ok(clock.t - before >= 20000, "and it actually waited");
 });
 
-test("a long queue gives up rather than sitting and polling", async () => {
-  // Past a point the user deserves the choice, and a client that waits
-  // forever on a busy service is just a slower kind of impolite.
-  const tooLong = Math.ceil(MAX_SLOT_WAIT_MS / 1000) + 60;
-  const { s, calls } = session(() => ok([]), {
-    status: `Slot available after: X, in ${tooLong} seconds.`,
+test("a long queue is waited for rather than handed back as an error", async () => {
+  // Capping the wait looks like the impatient choice; it is the opposite.
+  // Waiting costs the service one status read and a timer. An error costs it a
+  // button press from someone who will press it again.
+  const { s, clock, calls } = session(() => ok([]), {
+    status: "Slot available after: X, in 240 seconds.",
   });
-  await assert.rejects(
-    () => s.elementsForArea({ id: "m", name: "Malden", boundary: MALDEN }),
-    (e) => e instanceof OverpassError && e.retryable
-      && new RegExp(String(tooLong)).test(e.message));
-  assert.equal(calls.length, 0, "and never sends the query");
+  const before = clock.t;
+  await s.elementsForArea({ id: "m", name: "Malden", boundary: MALDEN });
+  assert.ok(clock.t - before >= 240000, "it waited the full four minutes");
+  assert.equal(calls.length, 1, "and then asked exactly once");
 });
 
 test("a missing or unparseable status never blocks an import", async () => {
@@ -412,4 +411,98 @@ test("bike share and bike parking are one clause, not two", () => {
   const q = overpassQuery([1, 2, 3, 4], { spots: true });
   assert.match(q, /bicycle_parking\|bicycle_rental/);
   assert.equal((q.match(/node\["amenity"/g) || []).length, 1);
+});
+
+test("a town already fetched is never asked for twice, even after a reload", async () => {
+  // The politest thing in the file. The requests that actually burn a rate
+  // limit are the REPEATS: import Boston, reload, import again. A cache that
+  // dies with the page turns one query into two.
+  const disk = new Map();
+  const cache = {
+    getItem: async (k) => (disk.has(k) ? disk.get(k) : null),
+    setItem: async (k, v) => { disk.set(k, String(v)); },
+  };
+  const area = { id: "boston", name: "Boston", boundary: MALDEN };
+  const first = session(() => ok([{ type: "way", id: 1 }]));
+  first.s.store = cache;
+  await first.s.elementsForArea(area);
+  assert.equal(first.calls.length, 1);
+
+  // A completely fresh session — the page reloaded.
+  const second = session(() => ok([{ type: "way", id: 999 }]));
+  second.s.store = cache;
+  const els = await second.s.elementsForArea(area);
+  assert.equal(second.calls.length, 0, "nothing was asked of the service");
+  assert.deepEqual(els, [{ type: "way", id: 1 }]);
+});
+
+test("paths and paths-plus-spots are cached separately", async () => {
+  // Asking for spots after asking for paths is a different question, and must
+  // not be answered from the narrower cache entry.
+  const disk = new Map();
+  const cache = { getItem: async (k) => disk.get(k) ?? null,
+                  setItem: async (k, v) => { disk.set(k, String(v)); } };
+  const area = { id: "m", name: "Malden", boundary: MALDEN };
+  const { s, calls } = session(() => ok([]));
+  s.store = cache;
+  await s.elementsForArea(area, { spots: false });
+  await s.elementsForArea(area, { spots: true });
+  assert.equal(calls.length, 2);
+  assert.equal(disk.size, 2);
+});
+
+test("a stale cache entry is refetched rather than served", async () => {
+  // An import claiming to reflect what is on the ground should not be quoting
+  // last month.
+  const disk = new Map();
+  const cache = { getItem: async (k) => disk.get(k) ?? null,
+                  setItem: async (k, v) => { disk.set(k, String(v)); } };
+  const area = { id: "m", name: "Malden", boundary: MALDEN };
+  const clock = { t: 1_000_000 };
+  const { s, calls } = session(() => ok([{ type: "way", id: 1 }]),
+                               { now: () => clock.t });
+  s.store = cache;
+  s.sleep = async () => {};
+  await s.elementsForArea(area);
+  assert.equal(calls.length, 1);
+
+  clock.t += CACHE_MAX_AGE_MS + 1;
+  s.cache.clear();                       // the memory half is gone anyway
+  await s.elementsForArea(area);
+  assert.equal(calls.length, 2, "expired, so asked again");
+});
+
+test("a broken or unwritable cache never breaks an import", async () => {
+  const hostile = {
+    getItem: async () => "{ not json",
+    setItem: async () => { throw new Error("quota exceeded"); },
+  };
+  const { s, calls } = session(() => ok([{ type: "way", id: 1 }]));
+  s.store = hostile;
+  const els = await s.elementsForArea({ id: "m", name: "Malden", boundary: MALDEN });
+  assert.equal(els.length, 1);
+  assert.equal(calls.length, 1);
+});
+
+test("a wait can be cancelled, and cancelling is not a failure to report", async () => {
+  // Four minutes is a long time to be unable to change your mind.
+  const ctl = new AbortController();
+  const s = new OverpassSession({
+    fetchImpl: async (url) => {
+      if (url.endsWith("/status")) {
+        return { ok: true, text: async () => "Slot available after: X, in 300 seconds." };
+      }
+      throw new Error("the query should never be sent");
+    },
+    sleep: (ms, signal) => new Promise((resolve, reject) => {
+      // Cancel arrives while we are waiting.
+      ctl.abort();
+      const e = new Error("aborted"); e.name = "AbortError";
+      if (signal && signal.aborted) reject(e); else reject(e);
+    }),
+  });
+  await assert.rejects(
+    () => s.elementsForArea({ id: "m", name: "Malden", boundary: MALDEN },
+                            { signal: ctl.signal }),
+    (e) => e.name === "AbortError");
 });

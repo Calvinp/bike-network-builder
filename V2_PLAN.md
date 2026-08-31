@@ -660,6 +660,17 @@ test suite offline, and it costs nothing to keep.
    > state-sized queries, and `place.fetch.overpass_url` so a deployment
    > expecting volume self-hosts. Rules 2 and 4 are unchanged, and the batch
    > tool remains the right answer for anything large.
+   >
+   > **On big cities (2026-08).** Someone building a network for Dallas or
+   > Seattle is exactly who this is for, so "it only works for towns" is not an
+   > acceptable answer. A city's *cycleways* are a tiny slice of OSM — that is
+   > an ordinary query, not the bulk extraction the usage policy warns about.
+   > What made a Boston import fail was our own waste: a failed multi-area run
+   > threw away what had already arrived, and nothing was cached across
+   > reloads, so every retry asked for everything again. Both are fixed, and a
+   > big import now succeeds by WAITING rather than by asking more often.
+   > Auto-slicing a bbox into tiles was considered and rejected: it sends more
+   > total load and works around a limit rather than respecting it.
 2. **Overpass stays a batch tool** — `build.py` and `fetch_layers.py`, where
    volume is controlled, a human is present, the existing throttle and cache
    apply, and the User-Agent carries a reachable contact. Keep it that way.
