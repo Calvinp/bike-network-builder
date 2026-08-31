@@ -45,7 +45,7 @@ import { Store } from "./js/store.js";
 import { areaAt, areaBoundary, censusId, nearbyAreas, searchAreas, stateAbbr }
   from "./js/census.js";
 import { MAX_AREA_SQKM, OverpassSession, bboxAreaSqKm, bboxOfBoundary,
-         featuresFromOverpass } from "./js/osm.js";
+         featuresFromOverpass, isHeavy } from "./js/osm.js";
 import { History } from "./js/history.js";
 import { zipCreate } from "./js/zip.js";
 
@@ -1636,9 +1636,24 @@ function openOsmSheet() {
     label.appendChild(cb); label.appendChild(name); label.appendChild(note);
     box.appendChild(label);
   }
-  osmNote("");
+  updateOsmWeight();
   document.getElementById("osm-go").disabled = !config.areas.length;
   document.getElementById("osm-sheet").hidden = false;
+}
+/* Say BEFORE the button that this one is big. "It failed" after a 40-second
+   wait is a worse answer than "this is a lot to ask of a shared service". */
+function updateOsmWeight() {
+  const spots = document.getElementById("osm-spots").checked;
+  const heavy = [...document.querySelectorAll("#osm-areas input:checked")]
+    .map((cb) => config.areas.find((a) => String(a.id) === cb.dataset.areaId))
+    .filter((a) => a && isHeavy(bboxOfBoundary(a.boundary), { spots }))
+    .map((a) => a.name);
+  if (!heavy.length) { osmNote(""); return; }
+  osmNote(`${heavy.join(" and ")} ${heavy.length === 1 ? "is" : "are"} large `
+    + "for a live query. OpenStreetMap's public service may refuse it however "
+    + "politely we ask — if it does, try one area at a time, or use "
+    + "tools/fetch_existing_infra.py, or point the tool at your own Overpass "
+    + "endpoint.");
 }
 const closeOsmSheet = () => {
   document.getElementById("osm-sheet").hidden = true;
@@ -1665,7 +1680,14 @@ async function runOsmImport() {
       osmNote(`Looking up ${a.name}… (${i + 1} of ${picked.length})`);
       // Sequential on purpose: parallel queries are the difference between
       // using a shared service and leaning on it.
-      const elements = await session.elementsForArea(a, { spots });
+      const elements = await session.elementsForArea(a, {
+        spots,
+        // Overpass tells us when the next slot frees up; say so rather than
+        // looking frozen. This is the tool being polite, not being slow.
+        onWait: (secs) => osmNote(
+          `OpenStreetMap is busy — waiting ${secs}s for a free slot, then `
+          + `looking up ${a.name}…`),
+      });
       const feats = featuresFromOverpass({ elements }, a.boundary, pointInBoundary);
       for (const f of feats) found.push(f);
     }
@@ -2357,6 +2379,8 @@ async function init() {
     if (b.dataset.import === "osm") openOsmSheet();
     else importInput.click();
   });
+  document.getElementById("osm-spots").addEventListener("change", updateOsmWeight);
+  document.getElementById("osm-areas").addEventListener("change", updateOsmWeight);
   document.getElementById("osm-cancel").onclick = closeOsmSheet;
   document.getElementById("osm-x").onclick = closeOsmSheet;
   document.getElementById("osm-go").onclick = runOsmImport;

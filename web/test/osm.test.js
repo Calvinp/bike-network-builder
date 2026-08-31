@@ -7,8 +7,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  MAX_AREA_SQKM, MIN_INTERVAL_MS, OverpassError, OverpassSession,
-  bboxAreaSqKm, bboxOfBoundary, featuresFromOverpass, overpassQuery,
+  MAX_AREA_SQKM, MAX_SLOT_WAIT_MS, MIN_INTERVAL_MS, OverpassError,
+  OverpassSession, bboxAreaSqKm, bboxOfBoundary, featuresFromOverpass,
+  PATH_CLAUSES, SPOT_CLAUSES, isHeavy, overpassQuery, slotWaitSeconds,
   treatmentFor,
 } from "../js/osm.js";
 import { pointInBoundary } from "../js/boundary.js";
@@ -16,15 +17,24 @@ import { pointInBoundary } from "../js/boundary.js";
 const MALDEN = [[[[42.40, -71.09], [42.46, -71.09], [42.46, -71.02],
                   [42.40, -71.02], [42.40, -71.09]]]];
 
-function session(handler, { now } = {}) {
-  const calls = [];
+function session(handler, { now, status = "2 slots available now." } = {}) {
+  const calls = [];       // query POSTs only; status checks are separate
+  const statusCalls = [];
   const clock = { t: 0 };
   const s = new OverpassSession({
-    fetchImpl: async (url, opts) => { calls.push({ url, opts }); return handler(calls.length); },
+    fetchImpl: async (url, opts) => {
+      if (url.endsWith("/status")) {
+        statusCalls.push(url);
+        if (status === null) throw new Error("no status endpoint");
+        return { ok: true, status: 200, text: async () => status };
+      }
+      calls.push({ url, opts });
+      return handler(calls.length);
+    },
     now: now || (() => clock.t),
     sleep: async (ms) => { clock.t += ms; },
   });
-  return { s, calls, clock };
+  return { s, calls, statusCalls, clock };
 }
 const ok = (elements) => ({ ok: true, status: 200, json: async () => ({ elements }) });
 
@@ -91,7 +101,8 @@ test("asking for spots adds them, still bounded by the bbox", () => {
     assert.ok(q.includes(tag), `expected ${tag} in the query`);
   }
   const bounded = (q.match(/42\.400000,-71\.090000,42\.460000,-71\.020000/g) || []);
-  assert.equal(bounded.length, 10, "every clause, path and spot alike");
+  assert.equal(bounded.length, PATH_CLAUSES.length + SPOT_CLAUSES.length,
+               "every clause, path and spot alike");
 });
 
 test("ways outside the area are dropped, and untagged ways ignored", () => {
@@ -299,4 +310,106 @@ test("the notes record the tags that drove the decision", () => {
     geometry: [{ lat: 42.42, lon: -71.06 }, { lat: 42.43, lon: -71.05 }] }] };
   const [f] = featuresFromOverpass(doc, MALDEN, pointInBoundary);
   assert.match(f.notes, /cycleway=track/);
+});
+
+test("the status text is read for how long until a slot frees up", () => {
+  assert.equal(slotWaitSeconds("Rate limit: 2\n2 slots available now."), 0);
+  assert.equal(slotWaitSeconds("1 slot available now."), 0);
+  assert.equal(
+    slotWaitSeconds("Slot available after: 2026-08-30T15:00:30Z, in 30 seconds."),
+    30);
+  // Several queued: the soonest is the one we can actually have.
+  assert.equal(slotWaitSeconds(
+    "Slot available after: X, in 45 seconds.\nSlot available after: Y, in 12 seconds."),
+    12);
+  assert.equal(slotWaitSeconds("Slot available after: X, in -3 seconds."), 0,
+               "a time already past is a free slot");
+  assert.equal(slotWaitSeconds("some format we have never seen"), null);
+  assert.equal(slotWaitSeconds(""), null);
+});
+
+test("it asks whether a slot is free BEFORE firing a query", async () => {
+  // Guessing an interval and hoping is what earns a 429. Asking is what a
+  // well-behaved Overpass client does.
+  const { s, calls, statusCalls } = session(() => ok([]));
+  await s.elementsForArea({ id: "m", name: "Malden", boundary: MALDEN });
+  assert.equal(statusCalls.length, 1, "the status endpoint was consulted");
+  assert.match(statusCalls[0], /\/status$/);
+  assert.equal(calls.length, 1);
+});
+
+test("a queued slot is waited for, and the caller is told", async () => {
+  const waits = [];
+  const { s, clock } = session(() => ok([]), {
+    status: "Slot available after: X, in 20 seconds.",
+  });
+  const before = clock.t;
+  await s.elementsForArea({ id: "m", name: "Malden", boundary: MALDEN },
+                          { onWait: (secs) => waits.push(secs) });
+  assert.deepEqual(waits, [20], "the UI can say why it is pausing");
+  assert.ok(clock.t - before >= 20000, "and it actually waited");
+});
+
+test("a long queue gives up rather than sitting and polling", async () => {
+  // Past a point the user deserves the choice, and a client that waits
+  // forever on a busy service is just a slower kind of impolite.
+  const tooLong = Math.ceil(MAX_SLOT_WAIT_MS / 1000) + 60;
+  const { s, calls } = session(() => ok([]), {
+    status: `Slot available after: X, in ${tooLong} seconds.`,
+  });
+  await assert.rejects(
+    () => s.elementsForArea({ id: "m", name: "Malden", boundary: MALDEN }),
+    (e) => e instanceof OverpassError && e.retryable
+      && new RegExp(String(tooLong)).test(e.message));
+  assert.equal(calls.length, 0, "and never sends the query");
+});
+
+test("a missing or unparseable status never blocks an import", async () => {
+  // Status is advisory. A mirror without the endpoint, or with a format we
+  // have not seen, must still be usable.
+  for (const status of [null, "who knows what this says"]) {
+    const { s, calls } = session(() => ok([]), { status });
+    await s.elementsForArea({ id: "m", name: "Malden", boundary: MALDEN });
+    assert.equal(calls.length, 1, `status ${status} should not block`);
+  }
+});
+
+test("a 429 that says when to come back passes that on", async () => {
+  const { s } = session(() => ({
+    ok: false, status: 429,
+    headers: { get: (k) => (k === "Retry-After" ? "42" : null) },
+    json: async () => ({}),
+  }));
+  await assert.rejects(
+    () => s.elementsForArea({ id: "m", name: "Malden", boundary: MALDEN }),
+    /about 42 seconds/);
+});
+
+test("bike share docks import, with their capacity", () => {
+  const doc = { elements: [{ type: "node", id: 21, lat: 42.42, lon: -71.06,
+    tags: { amenity: "bicycle_rental", name: "Malden Center", capacity: "15" } }] };
+  const [f] = featuresFromOverpass(doc, MALDEN, pointInBoundary);
+  assert.equal(f.treatments[0].type, "bikeshare_dock");
+  assert.equal(f.treatments[0].quantity, 15);
+  assert.equal(f.name, "Malden Center");
+});
+
+test("a big area is flagged as heavy before anything is sent", () => {
+  // Boston is ~230 km2, and importing it twice in a few minutes was enough to
+  // get a 429 out of the public instance. Saying so up front beats failing
+  // after a forty-second wait.
+  const boston = [42.23, -71.19, 42.40, -70.99];
+  const malden = [42.40, -71.09, 42.46, -71.02];
+  assert.equal(isHeavy(boston), true);
+  assert.equal(isHeavy(malden), false);
+  // Spot improvements multiply the result set, so the bar for "heavy" drops.
+  assert.equal(isHeavy([42.40, -71.15, 42.50, -71.02], { spots: true }), true);
+});
+
+test("bike share and bike parking are one clause, not two", () => {
+  // Every clause is a separate bbox scan. Two keys that differ only in their
+  // value belong in one regex.
+  const q = overpassQuery([1, 2, 3, 4], { spots: true });
+  assert.match(q, /bicycle_parking\|bicycle_rental/);
+  assert.equal((q.match(/node\["amenity"/g) || []).length, 1);
 });

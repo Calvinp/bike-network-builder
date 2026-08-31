@@ -18,6 +18,10 @@
 //  * Areas are fetched ONE AT A TIME, never in parallel.
 //  * A minimum interval between requests, enforced here rather than by the UI.
 //  * An in-session cache, so re-importing the same town costs nothing.
+//  * It ASKS BEFORE IT FIRES. Overpass publishes a /status endpoint saying how
+//    many slots are free and, if none are, when the next one frees up. Waiting
+//    for a slot is what a well-behaved client does; guessing an interval and
+//    hoping is what earns a 429.
 //  * NO automatic retry. A 429 or a 504 stops and says so. Retrying under load
 //    is precisely how a polite client becomes a hammer.
 //  * A hard size cap. A query over a whole state is expensive and is refused
@@ -41,9 +45,41 @@ export const DEFAULT_ENDPOINT = "https://overpass-api.de/api/interpreter";
 // extract that belongs in tools/fetch_existing_infra.py.
 export const MAX_AREA_SQKM = 5000;
 
+// Well under the hard cap, and already enough to get a 429 out of the public
+// instance: Boston is ~230 km2 and importing it twice in a few minutes was
+// enough. Past this the UI says so before you press the button, because "it
+// failed" after a 40-second wait is a worse answer than "this one is big".
+export const HEAVY_AREA_SQKM = 120;
+
 // Spacing between requests, enforced in the session rather than in the UI so
-// no caller can skip it by wiring a button up differently.
+// no caller can skip it by wiring a button up differently. A floor, not the
+// whole story: the slot check below is what actually keeps us inside the
+// service's limits.
 export const MIN_INTERVAL_MS = 4000;
+
+// How long we are willing to sit waiting for a slot before giving up and
+// telling the user. Longer than this and they deserve the choice.
+export const MAX_SLOT_WAIT_MS = 90000;
+
+// Overpass /status is plain text. Two shapes matter:
+//
+//   "2 slots available now."
+//   "Slot available after: 2026-08-30T15:00:30Z, in 30 seconds."
+//
+// Returns seconds to wait: 0 when a slot is free, null when the text says
+// nothing we understand (in which case the caller just proceeds — status is
+// advisory, and an unparsed format must never block the import).
+export function slotWaitSeconds(text) {
+  const s = String(text || "");
+  if (/\bslots? available now/i.test(s)) return 0;
+  const waits = [...s.matchAll(/in\s+(-?\d+)\s+seconds?/gi)]
+    .map((m) => Number(m[1]))
+    .filter((n) => Number.isFinite(n));
+  if (!waits.length) return null;
+  // Several slots may be queued; the soonest is the one we can have.
+  const soonest = Math.min(...waits);
+  return soonest > 0 ? soonest : 0;
+}
 
 // Paths and lanes: what everyone wants, and what the import has always done.
 export const PATH_CLAUSES = [
@@ -58,7 +94,7 @@ export const PATH_CLAUSES = [
 // review list with thousands of rows is a review list nobody reads. Someone
 // who specifically wants the bike parking can ask for it.
 export const SPOT_CLAUSES = [
-  'node["amenity"="bicycle_parking"]',
+  'node["amenity"~"^(bicycle_parking|bicycle_rental)$"]',
   'node["traffic_calming"~"hump|bump|table|cushion"]',
   'node["barrier"="bollard"]',
   'node["highway"="crossing"]["crossing:island"="yes"]',
@@ -102,6 +138,7 @@ export function treatmentFor(tags = {}) {
   }
   // Spot improvements, only present when the caller asked for them.
   if (t.amenity === "bicycle_parking") return "bike_parking";
+  if (t.amenity === "bicycle_rental") return "bikeshare_dock";
   if (t.traffic_calming === "table") return "raised_crosswalk";
   if (["hump", "bump", "cushion"].includes(t.traffic_calming)) return "speed_hump";
   if (t.barrier === "bollard") return "bollards";
@@ -252,6 +289,7 @@ export function featuresFromOverpass(result, boundary, pointInBoundary) {
 
 const DEFAULT_NAMES = {
   bike_parking: "Bike parking",
+  bikeshare_dock: "Bike share dock",
   speed_hump: "Speed hump",
   raised_crosswalk: "Raised crossing",
   bollards: "Bollards",
@@ -264,7 +302,7 @@ const defaultNameFor = (type) => DEFAULT_NAMES[type] || "Existing spot";
 // counted treatment wants. Anything unparseable is left unset rather than
 // guessed at.
 function countFor(type, tags) {
-  if (type !== "bike_parking") return undefined;
+  if (type !== "bike_parking" && type !== "bikeshare_dock") return undefined;
   const n = parseInt(tags.capacity, 10);
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
@@ -288,6 +326,14 @@ function makeOsmFeature({ id, type, tags, name, onStreet = "", geometry,
     geometry,
     tags: { source: "osm" },
   };
+}
+
+// Is this query going to be hard work for a shared service? Used by the UI to
+// warn BEFORE the button, not to refuse — plenty of people have a legitimate
+// reason to import a city, and the honest thing is to say what it costs.
+export function isHeavy(bbox, { spots = false } = {}) {
+  const sqkm = bboxAreaSqKm(bbox);
+  return sqkm > HEAVY_AREA_SQKM || (spots && sqkm > HEAVY_AREA_SQKM / 3);
 }
 
 export class OverpassError extends Error {
@@ -314,12 +360,45 @@ export class OverpassSession {
     this.cache = new Map();       // area id -> elements
   }
 
+  // Where the service publishes its slot availability.
+  statusUrl() {
+    return this.url.replace(/\/interpreter\/?$/, "/status");
+  }
+
+  // Ask how busy the service is, and wait for a slot rather than firing into a
+  // queue that is already full. Entirely advisory: a status endpoint that is
+  // missing, unreachable or in an unfamiliar format must never block an import.
+  async waitForSlot({ signal, onWait } = {}) {
+    let text;
+    try {
+      const res = await this.fetchImpl(this.statusUrl(), { signal });
+      if (!res.ok) return null;
+      text = await res.text();
+    } catch (e) {
+      if (e && e.name === "AbortError") throw e;
+      return null;
+    }
+    const secs = slotWaitSeconds(text);
+    if (secs === null || secs <= 0) return secs;
+    const ms = Math.min(secs * 1000 + 500, MAX_SLOT_WAIT_MS);
+    if (secs * 1000 > MAX_SLOT_WAIT_MS) {
+      throw new OverpassError(
+        `OpenStreetMap's query service has no free slot for another ${secs} `
+        + "seconds. Try again then — this tool won't sit and poll it.",
+        { retryable: true });
+    }
+    if (onWait) onWait(secs);
+    await this.sleep(ms);
+    return secs;
+  }
+
   // Raw query, throttled. Callers never get to skip the wait.
-  async run(query, { signal } = {}) {
+  async run(query, { signal, onWait } = {}) {
     if (this.lastAt !== null) {
       const since = this.now() - this.lastAt;
       if (since < MIN_INTERVAL_MS) await this.sleep(MIN_INTERVAL_MS - since);
     }
+    await this.waitForSlot({ signal, onWait });
     this.lastAt = this.now();
     let res;
     try {
@@ -334,17 +413,25 @@ export class OverpassSession {
     }
     if (res.status === 429 || res.status === 504) {
       // Deliberately NOT retried. Overpass returns these when it is already
-      // under load; a client that retries is the reason it is under load.
+      // under load; a client that retries is the reason it is under load. Say
+      // HOW LONG when the service tells us, so "try again" is actionable.
+      const after = Number(res.headers && res.headers.get
+        ? res.headers.get("Retry-After") : null);
+      const when = Number.isFinite(after) && after > 0
+        ? `Try again in about ${after} seconds.`
+        : "Wait a minute and try again.";
       throw new OverpassError(
-        "OpenStreetMap's query service is busy right now. Wait a minute and "
-        + "try again — this tool won't retry on its own.", { retryable: true });
+        `OpenStreetMap's query service is busy right now. ${when} This tool `
+        + "won't retry on its own. Large areas hit this sooner, and importing "
+        + "a whole city may need tools/fetch_existing_infra.py or your own "
+        + "Overpass endpoint.", { retryable: true });
     }
     if (!res.ok) throw new OverpassError(`Query service returned ${res.status}.`);
     return res.json();
   }
 
   // Everything OSM knows about bikes inside one area. Cached per area id.
-  async elementsForArea(area, { signal, spots = false } = {}) {
+  async elementsForArea(area, { signal, spots = false, onWait } = {}) {
     const key = `${area.id || area.name || ""}|${spots ? "spots" : "paths"}`;
     if (this.cache.has(key)) return this.cache.get(key);
     const bbox = bboxOfBoundary(area.boundary);
@@ -360,7 +447,8 @@ export class OverpassSession {
         + `which is past the ${MAX_AREA_SQKM} km² limit for a live query. `
         + "Import its towns separately, or use tools/fetch_existing_infra.py.");
     }
-    const doc = await this.run(overpassQuery(bbox, { spots }), { signal });
+    const doc = await this.run(overpassQuery(bbox, { spots }),
+                               { signal, onWait });
     const elements = (doc && doc.elements) || [];
     this.cache.set(key, elements);
     return elements;

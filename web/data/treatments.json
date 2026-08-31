@@ -183,6 +183,19 @@
       "style": { "glyph": "P", "stack_rank": 10 }
     },
     {
+      "id": "bikeshare_dock",
+      "label": "Bike share dock",
+      "category": "bike",
+      "measure": "counted",
+      "unit": "docks",
+      "geometry": ["point"],
+      "cost": null,
+      "style": {
+        "glyph": "\u21c4",
+        "stack_rank": 15
+      }
+    },
+    {
       "id": "street_trees",
       "label": "Street trees",
       "category": "greening",

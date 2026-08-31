@@ -74,6 +74,7 @@ TAG_RULES = [
     # Spot improvements. Opt-in in the browser, always fetched here — a batch
     # run has nobody waiting on it and no review list to swamp.
     (lambda t: t.get("amenity") == "bicycle_parking", "bike_parking"),
+    (lambda t: t.get("amenity") == "bicycle_rental", "bikeshare_dock"),
     (lambda t: t.get("traffic_calming") == "table", "raised_crosswalk"),
     (lambda t: t.get("traffic_calming") in ("hump", "bump", "cushion"),
      "speed_hump"),
@@ -91,7 +92,7 @@ PATH_CLAUSES = [
     'way["cycleway:right"~"lane|track"]',
 ]
 SPOT_CLAUSES = [
-    'node["amenity"="bicycle_parking"]',
+    'node["amenity"~"^(bicycle_parking|bicycle_rental)$"]',
     'node["traffic_calming"~"hump|bump|table|cushion"]',
     'node["barrier"="bollard"]',
     'node["highway"="crossing"]["crossing:island"="yes"]',

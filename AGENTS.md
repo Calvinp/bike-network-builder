@@ -331,6 +331,22 @@ tests/                      pytest, incl. the Python<->JS parity checks
   and only on a click. V2_PLAN §8.5 rule 1 was amended for it rather than
   broken: load scales with towns added, not with editing time. Keep it that way
   — never call it from a pan, a draw, a keystroke or a retry loop.
+- **It ASKS BEFORE IT FIRES.** `waitForSlot()` reads Overpass's `/status`
+  endpoint, which says how many slots are free and when the next one frees up,
+  and waits rather than firing into a full queue. Status is ADVISORY: a mirror
+  without the endpoint, or a format we have not seen, must never block an
+  import. Past `MAX_SLOT_WAIT_MS` it gives up and tells the user instead of
+  sitting and polling.
+  ⚠️ **This is not a guarantee.** `overpass-api.de` load-balances across
+  backends, so the status you read may not describe the backend your query
+  lands on — a 429 straight after "2 slots available now" is normal. The slot
+  check reduces 429s; it cannot eliminate them.
+- **A big area is flagged BEFORE the button** (`isHeavy`). Boston is ~230 km²
+  and importing it twice within a few minutes was enough to earn a 429. The
+  honest answer at city scale is the batch tool or a self-hosted endpoint, and
+  the sheet says so rather than letting the user find out after a 40-second
+  wait. Note the size cap (`MAX_AREA_SQKM`) is a REFUSAL and this is a WARNING:
+  plenty of people have a legitimate reason to import a city.
 - **The guardrails are in the SESSION, not the UI**, so no caller can skip them
   by wiring a button differently: sequential fetches, `MIN_INTERVAL_MS` between
   requests, a per-area cache, `MAX_AREA_SQKM` refused before any request is
@@ -367,8 +383,8 @@ tests/                      pytest, incl. the Python<->JS parity checks
   other way. The tags that drove each decision travel in the feature's `notes`
   (`explainTags`) so a reviewer can see why, and the sheet says plainly that
   the import is only as good as OSM is.
-- **Spot improvements (bike parking, humps, bollards, islands, tree rows) are
-  OPT-IN.** Malden alone returns ~100 of them and a city returns thousands;
+- **Spot improvements (bike parking, bike share docks, humps, bollards,
+  islands, tree rows) are OPT-IN.** Malden alone returns ~100 of them and a city returns thousands;
   every one lands in the review list, and a review list with thousands of rows
   is one nobody reads. The batch tool always fetches them — it has nobody
   waiting and no list to swamp.
@@ -382,6 +398,10 @@ tests/                      pytest, incl. the Python<->JS parity checks
   `licenseConflict()` REPORTS a clash between two declared licences and never
   adjudicates one: whether two files may be combined depends on provenance only
   the user knows.
+
+- **Every clause is a separate bbox scan**, so tags that differ only in their
+  value belong in ONE regex clause — `amenity~"^(bicycle_parking|bicycle_rental)$"`
+  rather than two. Fewer clauses is directly less work for a shared service.
 
 ### The awkward files
 
