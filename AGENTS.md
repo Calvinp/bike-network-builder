@@ -482,6 +482,20 @@ tests/                      pytest, incl. the Python<->JS parity checks
   used to render over an open menu. Anything new that must sit above the map
   belongs in the header, or needs its own z-index above 1200 (the mobile
   sidebar).
+- ⚠️ **Spots are not drawn below `MIN_SPOT_ZOOM`.** Lines live on a shared
+  CANVAS and cost almost nothing; every spot is a DOM marker that Leaflet
+  repositions on each pan and zoom. A 4,750-feature import put 4,000 markers
+  and 8,034 nodes under `#map`; hiding them below the threshold took that to 0
+  and 34. Two rules follow: hide by taking the whole GROUP off the map
+  (`syncSpotVisibility`, the pattern arrows already used), and do not BUILD
+  what will not be shown — `syncGlyphs` returns early rather than placing
+  markers into a hidden group. Glyph runs have their own `glyphGroup` so they
+  can be toggled the same way.
+- ⚠️ **`restyleAll()` must not run on every zoom step.** It walks every feature
+  and rebuilds its overlays and glyph markers — free on a hand-drawn network,
+  and the lag on a city import. `onZoomChanged` compares a render BAND (the
+  stacking threshold, the spot threshold, and the zoom level while spots are
+  shown) and restyles only when it changes. The cheap group toggles always run.
 - **The network canvas has `tolerance: 10`.** Leaflet hit-tests a canvas path
   against the stroke itself, so a 4px line is a 4px target — fine zoomed in and
   genuinely annoying zoomed out, which is exactly where you are when picking

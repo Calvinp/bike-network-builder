@@ -216,6 +216,54 @@ for (const [name, src] of Object.entries(FILES)) {
     assert.match(src, /fitBounds\(boundaryGroup\.getBounds\(\)\)/);
   });
 
+  test(`${name}: spots leave the map by the GROUP, not one at a time`, () => {
+    // A city-wide OSM import is thousands of spots, and every one is a DOM
+    // marker Leaflet repositions on each pan. 4,750 features put 4,000 markers
+    // and 8,034 nodes under #map; hiding them below MIN_SPOT_ZOOM took that to
+    // 0 and 34. Removing them individually would be the slow way to do it.
+    const start = src.indexOf("function syncSpotVisibility");
+    assert.ok(start > 0, "syncSpotVisibility not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /MIN_SPOT_ZOOM/);
+    assert.match(body, /map\.removeLayer\(g\)/,
+                 "the whole group comes off the map in one call");
+    assert.doesNotMatch(body, /forEach/,
+                        "never marker-by-marker — that is the cost being avoided");
+  });
+
+  test(`${name}: glyph runs have their OWN group so they can be hidden too`, () => {
+    // Mixed in with the stroke overlays they would have to be removed
+    // individually, which is exactly what the group exists to avoid.
+    assert.match(src, /glyphGroup = L\.layerGroup\(\)/);
+    const start = src.indexOf("function syncGlyphs");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /glyphGroup\.addLayer/);
+    assert.doesNotMatch(body, /overlayGroup/,
+                        "glyph markers never go into the stroke overlay group");
+  });
+
+  test(`${name}: nothing is built for spots that would not be shown`, () => {
+    // Hiding them after building them still pays to build them. At city zoom
+    // the work has to not happen at all.
+    const start = src.indexOf("function syncGlyphs");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /getZoom\(\) < MIN_SPOT_ZOOM/,
+                 "syncGlyphs must bail out before placing anything");
+  });
+
+  test(`${name}: zooming does not restyle every feature every time`, () => {
+    // restyleAll() walks every feature and rebuilds its overlays and glyphs.
+    // On a hand-drawn network that is free; on a city import it is the lag.
+    // It must run only when crossing a threshold that changes the picture.
+    const start = src.indexOf("function onZoomChanged");
+    assert.ok(start > 0, "onZoomChanged not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /if \(band === lastBand\) return;/,
+                 "an unchanged band must return before restyleAll()");
+    assert.ok(body.indexOf("syncSpotVisibility") < body.indexOf("restyleAll"),
+              "the cheap group toggle happens first, and always");
+  });
+
   test(`${name}: the area picker is not a file dialog`, () => {
     // "+ Add an area" opening a file picker assumed the user has boundary
     // files lying around. Almost nobody does, and adding the next town over is

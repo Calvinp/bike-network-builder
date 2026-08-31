@@ -29,8 +29,8 @@ import { renderPng } from "./js/render_png.js";
 import { registry } from "./js/registry.js";
 import {
   BOUNDARY_COLOR, EXISTING_COLOR, FUNDED_COLOR, PHASE_COLORS, SINGLE_COLOR,
-  UNDER_CONSTRUCTION_COLOR, featureLayers, glyphRunPoints, pointColor,
-  treatmentGlyph,
+  MIN_SPOT_ZOOM, MIN_STACK_ZOOM, UNDER_CONSTRUCTION_COLOR, featureLayers,
+  glyphRunPoints, pointColor, treatmentGlyph,
   treatmentLabel,
 } from "./js/render_common.js";
 import { KM_PER_MI, MI_PER_KM } from "./js/costs.js";
@@ -58,7 +58,7 @@ let baseNet = null;         // last parsed stored network (uneditable fields)
 let place = null;           // the deployment default area (data/place.json)
 
 let map, networkGroup, boundaryGroup, arrowsGroup, pointsGroup, overlayGroup;
-let maskGroup;
+let maskGroup, glyphGroup;
 let networkRenderer = null;
 let features = [];          // [{props, treatments, sel, layer, overlays, markers, arrows}]
 let selected = null;
@@ -165,9 +165,12 @@ function glyphIcon(run) {
 }
 /* Rebuild the glyph markers for a line feature's counted treatments. */
 function syncGlyphs(f, runs) {
-  f.glyphs.forEach((m) => overlayGroup.removeLayer(m));
+  f.glyphs.forEach((m) => glyphGroup.removeLayer(m));
   f.glyphs = [];
   if (!f.layer || !runs.length) return;
+  // Nothing to build at all when they would not be shown. This is most of the
+  // saving: at city zoom the expensive work simply does not happen.
+  if (map && map.getZoom() < MIN_SPOT_ZOOM) return;
   const everyKm = glyphSpacingKm();
   const parts = segsOf(f.layer).map((seg) => seg.map((p) => [p.lat, p.lng]));
   runs.forEach((run) => {
@@ -176,7 +179,7 @@ function syncGlyphs(f, runs) {
       glyphRunPoints(part, everyKm).forEach((pt) => {
         const m = L.marker(pt, { icon, interactive: false, keyboard: false,
                                  pmIgnore: true });
-        overlayGroup.addLayer(m);
+        glyphGroup.addLayer(m);
         f.glyphs.push(m);
       });
     });
@@ -292,6 +295,37 @@ function syncArrows(shownSet) {
 /* Chevron icons are fixed-size DivIcons, so zoomed way out they'd dwarf the
    streets themselves — below this zoom the whole arrows layer comes off. */
 const ARROW_MIN_ZOOM = 14;
+/* What the current zoom changes about drawing. restyleAll() walks every
+   feature and rebuilds its overlays and glyph markers, which is fine for a
+   hand-drawn network and much too expensive for a city-sized import — so it
+   runs only when crossing a threshold that actually changes the picture,
+   rather than on every zoom step. */
+let lastBand = null;
+function renderBand() {
+  const z = map.getZoom();
+  // The glyph spacing varies with zoom, so the level is part of the band —
+  // but only while spots are being drawn at all.
+  return [z >= MIN_STACK_ZOOM, z >= MIN_SPOT_ZOOM,
+          z >= MIN_SPOT_ZOOM ? z : 0].join("|");
+}
+function onZoomChanged() {
+  syncArrowVisibility();
+  syncSpotVisibility();
+  const band = renderBand();
+  if (band === lastBand) return;
+  lastBand = band;
+  restyleAll();
+}
+/* Thousands of spot markers are thousands of DOM nodes that Leaflet moves on
+   every pan. Taking the GROUP off the map is one call; taking the markers off
+   one at a time is the thing being avoided. */
+function syncSpotVisibility() {
+  const show = map.getZoom() >= MIN_SPOT_ZOOM;
+  for (const g of [pointsGroup, glyphGroup]) {
+    if (show && !map.hasLayer(g)) map.addLayer(g);
+    else if (!show && map.hasLayer(g)) map.removeLayer(g);
+  }
+}
 function syncArrowVisibility() {
   const show = map.getZoom() >= ARROW_MIN_ZOOM;
   if (show && !map.hasLayer(arrowsGroup)) map.addLayer(arrowsGroup);
@@ -354,7 +388,7 @@ function addFeature(props, treatments, lines, points) {
 function removeFeature(f) {
   if (f.layer) networkGroup.removeLayer(f.layer);
   f.overlays.forEach((o) => overlayGroup.removeLayer(o));
-  f.glyphs.forEach((m) => overlayGroup.removeLayer(m));
+  f.glyphs.forEach((m) => glyphGroup.removeLayer(m));
   f.markers.forEach((m) => pointsGroup.removeLayer(m));
   if (f.arrows) arrowsGroup.removeLayer(f.arrows);
   features = features.filter((x) => x !== f);
@@ -372,7 +406,7 @@ function clearFeatures() {
   features.forEach((f) => {
     if (f.layer) networkGroup.removeLayer(f.layer);
     f.overlays.forEach((o) => overlayGroup.removeLayer(o));
-    f.glyphs.forEach((m) => overlayGroup.removeLayer(m));
+    f.glyphs.forEach((m) => glyphGroup.removeLayer(m));
     f.markers.forEach((m) => pointsGroup.removeLayer(m));
     if (f.arrows) arrowsGroup.removeLayer(f.arrows);
   });
@@ -874,9 +908,13 @@ function applyPhaseView() {
       if (show && !networkGroup.hasLayer(f.layer)) networkGroup.addLayer(f.layer);
       if (!show && networkGroup.hasLayer(f.layer)) networkGroup.removeLayer(f.layer);
     }
-    [...f.overlays, ...f.glyphs].forEach((o) => {
+    f.overlays.forEach((o) => {
       if (show && !overlayGroup.hasLayer(o)) overlayGroup.addLayer(o);
       if (!show && overlayGroup.hasLayer(o)) overlayGroup.removeLayer(o);
+    });
+    f.glyphs.forEach((o) => {
+      if (show && !glyphGroup.hasLayer(o)) glyphGroup.addLayer(o);
+      if (!show && glyphGroup.hasLayer(o)) glyphGroup.removeLayer(o);
     });
     f.markers.forEach((m) => {
       if (show && !pointsGroup.hasLayer(m)) pointsGroup.addLayer(m);
@@ -1665,8 +1703,13 @@ function updateOsmWeight() {
 const closeOsmSheet = () => {
   document.getElementById("osm-sheet").hidden = true;
 };
-function osmNote(msg) {
-  document.getElementById("osm-note").textContent = msg || "";
+function osmNote(msg, busy = false) {
+  const el = document.getElementById("osm-note");
+  el.textContent = msg || "";
+  // A grey sentence changing every 30 seconds does not read as "working".
+  // The pulsing dot does, and it is the difference between a slow tool and a
+  // frozen one.
+  el.classList.toggle("working", Boolean(busy));
 }
 /* Look each chosen area up, one at a time, and hand the result to the importer
    as a normal network file. */
@@ -1680,6 +1723,7 @@ async function runOsmImport() {
   const stop = document.getElementById("osm-stop");
   const spots = document.getElementById("osm-spots").checked;
   go.disabled = true;
+  go.textContent = "Looking up…";
   stop.hidden = false;
   osmAbort = new AbortController();
   const session = osmSession();
@@ -1694,7 +1738,7 @@ async function runOsmImport() {
   for (let i = 0; i < picked.length; i++) {
     const a = picked[i];
     const where = `${a.name} (${i + 1} of ${picked.length})`;
-    osmNote(`Looking up ${where}…`);
+    osmNote(`Looking up ${where}…`, true);
     try {
       const elements = await session.elementsForArea(a, {
         spots,
@@ -1703,7 +1747,7 @@ async function runOsmImport() {
         // an error message costs it a button press. Say what we are doing.
         onWait: (secs) => osmNote(
           `OpenStreetMap is busy — waiting ${secs}s for a free slot, then `
-          + `${where}. You can stop and keep whatever has arrived.`),
+          + `${where}. You can stop and keep whatever has arrived.`, true),
       });
       const feats = featuresFromOverpass({ elements }, a.boundary, pointInBoundary);
       for (const f of feats) found.push(f);
@@ -1716,6 +1760,7 @@ async function runOsmImport() {
   osmAbort = null;
   stop.hidden = true;
   go.disabled = false;
+  go.textContent = "Look up";
 
   if (!found.length) {
     osmNote(failed.length
@@ -2282,6 +2327,10 @@ async function init() {
   networkRenderer = L.canvas({ padding: 0.4, tolerance: 10 });
   networkGroup = L.featureGroup().addTo(map);
   overlayGroup = L.layerGroup().addTo(map);
+  // Glyph runs get their OWN group so the whole lot can leave the map in one
+  // call when zoomed out, the way arrows already do. Mixed in with the stroke
+  // overlays they would have to be removed one at a time.
+  glyphGroup = L.layerGroup().addTo(map);
   // Before boundaryGroup so the shading sits UNDER the outlines, and separate
   // from it because boundaryGroup feeds fitBounds().
   maskGroup = L.layerGroup().addTo(map);
@@ -2338,8 +2387,10 @@ async function init() {
     map.invalidateSize();
     if (!everSized) { everSized = true; fitToContent(); }
   }).observe(map.getContainer());
-  map.on("zoomend", () => { syncArrowVisibility(); restyleAll(); });
+  map.on("zoomend", onZoomChanged);
   syncArrowVisibility();
+  syncSpotVisibility();
+  lastBand = renderBand();
 
   map.on("pm:create", async (e) => {
     const drawn = segsOf(e.layer)[0].map((p) => [p.lat, p.lng]);

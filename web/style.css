@@ -410,3 +410,15 @@ button.destructive:hover { background: #991b1b; border-color: #991b1b; }
 #osm-areas label:last-child { border-bottom: 0; }
 #osm-areas .why { color: var(--muted); font-size: 12px; }
 #osm-areas input[disabled] + span { opacity: .55; }
+
+/* "Something is happening." A sentence that changes every thirty seconds does
+   not read as working; a pulsing dot does. */
+#osm-note.working::before {
+  content: ""; display: inline-block; width: 8px; height: 8px;
+  margin-right: 7px; border-radius: 50%; background: var(--accent);
+  animation: osm-pulse 1.1s ease-in-out infinite;
+}
+@keyframes osm-pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  #osm-note.working::before { animation: none; opacity: .8; }
+}

@@ -51,6 +51,13 @@ export const WEIGHT_STEP = 3;
 export const MAX_STACKED = 3;
 export const MIN_STACK_ZOOM = 14;
 
+// Below this, individual spots are not drawn at all. A city-wide OSM import is
+// thousands of them — bike racks, bollards, humps — and each one is a DOM
+// marker that Leaflet repositions on every pan and zoom. At the zoom where you
+// can see a whole city they are a grey haze that means nothing anyway; the
+// corridors, which are canvas and cheap, carry the picture on their own.
+export const MIN_SPOT_ZOOM = 14;
+
 // Names the editor assigns to freshly-drawn features — never worth labelling.
 export const DEFAULT_NAMES = new Set(["new feature", "new path", "existing path",
                                       "new corridor"]);
