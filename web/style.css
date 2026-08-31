@@ -422,3 +422,22 @@ button.destructive:hover { background: #991b1b; border-color: #991b1b; }
 @media (prefers-reduced-motion: reduce) {
   #osm-note.working::before { animation: none; opacity: .8; }
 }
+
+/* The drag handle for the selected spot — the only DOM marker left. Bigger
+   than the canvas glyph underneath it so it reads as "grab this". */
+.spot-handle { background: none; border: none; cursor: grab; }
+.spot-handle div {
+  font-size: 15px; font-weight: bold; line-height: 22px; text-align: center;
+  text-shadow: 0 0 3px #fff, 0 0 5px #fff, 0 0 7px #fff;
+}
+.spot-handle:active { cursor: grabbing; }
+
+/* The debug readout. Deliberately plain and out of the way: it is for reading
+   numbers off, not for looking at. */
+#debug-readout {
+  position: absolute; left: 14px; bottom: 14px; z-index: 1350;
+  background: rgba(15, 23, 42, .82); color: #e2e8f0; padding: 7px 10px;
+  border-radius: var(--radius); font: 11.5px/1.5 ui-monospace, Menlo, Consolas,
+  monospace; white-space: pre; pointer-events: none;
+}
+#debug-readout[hidden] { display: none; }

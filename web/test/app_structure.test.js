@@ -216,19 +216,39 @@ for (const [name, src] of Object.entries(FILES)) {
     assert.match(src, /fitBounds\(boundaryGroup\.getBounds\(\)\)/);
   });
 
-  test(`${name}: spots leave the map by the GROUP, not one at a time`, () => {
-    // A city-wide OSM import is thousands of spots, and every one is a DOM
-    // marker Leaflet repositions on each pan. 4,750 features put 4,000 markers
-    // and 8,034 nodes under #map; hiding them below MIN_SPOT_ZOOM took that to
-    // 0 and 34. Removing them individually would be the slow way to do it.
-    const start = src.indexOf("function syncSpotVisibility");
-    assert.ok(start > 0, "syncSpotVisibility not found");
-    const body = src.slice(start, src.indexOf("\n}", start));
-    assert.match(body, /MIN_SPOT_ZOOM/);
-    assert.match(body, /map\.removeLayer\(g\)/,
-                 "the whole group comes off the map in one call");
-    assert.doesNotMatch(body, /forEach/,
-                        "never marker-by-marker — that is the cost being avoided");
+  test(`${name}: spots are drawn on the CANVAS, never as DOM markers`, () => {
+    // A real OSM import of Boston and Cambridge is 3,473 spots, 2,651 of them
+    // bike racks. As divIcons that was 3,473 DOM elements for Leaflet to move
+    // on every pan. Hiding them below a zoom threshold only pushed the lag to
+    // the first zoom where they appeared; canvas has no such cliff.
+    const start = src.indexOf("const SpotMarker");
+    assert.ok(start > 0, "SpotMarker not found");
+    assert.match(src.slice(start, start + 200), /L\.CircleMarker\.extend/,
+                 "CircleMarker gives canvas drawing, hit-testing and clicks");
+    const mk = src.indexOf("const spotMarker =");
+    assert.match(src.slice(mk, mk + 250), /renderer: networkRenderer/,
+                 "and it must share the network's canvas renderer");
+
+    // The ONE exception is the drag handle for the selected spot, because
+    // canvas cannot be dragged. One DOM marker, not thousands.
+    const add = src.indexOf("function addFeature");
+    const body = src.slice(add, src.indexOf("\n}", add));
+    assert.doesNotMatch(body, /L\.marker\(/,
+                        "addFeature must not create DOM markers for spots");
+    assert.match(src, /function syncDragHandle/);
+  });
+
+  test(`${name}: the drag handle follows the SELECTION, not every restyle`, () => {
+    // restyle() runs for every feature; rebuilding the handle inside it would
+    // create and destroy it thousands of times on one zoom.
+    const start = src.indexOf("function syncMarkers");
+    // Strip comments: this function EXPLAINS why it does not call it.
+    const body = src.slice(start, src.indexOf("\n}", start))
+      .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+    assert.doesNotMatch(body, /syncDragHandle\(\)/,
+                        "syncMarkers is per-feature and must not touch it");
+    const sel = src.indexOf("function selectFeature");
+    assert.match(src.slice(sel, src.indexOf("\n}", sel)), /syncDragHandle\(\)/);
   });
 
   test(`${name}: glyph runs have their OWN group so they can be hidden too`, () => {

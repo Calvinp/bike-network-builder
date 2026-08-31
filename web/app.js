@@ -217,13 +217,88 @@ function syncOverlays(f) {
   // so reshaping has to place them again, not just hand them new latlngs.
   syncGlyphs(f, layersFor(f).glyphRuns);
 }
-function pointIcon(t) {
-  return L.divIcon({ className: "spot-glyph", iconSize: [18, 18], iconAnchor: [9, 9],
-    html: `<div style="color:${pointColor(t)}">${treatmentGlyph(t.type)}</div>` });
-}
+/* Spots are drawn on the CANVAS, not as DOM markers.
+   A real OSM import of Boston and Cambridge is 3,473 spots — 2,651 of them
+   bike racks — and as `L.marker` divIcons that was 3,473 DOM elements for
+   Leaflet to reposition on every pan and zoom. Hiding them below a zoom
+   threshold only moved the problem to the first zoom where they appear, and a
+   count-based threshold would make them blink in and out as you scrolled.
+   Canvas has no such cliff: the same 3,473 cost about what one does.
+
+   L.CircleMarker already gives us canvas drawing, hit-testing and a click
+   event; only `_updatePath` is replaced, so the glyph is painted instead of a
+   circle. The invisible radius is what stays clickable. */
+const SpotMarker = L.CircleMarker.extend({
+  options: { radius: 9, stroke: false, fill: false, glyph: "\u25cf",
+             glyphColor: "#1a1a1a", big: true },
+  _updatePath() {
+    const r = this._renderer;
+    const ctx = r && r._ctx;
+    if (!ctx || !this._point) return;
+    const { x, y } = this._point;
+    ctx.save();
+    if (!this.options.big) {
+      // Zoomed out, a glyph is an illegible smudge and fillText is the
+      // expensive call. A dot says "something is here" for a fraction of it.
+      ctx.beginPath();
+      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = this.options.glyphColor;
+      ctx.globalAlpha = 0.85;
+      ctx.fill();
+    } else {
+      ctx.font = "bold 13px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      // The same white halo the DOM version had, so a glyph stays readable
+      // over a busy basemap.
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#ffffff";
+      ctx.strokeText(this.options.glyph, x, y);
+      ctx.fillStyle = this.options.glyphColor;
+      ctx.fillText(this.options.glyph, x, y);
+    }
+    ctx.restore();
+  },
+});
+const spotMarker = (latlng, t, big) => new SpotMarker(latlng, {
+  renderer: networkRenderer, pmIgnore: true,
+  glyph: treatmentGlyph(t.type), glyphColor: pointColor(t), big,
+});
+
 function syncMarkers(f) {
   const t = f.treatments[Math.min(f.sel, f.treatments.length - 1)] || f.treatments[0];
-  if (t) f.markers.forEach((m) => m.setIcon(pointIcon(t)));
+  if (!t) return;
+  const big = !map || map.getZoom() >= MIN_SPOT_ZOOM;
+  for (const m of f.markers) {
+    m.options.glyph = treatmentGlyph(t.type);
+    m.options.glyphColor = pointColor(t);
+    m.options.big = big;
+    if (m._renderer) m.redraw();
+  }
+  // NOT syncDragHandle() — restyle() calls this for EVERY feature, and the
+  // handle belongs to the selection, not to each redraw.
+}
+
+/* The ONE DOM marker in the app: a drag handle for the selected spot.
+   Everything is drawn on canvas, which cannot be dragged — so the thing being
+   edited, and only that, gets the expensive interactive treatment. */
+let dragHandle = null;
+function syncDragHandle() {
+  if (dragHandle) { pointsGroup.removeLayer(dragHandle); dragHandle = null; }
+  if (!selected || !selected.markers.length) return;
+  const m = selected.markers[0];
+  const t = selected.treatments[Math.min(selected.sel,
+                                         selected.treatments.length - 1)];
+  dragHandle = L.marker(m.getLatLng(), {
+    draggable: true, pmIgnore: true, keyboard: false,
+    icon: L.divIcon({ className: "spot-handle", iconSize: [22, 22],
+      iconAnchor: [11, 11],
+      html: `<div style="color:${pointColor(t || {})}">`
+            + `${treatmentGlyph((t || {}).type)}</div>` }),
+  });
+  dragHandle.on("drag", () => m.setLatLng(dragHandle.getLatLng()));
+  dragHandle.on("dragend", () => { m.setLatLng(dragHandle.getLatLng()); markDirty(); });
+  dragHandle.addTo(pointsGroup);
 }
 
 /* Chevrons showing which way a one-way treatment runs (the drawing order of
@@ -320,11 +395,13 @@ function onZoomChanged() {
    every pan. Taking the GROUP off the map is one call; taking the markers off
    one at a time is the thing being avoided. */
 function syncSpotVisibility() {
+  // Spots themselves are canvas and cost nothing, so they stay visible at
+  // every zoom — vanishing markers were always the compromise, not the goal.
+  // Glyph RUNS along lines are still DOM markers, and a city import can have
+  // a lot of them, so those keep the threshold.
   const show = map.getZoom() >= MIN_SPOT_ZOOM;
-  for (const g of [pointsGroup, glyphGroup]) {
-    if (show && !map.hasLayer(g)) map.addLayer(g);
-    else if (!show && map.hasLayer(g)) map.removeLayer(g);
-  }
+  if (show && !map.hasLayer(glyphGroup)) map.addLayer(glyphGroup);
+  else if (!show && map.hasLayer(glyphGroup)) map.removeLayer(glyphGroup);
 }
 function syncArrowVisibility() {
   const show = map.getZoom() >= ARROW_MIN_ZOOM;
@@ -372,10 +449,9 @@ function addFeature(props, treatments, lines, points) {
     f.layer.addTo(networkGroup);
   }
   for (const pt of points || []) {
-    const m = L.marker(pt, { icon: pointIcon(treatments[0] || defaultTreatment()),
-                             draggable: true, pmIgnore: true, keyboard: false });
+    const m = spotMarker(pt, treatments[0] || defaultTreatment(),
+                         !map || map.getZoom() >= MIN_SPOT_ZOOM);
     m.on("click", () => selectFeature(f));
-    m.on("dragend", () => markDirty());
     m.addTo(pointsGroup);        // own group — never networkGroup (getBounds)
     f.markers.push(m);
   }
@@ -465,6 +541,7 @@ function selectFeature(f) {
   const prev = selected; selected = f;
   if (prev && prev !== f) restyle(prev);
   restyle(f);
+  syncDragHandle();          // the selection is what has a handle
   fillForm(f);
   if (isMobile() && !document.querySelector(".sidebar").classList.contains("open")) {
     document.getElementById("peek-name").textContent = f.props.name || "(unnamed)";
@@ -472,6 +549,7 @@ function selectFeature(f) {
   }
 }
 function deselect() {
+  if (dragHandle) { pointsGroup.removeLayer(dragHandle); dragHandle = null; }
   stopEditingShape();
   const prev = selected; selected = null;
   if (prev) restyle(prev);
@@ -771,6 +849,7 @@ function recomputeTotals() {
   // The Areas card carries a per-area feature count, so it goes stale on every
   // add, delete and reshape unless it is rebuilt alongside the totals.
   renderAreas();
+  updateDebug();
   const net = liveNetwork();
   const s = summarize(net.features, net, { units });
   const num = (id, v) => { document.getElementById(id).textContent = v; };
@@ -923,6 +1002,47 @@ function applyPhaseView() {
     if (!show && selected === f) deselect();
   });
   syncArrows(shownSet);
+}
+
+/* ---------- the debug readout ----------
+   Turned on by `serve.py --debug`, or `?debug` in the URL. It exists so that
+   "it lags a bit" can become "it lags at z14 with 3,473 spots drawn", which is
+   a report someone can actually act on. Off by default and never shipped on:
+   a deployed copy has no server flag and the fetch simply fails. */
+let debugOn = false;
+async function initDebug() {
+  if (new URLSearchParams(location.search).has("debug")) debugOn = true;
+  else {
+    try {
+      const res = await fetch("debug-mode");
+      debugOn = res.ok && (await res.json()).debug === true;
+    } catch { debugOn = false; }
+  }
+  if (!debugOn) return;
+  document.getElementById("debug-readout").hidden = false;
+  map.on("zoomend moveend", updateDebug);
+  updateDebug();
+}
+function updateDebug() {
+  if (!debugOn) return;
+  const z = map.getZoom();
+  const spots = features.reduce((n, f) => n + f.markers.length, 0);
+  const lines = features.filter((f) => f.layer).length;
+  const verts = features.reduce((n, f) => n + (f.layer
+    ? segsOf(f.layer).reduce((k, seg) => k + seg.length, 0) : 0), 0);
+  const glyphRuns = features.reduce((n, f) => n + f.glyphs.length, 0);
+  // The number that actually predicts lag: how many DOM elements the map has
+  // to move on every pan. Canvas costs are counted separately because they
+  // behave completely differently.
+  const dom = document.querySelectorAll("#map .leaflet-marker-icon").length;
+  document.getElementById("debug-readout").textContent = [
+    `zoom      ${z}${z >= MIN_SPOT_ZOOM ? "  (spots as glyphs)" : "  (spots as dots)"}`,
+    `features  ${features.length}  (${lines} lines, ${spots} spots)`,
+    `vertices  ${verts}`,
+    `canvas    ${spots} spots + ${lines} lines`,
+    `DOM       ${dom} markers  (${glyphRuns} glyph-run)`,
+    `areas     ${config.areas.map((a) => a.name).join(", ") || "none"}`,
+  ].join("\n");
 }
 
 /* ---------- areas ----------
@@ -2442,6 +2562,7 @@ async function init() {
   recordHistory("");
   applyPhaseView();   // a fresh load must already honour upgrades
   maybeShowStart();
+  initDebug();
   initContextLayers();
 
   document.getElementById("btn-edit").onclick = toggleEditShape;

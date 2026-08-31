@@ -420,6 +420,17 @@ tests/                      pytest, incl. the Python<->JS parity checks
   value belong in ONE regex clause — `amenity~"^(bicycle_parking|bicycle_rental)$"`
   rather than two. Fewer clauses is directly less work for a shared service.
 
+### Telling someone what is slow
+
+- **`python web/serve.py --debug`** shows a readout of zoom, feature counts,
+  vertices, what is on the canvas and how many DOM markers exist. It turned
+  "it lags a bit" into "z14, 3,473 spots, 0 DOM markers", which is a report
+  someone can act on. `?debug` in the URL does the same for a deployed copy.
+  The server answers `/debug-mode`; a static host 404s and the app treats that
+  as off, so the same files serve both ways.
+- **The number that predicts lag is DOM markers**, not features. Canvas costs
+  are counted separately in the readout because they behave nothing alike.
+
 ### The awkward files
 
 - **`tests/fixtures/merge/` is generated** by `tools/make_test_networks.py` and
@@ -482,15 +493,25 @@ tests/                      pytest, incl. the Python<->JS parity checks
   used to render over an open menu. Anything new that must sit above the map
   belongs in the header, or needs its own z-index above 1200 (the mobile
   sidebar).
-- ⚠️ **Spots are not drawn below `MIN_SPOT_ZOOM`.** Lines live on a shared
-  CANVAS and cost almost nothing; every spot is a DOM marker that Leaflet
-  repositions on each pan and zoom. A 4,750-feature import put 4,000 markers
-  and 8,034 nodes under `#map`; hiding them below the threshold took that to 0
-  and 34. Two rules follow: hide by taking the whole GROUP off the map
-  (`syncSpotVisibility`, the pattern arrows already used), and do not BUILD
-  what will not be shown — `syncGlyphs` returns early rather than placing
-  markers into a hidden group. Glyph runs have their own `glyphGroup` so they
-  can be toggled the same way.
+- ⚠️ **Spots are drawn on the CANVAS. There is exactly ONE DOM marker in the
+  app.** A real OSM import of Boston and Cambridge is 4,758 features — 3,473
+  of them spots, 2,651 bike racks — and as `L.marker` divIcons that was 3,473
+  DOM elements for Leaflet to reposition on every pan. Hiding them below a zoom
+  threshold only moved the lag to the first zoom where they appeared, and a
+  COUNT-based threshold would make them blink in and out while scrolling.
+  Canvas has no such cliff: 3,473 cost about what one does. Measured on that
+  file: 0 DOM markers, 42 nodes under `#map`.
+  - `SpotMarker` extends `L.CircleMarker` and replaces only `_updatePath`, so
+    Leaflet still gives canvas drawing, hit-testing and a `click` event; the
+    invisible radius is what stays clickable.
+  - Below `MIN_SPOT_ZOOM` it paints a 2.5px dot instead of a glyph: `fillText`
+    is the expensive call, and a glyph is illegible at city zoom anyway. Spots
+    stay VISIBLE at every zoom — vanishing markers were the old compromise.
+  - The one exception is `syncDragHandle()`: canvas cannot be dragged, so the
+    SELECTED spot gets a real DOM marker on top. One, not thousands. It follows
+    the selection — never call it from `syncMarkers`, which runs per feature.
+  - Glyph RUNS along lines are still DOM markers and still keep the threshold
+    (`glyphGroup`); a city import had only 9, so they have not needed more.
 - ⚠️ **`restyleAll()` must not run on every zoom step.** It walks every feature
   and rebuilds its overlays and glyph markers — free on a hand-drawn network,
   and the lag on a city import. `onZoomChanged` compares a render BAND (the
