@@ -2204,7 +2204,13 @@ function openImportSheet(j) {
   renderImportPhases();
   document.getElementById("import-sheet").hidden = false;
   drawPreview();
-  focusIncoming(theirs.features);
+  // Open on the part of the file that lands in an area you already have. One
+  // stray feature in the Southern Ocean would otherwise fit the map to half
+  // the planet and hide the thing you actually came to look at — "Show all on
+  // map" is there for when you DO want to find the outlier.
+  const near = theirs.features.filter(
+    (f) => mine.areas.some((a) => String(plan.theirsBy.get(f.id)) === String(a.id)));
+  focusIncoming(near.length ? near : theirs.features);
   setStatus();
 }
 function closeImportSheet() {

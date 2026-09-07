@@ -453,6 +453,11 @@ button.destructive:hover { background: #991b1b; border-color: #991b1b; }
   position: fixed; inset: 0 0 0 auto; width: min(420px, 100%);
   background: none; display: block; padding: 0; pointer-events: none;
 }
+/* MUST come after the rule above. `.sheet[hidden]` and `.sheet.dock` have the
+   same specificity, so whichever is written last wins — and `display: block`
+   winning meant the panel could never be closed. Cancel, the x and Bring it in
+   all "did nothing" because the only thing broken was that it stayed visible. */
+.sheet.dock[hidden] { display: none; }
 .sheet.dock .sheet-inner {
   pointer-events: auto; width: 100%; max-width: none; height: 100%;
   max-height: none; border-radius: 0; border-left: 1px solid var(--line);

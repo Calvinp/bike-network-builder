@@ -37,6 +37,30 @@ test("every .sheet is a backdrop with a .sheet-inner card inside", () => {
   }
 });
 
+test("index.html has balanced divs", () => {
+  // A slice-based edit ate the </div> closing .main, which put the import
+  // panel inside a flex container and left a wrapper open to the end of the
+  // document. Cheap to check, invisible until something lays out wrongly.
+  const opens = (HTML.match(/<div\b/g) || []).length;
+  const closes = (HTML.match(/<\/div>/g) || []).length;
+  assert.equal(opens, closes, `${opens} <div vs ${closes} </div>`);
+});
+
+test("every sheet can actually be hidden", () => {
+  // `.sheet[hidden]` and `.sheet.dock` have the SAME specificity, so whichever
+  // is written last wins. `display: block` winning meant the import panel came
+  // up on load and could not be closed — Cancel, the x and Bring it in all
+  // "did nothing", because the only broken thing was that it stayed visible.
+  const css = readFileSync(new URL("../style.css", import.meta.url), "utf8");
+  const hideAll = css.indexOf(".sheet[hidden]");
+  const dock = css.indexOf(".sheet.dock {");
+  const hideDock = css.indexOf(".sheet.dock[hidden]");
+  assert.ok(hideAll >= 0 && dock >= 0, "both rules must exist");
+  assert.ok(hideDock > dock,
+            ".sheet.dock[hidden] must come AFTER .sheet.dock, or the panel "
+            + "can never be hidden");
+});
+
 test("the start screen and reset both exist, and reset warns", () => {
   // An empty map with no explanation is a dead end, and a reset that does not
   // say what it destroys is a trap.
