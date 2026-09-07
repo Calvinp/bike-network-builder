@@ -394,14 +394,30 @@ function onZoomChanged() {
 /* Thousands of spot markers are thousands of DOM nodes that Leaflet moves on
    every pan. Taking the GROUP off the map is one call; taking the markers off
    one at a time is the thing being avoided. */
+/* Spots are OFF by default. They are cheap to draw now, but a city import is
+   thousands of them and they sit on top of the lanes the map is actually
+   about — at low zoom they merge into a grey smear. Someone who wants to work
+   on bike parking turns them on; everyone else gets the network. */
+let showSpots = false;
 function syncSpotVisibility() {
-  // Spots themselves are canvas and cost nothing, so they stay visible at
-  // every zoom — vanishing markers were always the compromise, not the goal.
-  // Glyph RUNS along lines are still DOM markers, and a city import can have
-  // a lot of them, so those keep the threshold.
-  const show = map.getZoom() >= MIN_SPOT_ZOOM;
-  if (show && !map.hasLayer(glyphGroup)) map.addLayer(glyphGroup);
-  else if (!show && map.hasLayer(glyphGroup)) map.removeLayer(glyphGroup);
+  // Spots themselves are canvas and cost nothing, so when they are ON they
+  // stay visible at every zoom. Glyph RUNS along lines are still DOM markers,
+  // and a city import can have a lot of them, so those also keep the zoom
+  // threshold on top of the toggle.
+  for (const g of [pointsGroup, glyphGroup]) {
+    const show = showSpots && (g !== glyphGroup || map.getZoom() >= MIN_SPOT_ZOOM);
+    if (show && !map.hasLayer(g)) map.addLayer(g);
+    else if (!show && map.hasLayer(g)) map.removeLayer(g);
+  }
+}
+function setShowSpots(on) {
+  showSpots = Boolean(on);
+  for (const id of ["show-spots", "show-spots-roomy"]) {
+    const el = document.getElementById(id);
+    if (el) el.checked = showSpots;
+  }
+  syncSpotVisibility();
+  updateDebug();
 }
 function syncArrowVisibility() {
   const show = map.getZoom() >= ARROW_MIN_ZOOM;
@@ -1036,7 +1052,8 @@ function updateDebug() {
   // behave completely differently.
   const dom = document.querySelectorAll("#map .leaflet-marker-icon").length;
   document.getElementById("debug-readout").textContent = [
-    `zoom      ${z}${z >= MIN_SPOT_ZOOM ? "  (spots as glyphs)" : "  (spots as dots)"}`,
+    `zoom      ${z}  spots ${!showSpots ? "OFF"
+      : z >= MIN_SPOT_ZOOM ? "as glyphs" : "as dots"}`,
     `features  ${features.length}  (${lines} lines, ${spots} spots)`,
     `vertices  ${verts}`,
     `canvas    ${spots} spots + ${lines} lines`,
@@ -1800,17 +1817,25 @@ function openOsmSheet() {
     label.appendChild(cb); label.appendChild(name); label.appendChild(note);
     box.appendChild(label);
   }
-  updateOsmWeight();
-  document.getElementById("osm-go").disabled = !config.areas.length;
+  updateOsmWeight();          // also decides whether Look up is available
   document.getElementById("osm-sheet").hidden = false;
 }
 /* Say BEFORE the button that this one is big. "It failed" after a 40-second
    wait is a worse answer than "this is a lot to ask of a shared service". */
 function updateOsmWeight() {
+  const paths = document.getElementById("osm-paths").checked;
   const spots = document.getElementById("osm-spots").checked;
-  const heavy = [...document.querySelectorAll("#osm-areas input:checked")]
+  const picked = [...document.querySelectorAll("#osm-areas input:checked")]
     .map((cb) => config.areas.find((a) => String(a.id) === cb.dataset.areaId))
-    .filter((a) => a && isHeavy(bboxOfBoundary(a.boundary), { spots }))
+    .filter(Boolean);
+  // Grey the button out rather than let someone send a query that cannot
+  // return anything.
+  const go = document.getElementById("osm-go");
+  go.disabled = !picked.length || !(paths || spots);
+  if (!picked.length) { osmNote("Pick at least one area."); return; }
+  if (!paths && !spots) { osmNote("Pick something to look for."); return; }
+  const heavy = picked
+    .filter((a) => isHeavy(bboxOfBoundary(a.boundary), { paths, spots }))
     .map((a) => a.name);
   if (!heavy.length) { osmNote(""); return; }
   osmNote(`${heavy.join(" and ")} ${heavy.length === 1 ? "is" : "are"} large, `
@@ -1841,6 +1866,7 @@ async function runOsmImport() {
 
   const go = document.getElementById("osm-go");
   const stop = document.getElementById("osm-stop");
+  const paths = document.getElementById("osm-paths").checked;
   const spots = document.getElementById("osm-spots").checked;
   go.disabled = true;
   go.textContent = "Looking up…";
@@ -1861,6 +1887,7 @@ async function runOsmImport() {
     osmNote(`Looking up ${where}…`, true);
     try {
       const elements = await session.elementsForArea(a, {
+        paths,
         spots,
         signal: osmAbort.signal,
         // Overpass says when the next slot frees up. Waiting costs it nothing;
@@ -1914,6 +1941,7 @@ async function runOsmImport() {
     meta: { ...(config.meta || {}), license: "ODbL-1.0",
             attribution: "\u00a9 OpenStreetMap contributors" },
   }));
+  if (spots && !showSpots) setShowSpots(true);   // or it looks like nothing came
   if (!failed.length) closeOsmSheet();
   const j = await store.importBytes(new TextEncoder().encode(text));
   if (!j.ok) {
@@ -2374,6 +2402,9 @@ function startDraw(over) {
 }
 function startPlacePoint(over) {
   if (phaseView !== "all") setPhaseView("all");
+  // Asking to add a spot is asking to see spots. Placing one into a hidden
+  // layer would look exactly like the click doing nothing.
+  if (!showSpots) setShowSpots(true);
   deselect();
   placingPoint = over || { status: "proposed" };
   setStatus(placingPoint.status === "existing"
@@ -2509,7 +2540,7 @@ async function init() {
   }).observe(map.getContainer());
   map.on("zoomend", onZoomChanged);
   syncArrowVisibility();
-  syncSpotVisibility();
+  setShowSpots(false);        // the default, and it draws the initial state
   lastBand = renderBand();
 
   map.on("pm:create", async (e) => {
@@ -2586,6 +2617,7 @@ async function init() {
     else importInput.click();
   });
   document.getElementById("osm-spots").addEventListener("change", updateOsmWeight);
+  document.getElementById("osm-paths").addEventListener("change", updateOsmWeight);
   document.getElementById("osm-areas").addEventListener("change", updateOsmWeight);
   document.getElementById("osm-cancel").onclick = closeOsmSheet;
   document.getElementById("osm-x").onclick = closeOsmSheet;
@@ -2637,6 +2669,12 @@ async function init() {
     e.target.value = "";
   });
   document.getElementById("show-boundary").addEventListener("change", redrawBoundaries);
+  // Two checkboxes (header on roomy screens, Display menu elsewhere), one
+  // setting — the same arrangement Snap already uses.
+  for (const id of ["show-spots", "show-spots-roomy"]) {
+    document.getElementById(id).addEventListener("change",
+      (e) => setShowSpots(e.target.checked));
+  }
   const unitsSel = document.getElementById("units");
   if (unitsSel) {
     unitsSel.value = units;

@@ -238,6 +238,56 @@ for (const [name, src] of Object.entries(FILES)) {
     assert.match(src, /function syncDragHandle/);
   });
 
+  test(`${name}: spot improvements are OFF until asked for`, () => {
+    // They are cheap to draw now, but a city import is thousands of them
+    // sitting on top of the lanes the map is actually about.
+    assert.match(src, /let showSpots = false;/,
+                 "the default is off, in the declaration");
+    const start = src.indexOf("function syncSpotVisibility");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /showSpots/, "and visibility must consult it");
+  });
+
+  test(`${name}: adding a spot turns spots on`, () => {
+    // Placing one into a hidden layer looks exactly like the click doing
+    // nothing, which is the worst possible reading of a working feature.
+    const start = src.indexOf("function startPlacePoint");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /setShowSpots\(true\)/);
+    // Same for an import that went and fetched them.
+    const run = src.indexOf("async function runOsmImport");
+    assert.match(src.slice(run, run + 4000), /spots && !showSpots/);
+  });
+
+  test(`${name}: one setting, two checkboxes`, () => {
+    // The header one on roomy screens and the Display-menu one elsewhere have
+    // to agree — the same arrangement Snap already uses.
+    const start = src.indexOf("function setShowSpots");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /show-spots.*show-spots-roomy|show-spots-roomy.*show-spots/s,
+                 "both checkboxes are updated from the one setting");
+  });
+
+  test(`${name}: Look up is disabled when it could not return anything`, () => {
+    // No area picked, or neither paths nor spots: greying out beats sending a
+    // query to a shared service that cannot answer it.
+    const start = src.indexOf("function updateOsmWeight");
+    assert.ok(start > 0, "updateOsmWeight not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /go\.disabled = !picked\.length \|\| !\(paths \|\| spots\)/);
+  });
+
+  test(`${name}: paths are a choice in the import, not a given`, () => {
+    // A city whose OSM lanes are all paint still has bike parking worth having.
+    assert.doesNotMatch(HTML, /id="osm-paths"[^>]*disabled/,
+                        "the paths checkbox must not be locked on");
+    const run = src.indexOf("async function runOsmImport");
+    const body = src.slice(run, run + 4000);
+    assert.match(body, /osm-paths"\)\.checked/, "and the run must read it");
+    // \s+ rather than \n: the working copy may be CRLF.
+    assert.match(body, /paths,\s+spots,/, "and pass it through");
+  });
+
   test(`${name}: the drag handle follows the SELECTION, not every restyle`, () => {
     // restyle() runs for every feature; rebuilding the handle inside it would
     // create and destroy it thousands of times on one zoom.

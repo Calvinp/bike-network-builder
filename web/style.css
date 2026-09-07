@@ -441,3 +441,7 @@ button.destructive:hover { background: #991b1b; border-color: #991b1b; }
   monospace; white-space: pre; pointer-events: none;
 }
 #debug-readout[hidden] { display: none; }
+
+/* A checkbox in the Display menu sits right, not stretched like a select. */
+.menu-field.checkbox-field { align-items: center; }
+.menu-field.checkbox-field input { margin-left: auto; }

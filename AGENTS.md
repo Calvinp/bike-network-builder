@@ -400,6 +400,12 @@ tests/                      pytest, incl. the Python<->JS parity checks
   other way. The tags that drove each decision travel in the feature's `notes`
   (`explainTags`) so a reviewer can see why, and the sheet says plainly that
   the import is only as good as OSM is.
+- **Paths and spots are INDEPENDENT halves of the query**, and either can be
+  asked for alone. A city whose OSM lanes are all paint an activist would not
+  count still has bike parking worth importing. `Look up` is disabled when no
+  area is ticked or neither half is — greying out beats sending a shared
+  service a query that cannot answer anything. The cache key covers both, so
+  the three questions about one town are three separate entries.
 - **Spot improvements (bike parking, bike share docks, humps, bollards,
   islands, tree rows) are OPT-IN.** Malden alone returns ~100 of them and a city returns thousands;
   every one lands in the review list, and a review list with thousands of rows
@@ -510,6 +516,14 @@ tests/                      pytest, incl. the Python<->JS parity checks
   - The one exception is `syncDragHandle()`: canvas cannot be dragged, so the
     SELECTED spot gets a real DOM marker on top. One, not thousands. It follows
     the selection — never call it from `syncMarkers`, which runs per feature.
+- **Spots are OFF by default** (`showSpots`), with a checkbox in the header on
+  roomy screens and in the Display menu everywhere else — two controls, one
+  setting, the arrangement Snap already uses. Cheap to draw is not the same as
+  worth drawing: a city import is thousands of spots sitting on top of the
+  lanes the map is about, and at low zoom they merge into a grey smear.
+  ⚠️ Two places turn it back on, because otherwise a working feature looks
+  broken: placing a spot (`startPlacePoint`) and an import that fetched them.
+  A click that appears to do nothing is the worst possible reading.
   - Glyph RUNS along lines are still DOM markers and still keep the threshold
     (`glyphGroup`); a city import had only 9, so they have not needed more.
 - ⚠️ **`restyleAll()` must not run on every zoom step.** It walks every feature

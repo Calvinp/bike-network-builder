@@ -106,10 +106,13 @@ export const SPOT_CLAUSES = [
 
 // Mirrors tools/fetch_existing_infra.py. A parity test pins them together,
 // because two copies of a query that drift are two different tools.
-export function overpassQuery(bbox, { spots = false } = {}) {
+export function overpassQuery(bbox, { paths = true, spots = false } = {}) {
   const [s, w, n, e] = bbox.map((v) => Number(v).toFixed(6));
   const box = `${s},${w},${n},${e}`;
-  const clauses = [...PATH_CLAUSES, ...(spots ? SPOT_CLAUSES : [])]
+  // Either half can be asked for alone. A city whose OSM lanes are all paint
+  // an activist would not count still has bike parking worth having.
+  const clauses = [...(paths ? PATH_CLAUSES : []),
+                   ...(spots ? SPOT_CLAUSES : [])]
     .map((c) => `  ${c}(${box});`).join("\n");
   return `[out:json][timeout:90];
 (
@@ -334,7 +337,8 @@ function makeOsmFeature({ id, type, tags, name, onStreet = "", geometry,
 // Is this query going to be hard work for a shared service? Used by the UI to
 // warn BEFORE the button, not to refuse — plenty of people have a legitimate
 // reason to import a city, and the honest thing is to say what it costs.
-export function isHeavy(bbox, { spots = false } = {}) {
+export function isHeavy(bbox, { paths = true, spots = false } = {}) {
+  if (!paths && !spots) return false;
   const sqkm = bboxAreaSqKm(bbox);
   return sqkm > HEAVY_AREA_SQKM || (spots && sqkm > HEAVY_AREA_SQKM / 3);
 }
@@ -480,8 +484,11 @@ export class OverpassSession {
   // reloads, and imports again should cost the service one query, not two —
   // and after a failed multi-area run, the areas that DID come back must not
   // be fetched a second time.
-  async elementsForArea(area, { signal, spots = false, onWait } = {}) {
-    const key = `osm:${area.id || area.name || ""}:${spots ? "spots" : "paths"}`;
+  async elementsForArea(area, { signal, paths = true, spots = false,
+                                onWait } = {}) {
+    if (!paths && !spots) return [];        // nothing asked, nothing sent
+    const key = `osm:${area.id || area.name || ""}:`
+      + `${paths ? "p" : ""}${spots ? "s" : ""}`;
     if (this.cache.has(key)) return this.cache.get(key);
     const stored = await this.readCache(key);
     if (stored) { this.cache.set(key, stored); return stored; }
@@ -498,7 +505,7 @@ export class OverpassSession {
         + `which is past the ${MAX_AREA_SQKM} km² limit for a live query. `
         + "Import its towns separately, or use tools/fetch_existing_infra.py.");
     }
-    const doc = await this.run(overpassQuery(bbox, { spots }),
+    const doc = await this.run(overpassQuery(bbox, { paths, spots }),
                                { signal, onWait });
     const elements = (doc && doc.elements) || [];
     this.cache.set(key, elements);

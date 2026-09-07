@@ -25,6 +25,9 @@
     <label class="checkbox roomy-only"
       title="Clicks near a street follow it; clicks away from streets (parks, trails) stay exactly where you put them">
       <input type="checkbox" id="snap-roomy" checked /> Snap</label>
+    <label class="checkbox roomy-only"
+      title="Draw bike parking, speed humps, bollards and other single-point improvements. Off by default: a city import is thousands of them, and they cover the lanes underneath.">
+      <input type="checkbox" id="show-spots-roomy" /> Spots</label>
     <div class="dropdown cramped-only">
       <button id="btn-add" class="ghost">+ Add ▾</button>
       <div class="menu" id="add-menu" hidden>
@@ -58,6 +61,10 @@
             <option value="imperial" selected>miles</option>
             <option value="metric">kilometres</option>
           </select></label>
+        <label class="menu-field checkbox-field"
+          title="Draw bike parking, speed humps, bollards and other single-point improvements. Off by default: a city import is thousands of them, and they cover the lanes underneath.">
+          <span>Spot improvements</span>
+          <input type="checkbox" id="show-spots" /></label>
         <label class="menu-field"
           title="Preview the network as it will exist after each phase. Totals and exports always cover the full plan.">
           <span>Show</span>
@@ -175,7 +182,7 @@
       <div id="osm-areas"></div>
 
       <h3>What to look for</h3>
-      <label class="checkbox"><input type="checkbox" id="osm-paths" checked disabled />
+      <label class="checkbox"><input type="checkbox" id="osm-paths" checked />
         Paths and bike lanes</label>
       <label class="checkbox"><input type="checkbox" id="osm-spots" />
         Also spot improvements — bike parking, speed humps, bollards,

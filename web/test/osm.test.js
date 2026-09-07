@@ -506,3 +506,49 @@ test("a wait can be cancelled, and cancelling is not a failure to report", async
                             { signal: ctl.signal }),
     (e) => e.name === "AbortError");
 });
+
+test("either half of the query can be asked for alone", () => {
+  // A city whose OSM lanes are all paint an activist would not count still has
+  // bike parking worth importing.
+  const spotsOnly = overpassQuery([1, 2, 3, 4], { paths: false, spots: true });
+  assert.doesNotMatch(spotsOnly, /highway"="cycleway/);
+  assert.match(spotsOnly, /bicycle_parking/);
+
+  const pathsOnly = overpassQuery([1, 2, 3, 4], { paths: true, spots: false });
+  assert.match(pathsOnly, /highway"="cycleway/);
+  assert.doesNotMatch(pathsOnly, /bicycle_parking/);
+});
+
+test("asking for nothing sends nothing", async () => {
+  const { s, calls, statusCalls } = session(() => ok([]));
+  const els = await s.elementsForArea(
+    { id: "m", name: "Malden", boundary: MALDEN },
+    { paths: false, spots: false });
+  assert.deepEqual(els, []);
+  assert.equal(calls.length, 0);
+  assert.equal(statusCalls.length, 0, "not even a status check");
+});
+
+test("paths-only and spots-only are cached apart", async () => {
+  // Three different questions about one town, three different answers.
+  const disk = new Map();
+  const cache = { getItem: async (k) => disk.get(k) ?? null,
+                  setItem: async (k, v) => { disk.set(k, String(v)); } };
+  const area = { id: "m", name: "Malden", boundary: MALDEN };
+  const { s, calls } = session(() => ok([]));
+  s.store = cache;
+  await s.elementsForArea(area, { paths: true, spots: false });
+  await s.elementsForArea(area, { paths: false, spots: true });
+  await s.elementsForArea(area, { paths: true, spots: true });
+  assert.equal(calls.length, 3);
+  assert.equal(disk.size, 3);
+  // ...and asking the same question again costs nothing.
+  await s.elementsForArea(area, { paths: false, spots: true });
+  assert.equal(calls.length, 3);
+});
+
+test("an empty request is never heavy", () => {
+  const boston = [42.23, -71.19, 42.40, -70.99];
+  assert.equal(isHeavy(boston, { paths: false, spots: false }), false);
+  assert.equal(isHeavy(boston, { paths: true, spots: false }), true);
+});
