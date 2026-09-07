@@ -281,6 +281,32 @@ tests/                      pytest, incl. the Python<->JS parity checks
 - GeoJSON is `[lon, lat]`; every boundary in this codebase is `[lat, lon]`.
   The flip happens once, in `toBoundary`, at the edge.
 
+### The import sheet
+
+- ⚠️ **It docks, it does not cover.** Every question the import asks is about
+  geography — which area, which feature, whose version of this street — and it
+  used to ask them over a dimmed-out map. "Somewhere else" is an honest label
+  for a bucket and a useless answer to "where?". `.sheet.dock` drops the
+  backdrop and pins the panel to one side; below 760px it goes back to
+  full-screen, because a phone map is too small to preview into.
+- **The incoming file is drawn on the real map** (`drawPreview`, violet, on the
+  shared canvas renderer, so a 3,000-feature OSM import previews as cheaply as
+  it draws). `Show` per area fits the map to what the file has THERE; hovering
+  a feature row highlights it; clicking one zooms to it. That is the answer to
+  "which bollard is this?", which no amount of naming would have solved.
+- ⚠️ **A per-feature choice OVERRIDES its area's radio** (`applyMerge`). The
+  area choice used to be a GATE evaluated first, so ticking one street inside
+  a keep-mine area did nothing and "merge just this one" could not be
+  expressed. The radio is now a bulk shortcut that SETS the feature choices.
+  An absent choice still falls back to the area, so the UI never has to
+  enumerate every feature up front.
+- **The feature list is grouped by area and shows every area**, including ones
+  set to keep-mine — otherwise you cannot reach into one to take a single
+  street. It is collapsed by default, always: an OSM import is thousands of
+  rows and opening it buried the decision that mattered.
+- **Keep the copy short.** The map does the explaining now; prose that
+  re-describes what the panel already shows is what made it feel padded.
+
 ### Dialogs, starting, and starting over
 
 - ⚠️ **`.sheet` is the BACKDROP, `.sheet-inner` is the card.** The backdrop is

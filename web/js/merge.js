@@ -171,9 +171,11 @@ function cloneFeature(f, idMap, phaseFor) {
  * `areaChoices` maps area id -> "mine" | "theirs" (missing = keep mine).
  * `phaseMapping` maps their phase id -> my phase id, or the string "__new__"
  * to append their phase to my plan.
- * `featureChoices` is the ADVANCED escape hatch: feature id -> boolean. It is
- * per-feature SELECTION, not per-feature merging — a different and much
- * simpler thing.
+ * `featureChoices` maps feature id -> boolean, and OVERRIDES the area choice
+ * for that feature. It is per-feature SELECTION, not per-feature merging — a
+ * different and much simpler thing. An id that is absent falls back to the
+ * area choice, so the two stay consistent without the UI having to enumerate
+ * every feature up front.
  * `additive` appends everything chosen without replacing anything, which is
  * what an existing-conditions file wants.
  */
@@ -235,8 +237,15 @@ export function applyMerge(mine, theirs, {
   }
   for (const f of theirs.features) {
     const area = plan.theirsBy.get(f.id);
-    if (!additive && choiceFor(area) !== "theirs") continue;
-    if (featureChoices && featureChoices[f.id] === false) continue;
+    // An explicit per-feature choice WINS over the area setting. The area
+    // radio is a bulk shortcut for setting these, not a gate above them: the
+    // gate came first, so ticking one street inside an area you were keeping
+    // did nothing at all, and "merge just this one" was impossible to express.
+    const picked = featureChoices ? featureChoices[f.id] : undefined;
+    const include = picked !== undefined
+      ? picked
+      : (additive || choiceFor(area) === "theirs");
+    if (!include) continue;
     features.push(cloneFeature(f, idMap, phaseFor));
   }
 

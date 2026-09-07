@@ -444,3 +444,49 @@ test("the ordinary cases raise no licence noise", () => {
   assert.equal(licenseConflict({ license: "ODbL-1.0" }, { license: "CC0-1.0" }),
                null, "public-domain data going into ODbL is normal");
 });
+
+// A real boundary, so features actually land in the area rather than in the
+// "somewhere else" bucket — without one, an areaChoices test tests nothing.
+const BOX = [[[[42.40, -71.10], [42.50, -71.10], [42.50, -71.00],
+               [42.40, -71.00], [42.40, -71.10]]]];
+const inBox = (id, name, lat) => makeFeature({
+  id, name,
+  geometry: [[[lat, -71.06], [lat + 0.005, -71.05]]],
+  treatments: [makeTreatment({ id: `t-${id}`, type: "shared_use_path",
+                               status: "existing" })],
+});
+const netOf = (features) => makeNetwork({
+  areas: [makeArea({ id: "a1", name: "Malden", boundary: BOX })], features,
+});
+
+test("one feature can be taken from an area you are otherwise keeping", () => {
+  // The gap that made "merge just this street" impossible: the area choice was
+  // a GATE above featureChoices, so ticking a feature inside a keep-mine area
+  // did nothing. The per-feature choice wins now, and the radio is a shortcut
+  // for setting it.
+  const merged = applyMerge(
+    netOf([inBox("m1", "Mine", 42.42)]),
+    netOf([inBox("t1", "Wanted", 42.44), inBox("t2", "Not wanted", 42.46)]),
+    { areaChoices: { a1: "mine" }, featureChoices: { t1: true } });
+  assert.deepEqual(merged.features.map((f) => f.name).sort(),
+                   ["Mine", "Wanted"],
+                   "mine survives AND the one street I ticked comes in");
+});
+
+test("unticking one feature in a use-theirs area leaves the rest", () => {
+  const merged = applyMerge(
+    netOf([]),
+    netOf([inBox("t1", "Keep", 42.42), inBox("t2", "Drop", 42.44)]),
+    { areaChoices: { a1: "theirs" }, featureChoices: { t2: false } });
+  assert.deepEqual(merged.features.map((f) => f.name), ["Keep"]);
+});
+
+test("an absent feature choice still follows the area", () => {
+  // The UI does not enumerate every feature up front, so silence has to mean
+  // "whatever the area says".
+  const theirs = netOf([inBox("t1", "Theirs", 42.42)]);
+  assert.equal(applyMerge(netOf([]), theirs,
+    { areaChoices: { a1: "theirs" }, featureChoices: {} }).features.length, 1);
+  assert.equal(applyMerge(netOf([]), theirs,
+    { areaChoices: { a1: "mine" }, featureChoices: {} }).features.length, 0);
+});

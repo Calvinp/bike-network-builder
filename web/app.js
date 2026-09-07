@@ -58,7 +58,7 @@ let baseNet = null;         // last parsed stored network (uneditable fields)
 let place = null;           // the deployment default area (data/place.json)
 
 let map, networkGroup, boundaryGroup, arrowsGroup, pointsGroup, overlayGroup;
-let maskGroup, glyphGroup;
+let maskGroup, glyphGroup, previewGroup;
 let networkRenderer = null;
 let features = [];          // [{props, treatments, sel, layer, overlays, markers, arrows}]
 let selected = null;
@@ -2079,6 +2079,85 @@ async function afterImport(j, notes) {
    a different and much simpler thing. */
 let importState = null;
 
+/* ---------- seeing what you are importing ----------
+   Every question the import sheet asks is about geography — which area, which
+   feature, whose version of this street. Asking them over a dimmed-out map was
+   the whole problem: "Somewhere else" is a perfectly good name for a bucket
+   and a useless answer to "where?". So the sheet docks to one side and the
+   incoming features are drawn on the map you already have. */
+const PREVIEW = "#7c3aed";
+let previewLayers = new Map();     // feature id -> layer
+
+function clearPreview() {
+  previewGroup.clearLayers();
+  previewLayers = new Map();
+}
+/* Draw every incoming feature. Canvas, so a 3,000-feature OSM import previews
+   as cheaply as it draws. */
+function drawPreview() {
+  clearPreview();
+  if (!importState) return;
+  for (const f of importState.theirs.features) {
+    const parts = (f.geometry || []).filter((p) => p.length >= 2);
+    const points = (f.geometry || []).filter((p) => p.length === 1);
+    let layer = null;
+    if (parts.length) {
+      layer = L.polyline(parts.length === 1 ? parts[0] : parts, {
+        color: PREVIEW, weight: 4, opacity: 0.9, dashArray: "6,4",
+        renderer: networkRenderer, interactive: false, pmIgnore: true });
+    } else if (points.length) {
+      layer = L.circleMarker(points[0][0], {
+        radius: 5, color: PREVIEW, weight: 2, fillColor: PREVIEW,
+        fillOpacity: 0.6, renderer: networkRenderer, interactive: false,
+        pmIgnore: true });
+    }
+    if (!layer) continue;
+    previewGroup.addLayer(layer);
+    previewLayers.set(f.id, layer);
+  }
+}
+/* Highlight one incoming feature — what "hover a row" points at. */
+let hotLayer = null;
+function highlightIncoming(id) {
+  if (hotLayer) {
+    hotLayer.setStyle(hotLayer.options.__base);
+    hotLayer = null;
+  }
+  const layer = previewLayers.get(id);
+  if (!layer) return;
+  layer.options.__base = layer.options.__base || {
+    color: layer.options.color, weight: layer.options.weight,
+    opacity: layer.options.opacity,
+  };
+  layer.setStyle({ color: "#f59e0b", weight: 8, opacity: 1 });
+  if (layer.bringToFront) layer.bringToFront();
+  hotLayer = layer;
+}
+/* Fit the map to a set of incoming features. This is the answer to "where is
+   Somewhere else" — the question the old sheet could not answer at all. */
+function focusIncoming(featureList) {
+  const pts = [];
+  for (const f of featureList) {
+    for (const part of f.geometry || []) for (const pt of part) pts.push(pt);
+  }
+  if (!pts.length) return;
+  const bounds = L.latLngBounds(pts);
+  // A single point has no extent, so fitBounds would zoom to the maximum.
+  if (pts.length === 1) map.setView(pts[0], 17);
+  else map.fitBounds(bounds.pad(0.15));
+}
+const incomingIn = (areaId) => importState.theirs.features.filter(
+  (f) => String(importState.plan.theirsBy.get(f.id)) === String(areaId));
+
+/* Where a feature is, in words, for the row. The map is the real answer; this
+   is what fits on one line beside a checkbox. */
+function whereText(f) {
+  if (f.on_street) return f.on_street;
+  const first = (f.geometry || []).flat()[0];
+  if (!first) return "";
+  return `${first[0].toFixed(4)}, ${first[1].toFixed(4)}`;
+}
+
 function openImportSheet(j) {
   const theirs = j.parsed;
   const mine = liveNetwork();
@@ -2091,8 +2170,9 @@ function openImportSheet(j) {
                   featureChoices: null };
 
   const decided = plan.areas.filter((a) => !a.untouched).length;
+  const n = theirs.features.length;
   document.getElementById("import-title").textContent =
-    `This file covers ${decided} area${decided === 1 ? "" : "s"}.`;
+    `${n} feature${n === 1 ? "" : "s"} in ${decided} area${decided === 1 ? "" : "s"}`;
 
   // A file pulled from OpenStreetMap gets its review list OPEN, not tucked
   // behind "Advanced". OSM's idea of a bike lane is not always yours — a
@@ -2101,34 +2181,35 @@ function openImportSheet(j) {
   // candidates, you untick what you don't want, nothing lands blind.
   const fromOsm = theirs.features.some((f) => (f.tags || {}).source === "osm");
   const advanced = document.getElementById("import-advanced");
-  advanced.open = fromOsm || plan.additive;
-  advanced.querySelector("summary").textContent = fromOsm
-    ? "Review each one — this came from OpenStreetMap"
-    : "Advanced: choose individual features";
+  // Collapsed by default, always. An OSM import is thousands of rows, and
+  // opening it made the panel unreadable at the moment it mattered most.
+  advanced.open = false;
+  advanced.querySelector("summary").textContent =
+    `Pick individual features (${theirs.features.length})`;
   document.getElementById("import-sub").textContent = fromOsm
-    ? "OpenStreetMap's idea of a bike lane may not be yours. Untick anything "
-      + "you wouldn't call existing infrastructure."
+    ? "From OpenStreetMap. Check what you would call existing infrastructure."
     : plan.additive
-      ? "This file records what's already on the ground, so it's added to "
-        + "your network — nothing of yours is replaced."
-      : "Choose what to bring in. Nothing is replaced unless you say so.";
+      ? "Existing conditions. Nothing of yours is replaced."
+      : "Nothing is replaced unless you say so.";
   // An additive file has no keep-mine/use-theirs question to ask.
   document.getElementById("import-areas").hidden = plan.additive;
   document.getElementById("import-all").hidden = plan.additive;
   if (plan.additive) {
     document.getElementById("import-title").textContent =
-      `${theirs.features.length} thing`
-      + `${theirs.features.length === 1 ? "" : "s"} already on the ground.`;
+      `${theirs.features.length} already on the ground`;
   }
   renderImportAreas();
   renderImportSeam();
   renderImportFeatures();
   renderImportPhases();
   document.getElementById("import-sheet").hidden = false;
+  drawPreview();
+  focusIncoming(theirs.features);
   setStatus();
 }
 function closeImportSheet() {
   document.getElementById("import-sheet").hidden = true;
+  clearPreview();
   importState = null;
 }
 function renderImportAreas() {
@@ -2136,43 +2217,52 @@ function renderImportAreas() {
   box.innerHTML = "";
   for (const a of importState.plan.areas) {
     const row = document.createElement("div");
-    row.className = "area-row" + (a.untouched ? " untouched" : "");
+    row.className = "imp-area-row" + (a.untouched ? " untouched" : "");
     const key = String(a.id);
-    const counts = a.untouched
-      ? `not in this file — your ${a.mineCount} `
-        + `${a.mineCount === 1 ? "feature is" : "features are"} untouched`
-      : `${a.theirsCount} in the file · you have `
-        + `${a.mineCount === 0 ? "none" : a.mineCount}`;
-    row.innerHTML = `<span class="area-name">${a.name}</span>`
-      + `<span class="area-counts">${counts}</span>`;
+    const name = document.createElement("span");
+    name.className = "area-name";
+    name.textContent = a.name;
+    const cnt = document.createElement("span");
+    cnt.className = "area-counts";
+    cnt.textContent = a.untouched ? "not in this file"
+      : `${a.theirsCount} in the file \u00b7 you have ${a.mineCount || "none"}`;
+    row.appendChild(name);
+    row.appendChild(cnt);
+
     if (!a.untouched) {
+      // "Somewhere else" is an honest label and a useless answer to "where?".
+      // This is the button that answers it.
+      const show = document.createElement("button");
+      show.type = "button";
+      show.className = "ghost show";
+      show.textContent = "Show";
+      show.title = `Zoom to what this file has in ${a.name}`;
+      show.addEventListener("click", () => focusIncoming(incomingIn(a.id)));
+      row.appendChild(show);
+
       const choice = document.createElement("span");
       choice.className = "area-choice";
-      for (const [value, label] of [["theirs", a.isNew ? "Add theirs" : "Use theirs"],
-                                    ["mine", "Keep mine"]]) {
-        if (a.isNew && value === "mine") continue;   // nothing of mine to keep
+      for (const [value, label] of [["theirs", a.isNew ? "Add" : "Use theirs"],
+                                    ["mine", a.isNew ? "Skip" : "Keep mine"]]) {
         const l = document.createElement("label");
         const r = document.createElement("input");
-        r.type = "radio"; r.name = `area-${key}`; r.value = value;
+        r.type = "radio";
+        r.name = `area-${key}`;
+        r.value = value;
         r.checked = importState.areaChoices[key] === value;
         r.addEventListener("change", () => {
           importState.areaChoices[key] = value;
+          // The radio is a shortcut for ticking that area's features, not a
+          // separate decision that overrules them.
+          if (!importState.featureChoices) importState.featureChoices = {};
+          for (const f of incomingIn(a.id)) {
+            importState.featureChoices[f.id] = (value === "theirs");
+          }
+          renderImportSeam();
           renderImportFeatures();
         });
         l.appendChild(r);
-        l.appendChild(document.createTextNode(label));
-        choice.appendChild(l);
-      }
-      if (a.isNew) {
-        const l = document.createElement("label");
-        const r = document.createElement("input");
-        r.type = "checkbox"; r.checked = importState.areaChoices[key] === "theirs";
-        r.addEventListener("change", () => {
-          importState.areaChoices[key] = r.checked ? "theirs" : "mine";
-          renderImportFeatures();
-        });
-        choice.innerHTML = "";
-        l.appendChild(r); l.appendChild(document.createTextNode("Add theirs"));
+        l.appendChild(document.createTextNode(" " + label));
         choice.appendChild(l);
       }
       row.appendChild(choice);
@@ -2180,6 +2270,7 @@ function renderImportAreas() {
     box.appendChild(row);
   }
 }
+
 function renderImportSeam() {
   const el = document.getElementById("import-seam");
   const names = importState.plan.seamCrossing;
@@ -2192,28 +2283,58 @@ function renderImportSeam() {
 function renderImportFeatures() {
   const box = document.getElementById("import-features");
   box.innerHTML = "";
-  const { plan, theirs, areaChoices, featureChoices } = importState;
-  const incoming = plan.additive ? theirs.features : theirs.features.filter(
-    (f) => areaChoices[String(plan.theirsBy.get(f.id))] === "theirs");
-  if (!incoming.length) {
-    box.innerHTML = '<p class="hint">Nothing is coming in right now.</p>';
-    return;
+  const { plan, featureChoices } = importState;
+  const chosen = (f) => (featureChoices && featureChoices[f.id] !== undefined
+    ? featureChoices[f.id]
+    : plan.additive
+      || importState.areaChoices[String(plan.theirsBy.get(f.id))] === "theirs");
+
+  // Grouped by area, and ALWAYS showing every area — including ones set to
+  // "keep mine". Deciding one street at a time used to be impossible: a
+  // feature only appeared once its whole area had been accepted.
+  let any = false;
+  for (const a of plan.areas) {
+    const list = incomingIn(a.id);
+    if (!list.length) continue;
+    any = true;
+    const group = document.createElement("div");
+    group.className = "imp-group";
+    const h = document.createElement("h4");
+    h.textContent = `${a.name} \u2014 ${list.length}`;
+    group.appendChild(h);
+    for (const f of list) {
+      const row = document.createElement("label");
+      row.className = "imp-feature";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = chosen(f);
+      cb.addEventListener("change", () => {
+        if (!importState.featureChoices) importState.featureChoices = {};
+        importState.featureChoices[f.id] = cb.checked;
+        renderImportSeam();
+      });
+      const name = document.createElement("span");
+      name.textContent = f.name || "(unnamed)";
+      const where = document.createElement("span");
+      where.className = "where";
+      where.textContent = whereText(f);
+      row.appendChild(cb);
+      row.appendChild(name);
+      row.appendChild(where);
+      // Hover to find it, click to go there. "Bollards" means nothing on its
+      // own; where it is means everything.
+      row.addEventListener("mouseenter", () => highlightIncoming(f.id));
+      row.addEventListener("mouseleave", () => highlightIncoming(null));
+      row.addEventListener("click", (e) => {
+        if (e.target !== cb) focusIncoming([f]);
+      });
+      group.appendChild(row);
+    }
+    box.appendChild(group);
   }
-  for (const f of incoming) {
-    const l = document.createElement("label");
-    l.className = "feature-pick";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = !featureChoices || featureChoices[f.id] !== false;
-    cb.addEventListener("change", () => {
-      if (!importState.featureChoices) importState.featureChoices = {};
-      importState.featureChoices[f.id] = cb.checked;
-    });
-    l.appendChild(cb);
-    l.appendChild(document.createTextNode(" " + (f.name || "(unnamed)")));
-    box.appendChild(l);
-  }
+  if (!any) box.innerHTML = '<p class="hint">This file has no features.</p>';
 }
+
 function renderImportPhases() {
   const wrap = document.getElementById("import-phases");
   const plan = importState.plan.phases;
@@ -2267,6 +2388,16 @@ function checkPhaseOrder() {
   } else warn.hidden = true;
 }
 function bindImportSheet() {
+  document.getElementById("import-x").onclick = closeImportSheet;
+  document.getElementById("import-show-all").onclick = () => {
+    if (importState) focusIncoming(importState.theirs.features);
+  };
+  document.getElementById("import-show-mine").addEventListener("change", (e) => {
+    // Seeing your own network under theirs is how you spot the overlap.
+    for (const g of [networkGroup, overlayGroup]) {
+      if (e.target.checked) map.addLayer(g); else map.removeLayer(g);
+    }
+  });
   document.getElementById("import-cancel").onclick = () => {
     closeImportSheet(); setStatus("Import cancelled.");
   };
@@ -2487,6 +2618,8 @@ async function init() {
   // call when zoomed out, the way arrows already do. Mixed in with the stroke
   // overlays they would have to be removed one at a time.
   glyphGroup = L.layerGroup().addTo(map);
+  // What an import would bring in, drawn on the real map while you decide.
+  previewGroup = L.layerGroup().addTo(map);
   // Before boundaryGroup so the shading sits UNDER the outlines, and separate
   // from it because boundaryGroup feeds fitBounds().
   maskGroup = L.layerGroup().addTo(map);

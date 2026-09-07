@@ -392,27 +392,35 @@
        costs nothing in the resting UI and works the same on a phone. The unit
        of choice is a whole AREA; "Advanced" is per-feature SELECTION, which is
        a different and much simpler thing than merging. -->
-  <div id="import-sheet" class="sheet" hidden>
+  <!-- Docked, not centred: every decision here is about geography, and the
+       map behind is the only thing that can answer "where is that?". A
+       dimming backdrop over the answer was the original sin. -->
+  <div id="import-sheet" class="sheet dock" hidden>
     <div class="sheet-inner">
-      <h2 id="import-title">This file covers 1 area.</h2>
-      <p class="hint" id="import-sub">Choose what to bring in. Nothing is
-        replaced unless you say so.</p>
+      <button id="import-x" class="sheet-x" title="Cancel" aria-label="Cancel">×</button>
+      <h2 id="import-title">Import</h2>
+      <p class="hint" id="import-sub"></p>
+
+      <div class="btnrow" id="import-preview-row">
+        <button id="import-show-all" class="ghost">Show all on map</button>
+        <label class="checkbox" title="Draw your current network underneath, to see what overlaps">
+          <input type="checkbox" id="import-show-mine" checked /> Show mine too</label>
+      </div>
 
       <div id="import-areas"></div>
 
       <div id="import-seam" class="hint" hidden></div>
 
       <details id="import-advanced">
-        <summary class="cardsum">Advanced: choose individual features</summary>
-        <p class="hint">Most people won't need this — it's easy to end up with
-          two versions of the same street.</p>
+        <summary class="cardsum" id="import-advanced-sum">Pick individual features</summary>
+        <p class="hint" id="import-advanced-hint">Hover to locate, click to
+          zoom.</p>
         <div id="import-features"></div>
       </details>
 
       <div id="import-phases" hidden>
         <h3>Their phases don't line up with yours</h3>
-        <p class="hint">Pick where each of their phases should land. Keeping
-          your own phase plan.</p>
+        <p class="hint">Pick where each of their phases should land.</p>
         <div id="import-phase-rows"></div>
         <div id="import-phase-warn" class="warnchip" hidden></div>
       </div>
@@ -423,8 +431,6 @@
         <button id="import-go" class="primary">Bring it in</button>
       </div>
     </div>
-  </div>
-
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
