@@ -309,6 +309,14 @@ tests/                      pytest, incl. the Python<->JS parity checks
   starting in another state — and it would quietly lend them Malden's outline.
   Backing out of the picker with nothing chosen returns to the start sheet
   rather than stranding the user on a map that belongs to no place.
+- ⚠️ **`afterImport` clears the start sheet, and that is the ONLY place it
+  should be done.** Opening a file from the start sheet used to leave it up
+  over the network it had just loaded, unable to be dismissed: the `.geojson`
+  path called `dismissStart()` and the `.yaml`/`.zip` path did not. One place
+  means no future import path can forget.
+- **The start sheet has a close control.** A modal with no way out is a trap
+  however good its two options are, and this one sits over a map the user may
+  already be able to see behind it.
 - **The start sheet appears when there is nothing to edit** and the user
   hasn't already said "start a new one" (`bnb.started` in localStorage). An
   empty map with no explanation is a dead end — nothing to click, no hint that

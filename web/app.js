@@ -1756,7 +1756,7 @@ async function importGeojsonFile(file) {
     }
     clearFeatures();
     loadFeatureCollection(featuresToGeojson(parsed));
-    dismissStart();
+    dismissStart();       // this path does not go through afterImport
     areaClip = null; redrawBoundaries(); renderAreas();
     renderPhases(); renderLegend(); recomputeTotals(); applyPhaseView();
     if (networkGroup.getLayers().length) {
@@ -2044,6 +2044,11 @@ async function replaceWith(j, notes) {
   await afterImport(j, notes);
 }
 async function afterImport(j, notes) {
+  // ONE place, so no import path can forget. Opening a file from the start
+  // sheet used to leave it up over the network it had just loaded, with no
+  // way to dismiss it: the .geojson path called dismissStart() and the
+  // .yaml/.zip path did not.
+  dismissStart();
   // An imported file may carry areas with no outline at all — v1 kept the
   // boundary outside the file, and plenty of v2 files predate this tool
   // writing it. Without this the import "worked" but left Malden with no
@@ -2788,6 +2793,9 @@ async function init() {
     e.target.value = "";
   });
   document.getElementById("start-fresh").onclick = startFresh;
+  // A modal with no way out is a trap however good its two options are, and
+  // this one sits over a map the user may already be able to see.
+  document.getElementById("start-x").onclick = dismissStart;
   document.getElementById("start-import").onclick = () => {
     document.getElementById("import-file").click();
   };

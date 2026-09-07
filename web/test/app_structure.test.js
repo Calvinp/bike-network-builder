@@ -238,6 +238,25 @@ for (const [name, src] of Object.entries(FILES)) {
     assert.match(src, /function syncDragHandle/);
   });
 
+  test(`${name}: loading a network always clears the start sheet`, () => {
+    // Open a file from the start sheet and it used to stay up OVER the network
+    // it had just loaded, with no way to dismiss it — the .geojson path called
+    // dismissStart() and the .yaml/.zip path did not. It belongs in
+    // afterImport, which every import path goes through.
+    const start = src.indexOf("async function afterImport");
+    assert.ok(start > 0, "afterImport not found");
+    const body = src.slice(start, src.indexOf("\n}", start));
+    assert.match(body, /dismissStart\(\)/,
+                 "afterImport must clear it, so no path can forget");
+  });
+
+  test(`${name}: the start sheet can always be dismissed`, () => {
+    // A modal with no way out is a trap however good its options are, and this
+    // one sits over a map the user may already be able to see.
+    assert.match(HTML, /id="start-x"/, "the start sheet needs a close control");
+    assert.match(src, /start-x"\)\.onclick = dismissStart/);
+  });
+
   test(`${name}: spot improvements are OFF until asked for`, () => {
     // They are cheap to draw now, but a city import is thousands of them
     // sitting on top of the lanes the map is actually about.
