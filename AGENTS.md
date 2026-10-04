@@ -34,6 +34,7 @@ untouched and never shown in the UI).
 ```bash
 python -m venv .venv && .venv\Scripts\activate     # Windows; source .venv/bin/activate elsewhere
 pip install -r requirements.txt
+python -m playwright install --only-shell chromium   # once: draws the PNG basemap
 python -m pytest -q                # all offline
 python editor.py                   # the Flask web editor -> http://127.0.0.1:5000
 ```
@@ -153,11 +154,18 @@ tests/                      incl. test_network_format, test_editor_api (Flask cl
     and a raised `maxCanvasSize` (default 4096 is smaller than the print). Any failure
     resolves null → plain background, never an error. Renders are cached by extent, so
     per-phase PNGs and every GIF frame cost one render. Basemap pixelRatio is 2 for the
-    print and shrinks toward 1 for small frames (`2·√S`), or Bright's labels swamp a
-    900 px GIF frame. Self-contained so V2 can take it by copying basemap.js.
-  - *Open:* the Python PNG (`render_map.py`, contextily, used by `python editor.py` and
-    `build.py`) still requests CARTO Voyager and so bakes in the watermark. It runs
-    locally, so a CARTO key in an env var would stay private there — Calvin's call.
+    print and shrinks toward 1 for small frames (`basemapPixelRatio()`, 2·√S), or
+    Bright's labels swamp a 900 px GIF frame. Self-contained so V2 can take it by copying basemap.js.
+  - *PNG export (Python):* OpenFreeMap has no raster tiles and pymgl (MapLibre Native
+    for Python) ships no Windows wheels, so `bikenetwork/basemap.py` drives headless
+    Chromium via **Playwright** to run web/js/basemap.js's `renderBasemap()` — the same
+    code as the web PNG, served from a fake origin that `page.route` answers — and
+    `render_map` `imshow`s the result under the network. Needs `python -m playwright
+    install --only-shell chromium` once; without it (or offline) the PNG just has no
+    basemap. ~5 s per browser launch, cached by extent so phase PNGs + GIF frames cost
+    one launch per image size. Tests stub `render_basemap`/`_render_in_browser`; they
+    never launch the browser. NB the "plain background" is white, not `#eef0ef`:
+    `set_axis_off()` hides the axes patch along with its facecolor.
   - *Being a good citizen / scaling plan* (Calvin's call: start small, grow gracefully):
     1. Now: OpenFreeMap's public instance. It runs on donations — MSS should sponsor it
        (GitHub Sponsors) rather than ration use. Keep the attribution visible.

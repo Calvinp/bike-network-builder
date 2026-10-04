@@ -6,7 +6,7 @@
 // chevrons drawn as rotated dark glyphs with a white outline, scale bar, north
 // arrow, legend.
 // Browser-only (needs a DOM canvas); everything upstream of it is node-tested.
-import { BASEMAP, renderBasemap } from "./basemap.js";
+import { BASEMAP, basemapPixelRatio, renderBasemap } from "./basemap.js";
 import { lonlatToMercator } from "./geometry.js";
 import { phaseMap, supersededIds } from "./network_format.js";
 import {
@@ -185,11 +185,8 @@ export async function renderPng(paths, net, {
   ctx.fillRect(0, titleH, W, H - titleH);
   let drewTiles = false;
   if (basemap) {
-    // Basemap labels at 2x suit the print; a small animation frame (whose
-    // own lines shrink with S) would drown in them, so they shrink too —
-    // but only part way, and never below 1x, so they stay legible.
-    const pixelRatio = Math.min(2, Math.max(1, 2 * Math.sqrt(S)));
-    const tiles = await renderBasemap(view, W, H - titleH, { pixelRatio });
+    const tiles = await renderBasemap(view, W, H - titleH,
+      { pixelRatio: basemapPixelRatio(figPx) });
     if (tiles) { ctx.drawImage(tiles, 0, titleH); drewTiles = true; }
   }
 

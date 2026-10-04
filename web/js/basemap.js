@@ -56,6 +56,15 @@ export function basemapCamera(view, pixelRatio) {
   return { center: [lon, lat], zoom };
 }
 
+// Basemap labels at 2x suit the 4000 px print; a small animation frame (whose
+// own lines shrink with the image) would drown in them, so they shrink too —
+// but only part way, and never below 1x, so they stay legible. Shared by the
+// web PNG and the Python one (bikenetwork/basemap.py runs this module).
+const PRINT_PX = 4000;
+export function basemapPixelRatio(imageLongSidePx) {
+  return Math.min(2, Math.max(1, 2 * Math.sqrt(imageLongSidePx / PRINT_PX)));
+}
+
 // Recent renders, so the per-phase PNGs and every GIF frame (all the same
 // extent) cost one render instead of one each. Failures are remembered only
 // briefly: a GIF must not wait out the timeout once per frame, but a later

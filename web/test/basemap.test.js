@@ -6,7 +6,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BASEMAP, basemapCamera, renderBasemap } from "../js/basemap.js";
+import {
+  BASEMAP, basemapCamera, basemapPixelRatio, renderBasemap,
+} from "../js/basemap.js";
 import { WEB_MERCATOR_R, lonlatToMercator } from "../js/geometry.js";
 import { renderHtml } from "../js/render_html.js";
 import { makeNetwork, makePath } from "../js/network_format.js";
@@ -124,4 +126,23 @@ test("no MapLibre (offline, or node) means no basemap rather than an error", asy
 
 test("web/js/render_png.js draws the basemap through renderBasemap", () => {
   assert.match(SURFACES["web/js/render_png.js"], /renderBasemap\(/);
+});
+
+test("basemap labels are 2x on the print and shrink toward 1x for small images", () => {
+  assert.equal(basemapPixelRatio(4000), 2);           // the 16 in @ 250 dpi print
+  assert.equal(basemapPixelRatio(250), 1);            // never below 1x
+  const gif = basemapPixelRatio(900);
+  assert.ok(gif >= 1 && gif < 2);
+  assert.ok(basemapPixelRatio(2000) > gif);
+});
+
+// The Python PNG renders the basemap by running THIS module in a headless
+// browser; it only keeps its own copy of the credit line.
+test("bikenetwork/basemap.py credits the basemap exactly as the web PNG does", () => {
+  assert.ok(read("../../bikenetwork/basemap.py").includes(BASEMAP.attributionText));
+});
+
+test("bikenetwork/render_map.py: no CARTO tiles left", () => {
+  const src = read("../../bikenetwork/render_map.py");
+  assert.ok(!src.includes("cartocdn") && !/CartoDB|contextily/.test(src));
 });

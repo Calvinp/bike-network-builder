@@ -5,10 +5,13 @@ PyYAML>=6.0
 matplotlib>=3.8
 requests>=2.31
 
-# Mapping: contextily = tiled street basemap behind the static PNG;
-# folium = interactive Leaflet HTML map (output/map.html). Both install on 3.14.
-contextily>=1.5
+# Mapping: folium = interactive Leaflet HTML map (output/map.html).
+# playwright = headless Chromium that draws the OpenFreeMap street basemap
+# behind the static PNG (bikenetwork/basemap.py). After installing, fetch the
+# browser ONCE:  python -m playwright install --only-shell chromium
+# Without it the PNG still renders, just with no basemap.
 folium>=0.16
+playwright>=1.49
 
 # shapely = clip corridors to the Malden city boundary (accurate in-city mileage).
 shapely>=2.0
