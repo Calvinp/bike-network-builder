@@ -132,6 +132,30 @@ tests/                      incl. test_network_format, test_editor_api (Flask cl
   free-drawn while street clicks snap.
 - GOTCHA: never add decorator/plain LayerGroups to `networkGroup` — FeatureGroup.getBounds()
   throws on layers without getBounds and kills editor init; arrows live in `arrowsGroup`.
+- **Basemap = OpenFreeMap "Bright" vector tiles, drawn by MapLibre GL inside Leaflet**
+  (maplibre-gl-leaflet plugin) in both editors and both map.html exports. The JS side's
+  one setting is `web/js/basemap.js`; `editor/app.js` and `bikenetwork/render_html.py`
+  carry copies of the style URL and `web/test/basemap.test.js` keeps them in step.
+  - *Why:* in 2026-10 CARTO started answering keyless tile requests with an "API KEY
+    REQUIRED" image **with status 200**, so nothing errored, the map just went blank (and
+    the PNG exporters happily baked the watermark in). The deployed builder is a static
+    site, so a CARTO key could never be kept private there. OpenFreeMap needs no key or
+    sign-up and sets no request limits.
+  - *MapLibre is pinned to 5.x* — 6.x ships only as an ES module; the plugin needs the
+    `maplibregl` global from the 5.x UMD build. Load order: Leaflet, maplibre-gl, plugin.
+  - *folium has no vector-tile layer:* render_html.py passes `tiles=None` and injects the
+    layer — scripts into the BODY (folium adds leaflet.js to the header at render time,
+    after anything we add there) and `addTo(map)` inside DOMContentLoaded (see below).
+  - *Being a good citizen / scaling plan* (Calvin's call: start small, grow gracefully):
+    1. Now: OpenFreeMap's public instance. It runs on donations — MSS should sponsor it
+       (GitHub Sponsors) rather than ration use. Keep the attribution visible.
+    2. If the tool grows: self-host a **Malden-only** tile file. Planetiler (OpenMapTiles
+       schema, same as Bright expects) can build `--area=massachusetts
+       --output=….pmtiles`; cut it to Malden + margin, serve it as a static file beside
+       the app, point a copy of the Bright style (plus its fonts/sprites) at it, and set
+       `maxBounds` so nobody pans off the edge. Rebuild a few times a year.
+    3. If it gets popular: a free CDN in front of that static file.
+
 - **`web/help.md` is the ONE copy of the manual, and it is human-authored (Calvin writes
   it) — do NOT edit it.** It has to live inside `web/` because that folder is vendored into
   the MSS site as a self-contained app; the Flask editor serves that same file at `/help.md`
@@ -227,7 +251,8 @@ maldensafestreets.org; also servable from any static host). Key facts:
   (dependency-free zip read/write on native (De)CompressionStream), `render_html.js`
   (standalone map.html string), `render_png.js` (canvas port of render_map: CARTO tiles
   drawn with CORS, label auto-placement, chevrons, legend/scale/north), `export.js`
-  (render_all equivalent), `render_common.js` (the ONE palette copy on the JS side).
+  (render_all equivalent), `render_common.js` (the ONE palette copy on the JS side),
+  `basemap.js` (the ONE basemap setting — see "Basemap" under gotchas).
 - `web/app.js` is `editor/app.js` with the fetch() calls swapped for Store/export calls;
   keep the two in step when editing UI behavior.
 - js-yaml is vendored as an ES module (`web/vendor/js-yaml.mjs`) — works in browser AND

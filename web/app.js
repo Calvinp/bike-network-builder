@@ -5,6 +5,7 @@
    runs on a street graph fetched once as a static asset. */
 "use strict";
 
+import { basemapLayer } from "./js/basemap.js";
 import { buildArtifacts, buildPhaseArtifacts } from "./js/export.js";
 import { clipPolylineLatlon } from "./js/boundary.js";
 import { renderPng } from "./js/render_png.js";
@@ -958,8 +959,7 @@ function toggleEdit(){
 /* ---------- init ---------- */
 async function init(){
   map=L.map("map",{zoomControl:true}).setView([42.4251,-71.0662],14);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-    {attribution:"© OpenStreetMap, © CARTO", maxZoom:20}).addTo(map);
+  basemapLayer(L).addTo(map);
   networkGroup=L.featureGroup().addTo(map);
   boundaryGroup=L.featureGroup().addTo(map);
   arrowsGroup=L.layerGroup().addTo(map);

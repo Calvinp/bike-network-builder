@@ -18,6 +18,12 @@ const TYPE_LABELS = {
   pedestrianized:"Pedestrianized street"
 };
 const SINGLE="#0072B2", EXISTING="#000000", FUNDED="#E69F00", STATE="#CC79A7", BOUNDARY="#777777";
+/* Basemap — a copy of web/js/basemap.js (this file is a classic script and
+   can't import it); a test keeps the style URL in step. */
+const BASEMAP_STYLE="https://tiles.openfreemap.org/styles/bright";
+const BASEMAP_ATTRIBUTION='<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> '
+  +'&copy; <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> '
+  +'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
 
 /* Spot (point) improvements — glyphs/labels mirror bikenetwork/render_map.py. */
 const SPOT_GLYPHS = {
@@ -939,8 +945,7 @@ function toggleEdit(){
 /* ---------- init ---------- */
 async function init(){
   map=L.map("map",{zoomControl:true}).setView([42.4251,-71.0662],14);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-    {attribution:"© OpenStreetMap, © CARTO", maxZoom:20}).addTo(map);
+  L.maplibreGL({style:BASEMAP_STYLE, attribution:BASEMAP_ATTRIBUTION}).addTo(map);
   networkGroup=L.featureGroup().addTo(map);
   boundaryGroup=L.featureGroup().addTo(map);
   arrowsGroup=L.layerGroup().addTo(map);

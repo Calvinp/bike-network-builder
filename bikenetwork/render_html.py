@@ -21,6 +21,39 @@ from .render_map import (EXISTING_COLOR, FUNDED_COLOR, SINGLE_COLOR,
 
 Point = Tuple[float, float]
 
+# Basemap: OpenFreeMap "Bright" vector tiles drawn by MapLibre GL inside
+# Leaflet (maplibre-gl-leaflet plugin). A copy of web/js/basemap.js, which
+# explains the switch away from CARTO; web/test/basemap.test.js keeps the
+# style URL in step. folium has no vector-tile layer, so it is hand-injected.
+BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/bright"
+BASEMAP_ATTRIBUTION = (
+    '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> '
+    '&copy; <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> '
+    'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">'
+    'OpenStreetMap</a>')
+MAPLIBRE_JS = "https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"
+MAPLIBRE_CSS = "https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css"
+MAPLIBRE_LEAFLET_JS = ("https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/"
+                       "leaflet-maplibre-gl.js")
+
+
+def _add_basemap(m: folium.Map) -> None:
+    root = m.get_root()
+    root.header.add_child(folium.Element(
+        f'<link rel="stylesheet" href="{MAPLIBRE_CSS}"/>'))
+    # In the body, not the header: folium adds leaflet.js to the header at
+    # render time, after anything added here, and the plugin extends L.
+    root.html.add_child(folium.Element(
+        f'<script src="{MAPLIBRE_JS}"></script>\n'
+        f'<script src="{MAPLIBRE_LEAFLET_JS}"></script>'))
+    # Deferred like every other injected script (see the chevron note below).
+    root.script.add_child(folium.Element(f"""
+      document.addEventListener("DOMContentLoaded", function() {{
+        L.maplibreGL({{style: {json.dumps(BASEMAP_STYLE)},
+                      attribution: {json.dumps(BASEMAP_ATTRIBUTION)}}}).addTo({m.get_name()});
+      }});
+    """))
+
 
 def render_html(
     paths: List[BikePath],
@@ -40,8 +73,8 @@ def render_html(
     center = ([sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)]
               if pts else [42.4251, -71.0662])
 
-    m = folium.Map(location=center, zoom_start=14, tiles="CartoDB positron",
-                   control_scale=True)
+    m = folium.Map(location=center, zoom_start=14, tiles=None, control_scale=True)
+    _add_basemap(m)
 
     if boundary:
         b = folium.FeatureGroup(name=f"{net.city} boundary", show=True)

@@ -252,3 +252,29 @@ def test_html_never_touches_the_map_before_it_exists(tmp_path):
             assert deferred > opener, (
                 f"{html[use.start():use.start() + 60]!r} runs before the map "
                 f"exists and is not inside a DOMContentLoaded handler")
+
+
+def test_html_basemap_is_openfreemap_bright_via_maplibre(tmp_path):
+    """CARTO now answers keyless requests with an "API KEY REQUIRED" tile, so
+    map.html draws OpenFreeMap Bright vector tiles through MapLibre instead —
+    the same basemap as both editors (web/test/basemap.test.js pins the URL
+    across all of them). The plugin needs Leaflet first, and adding the layer
+    must wait for the map variable to exist."""
+    render_all(_net([_p("A")]), BOUNDARY, tmp_path, basemap=False)
+    html = (tmp_path / "map.html").read_text(encoding="utf-8")
+    assert "cartocdn" not in html
+    assert "https://tiles.openfreemap.org/styles/bright" in html
+    for credit in ("OpenFreeMap", "OpenMapTiles", "OpenStreetMap"):
+        assert credit in html
+
+    leaflet = html.index("/dist/leaflet.js")    # folium picks the version
+    maplibre = html.index("maplibre-gl@5.24.0/dist/maplibre-gl.js")
+    plugin = html.index("leaflet-maplibre-gl.js")
+    assert "maplibre-gl@5.24.0/dist/maplibre-gl.css" in html
+    assert leaflet < plugin and maplibre < plugin
+
+    name = re.search(r"var (map_[0-9a-f]+) = L\.map\(", html).group(1)
+    add = re.search(rf"L\.maplibreGL\(.*?\)\.addTo\({name}\)", html, re.S)
+    assert add, "basemap layer never added to the map"
+    assert html.rfind("DOMContentLoaded", 0, add.start()) > \
+        html.rfind("<script", 0, add.start()), "basemap added before the map exists"
