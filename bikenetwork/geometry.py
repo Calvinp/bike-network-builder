@@ -16,7 +16,7 @@ WEB_MERCATOR_R = 6378137.0  # EPSG:3857 sphere radius (meters)
 def lonlat_to_mercator(lat: float, lon: float) -> Point:
     """Project (lat, lon) degrees to Web Mercator (EPSG:3857) meters (x, y).
 
-    Used so tiled basemaps (contextily) line up sharply with the network instead
+    Used so basemap images line up sharply with the network instead
     of warping lat/lon onto plot axes.
     """
     x = WEB_MERCATOR_R * math.radians(lon)

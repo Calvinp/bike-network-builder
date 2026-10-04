@@ -1,10 +1,12 @@
 // Render the network to a print-quality PNG on a canvas — the web port of
 // bikenetwork/render_map.py (matplotlib). Same look: Web Mercator projection,
-// CARTO Voyager tiles (silent fallback to a plain background offline), Okabe-
-// Ito colors, dashed existing/funded, white-haloed proposed lines, self-
-// placing route labels with greedy decluttering, one-way chevrons drawn as
-// rotated dark glyphs with a white outline, scale bar, north arrow, legend.
+// OpenFreeMap Bright drawn by MapLibre (basemap.js; silent fallback to a plain
+// background offline), Okabe-Ito colors, dashed existing/funded, white-haloed
+// proposed lines, self-placing route labels with greedy decluttering, one-way
+// chevrons drawn as rotated dark glyphs with a white outline, scale bar, north
+// arrow, legend.
 // Browser-only (needs a DOM canvas); everything upstream of it is node-tested.
+import { BASEMAP, basemapPixelRatio, renderBasemap } from "./basemap.js";
 import { lonlatToMercator } from "./geometry.js";
 import { phaseMap, supersededIds } from "./network_format.js";
 import {
@@ -16,7 +18,6 @@ import {
 const FIG_IN = 16;                   // matplotlib figsize
 const DPI = 250;
 const PX_PER_PT = DPI / 72;          // 1 matplotlib point in device pixels
-const MERC_HALF = 20037508.342789244;
 
 const EXISTING_DASH = [3.2, 2.6];    // in points, like matplotlib
 const FUNDED_DASH = [4.2, 2.6];
@@ -89,51 +90,6 @@ function legendRows(net, colorMode, seen) {
                 label: spotLabel(kind) });
   }
   return rows;
-}
-
-function loadTile(url) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = url;
-  });
-}
-
-async function drawBasemap(ctx, view, toPx) {
-  // Pick the zoom whose 512px (retina) tiles land at <= ~1 source px per
-  // canvas px, then fetch every tile covering the view. Any failure means no
-  // basemap (like the desktop tool offline) — the plain background stays.
-  const worldSpan = 2 * MERC_HALF;
-  let z = Math.ceil(Math.log2((worldSpan * view.scale) / 512));
-  z = Math.max(1, Math.min(19, z));
-  const n = 2 ** z;
-  const tileSpan = worldSpan / n;
-  const txMin = Math.max(0, Math.floor((view.minX + MERC_HALF) / tileSpan));
-  const txMax = Math.min(n - 1, Math.floor((view.maxX + MERC_HALF) / tileSpan));
-  const tyMin = Math.max(0, Math.floor((MERC_HALF - view.maxY) / tileSpan));
-  const tyMax = Math.min(n - 1, Math.floor((MERC_HALF - view.minY) / tileSpan));
-  if ((txMax - txMin + 1) * (tyMax - tyMin + 1) > 400) return false; // sanity
-  const jobs = [];
-  for (let tx = txMin; tx <= txMax; tx++) {
-    for (let ty = tyMin; ty <= tyMax; ty++) {
-      jobs.push({ tx, ty, img: loadTile(
-        `https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${tx}/${ty}@2x.png`) });
-    }
-  }
-  let drewAny = false;
-  for (const job of jobs) {
-    const img = await job.img;
-    if (!img) continue;
-    const mx = job.tx * tileSpan - MERC_HALF;
-    const my = MERC_HALF - job.ty * tileSpan;
-    const [x, y] = toPx(mx, my);
-    const size = tileSpan * view.scale;
-    ctx.drawImage(img, x, y, size + 0.5, size + 0.5);
-    drewAny = true;
-  }
-  return drewAny;
 }
 
 // `s` scales line weights with the image size, so a small animation frame
@@ -229,7 +185,9 @@ export async function renderPng(paths, net, {
   ctx.fillRect(0, titleH, W, H - titleH);
   let drewTiles = false;
   if (basemap) {
-    try { drewTiles = await drawBasemap(ctx, view, toPx); } catch { /* offline */ }
+    const tiles = await renderBasemap(view, W, H - titleH,
+      { pixelRatio: basemapPixelRatio(figPx) });
+    if (tiles) { ctx.drawImage(tiles, 0, titleH); drewTiles = true; }
   }
 
   // ---- the network ------------------------------------------------------ //
@@ -486,7 +444,7 @@ export async function renderPng(paths, net, {
     ctx.textAlign = "right";
     ctx.textBaseline = "bottom";
     ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.fillText("© OpenStreetMap contributors © CARTO", W - pt(3), H - pt(3));
+    ctx.fillText(BASEMAP.attributionText, W - pt(3), H - pt(3));
   }
   // Title band.
   ctx.fillStyle = "#000000";

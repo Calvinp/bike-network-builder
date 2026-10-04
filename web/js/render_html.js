@@ -8,6 +8,7 @@ import {
   TYPE_COLORS, chevron, escapeHtml, labelText, pathColor, phaseColor,
   spotColor, spotGlyph, spotLabel, typeLabel,
 } from "./render_common.js";
+import { BASEMAP } from "./basemap.js";
 import { phaseMap } from "./network_format.js";
 
 const phaseKey = (n, phases) => {
@@ -189,6 +190,7 @@ export function renderHtml(paths, net, {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${escapeHtml(net.city)} Bike Network</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="${BASEMAP.maplibreCss}" />
 <style>
   html, body, #map { height: 100%; margin: 0; }
   .dir-arrow { background: none; border: none; }
@@ -208,14 +210,15 @@ ${phased ? `  #phase-slider-box { position: fixed; bottom: 24px; left: 50%;
 <body>
 <div id="map"></div>
 ${legendHtml(net, colorMode, paths, spots, phased ? 96 : 24)}
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="${BASEMAP.leafletJs}"></script>
+<script src="${BASEMAP.maplibreJs}"></script>
+<script src="${BASEMAP.pluginJs}"></script>
 <script>
 var DATA = ${json};
 var map = L.map("map", {zoomControl: true}).setView(DATA.center, 14);
 L.control.scale().addTo(map);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-  {attribution: "&copy; OpenStreetMap contributors &copy; CARTO", maxZoom: 20}
-).addTo(map);
+L.maplibreGL({style: ${JSON.stringify(BASEMAP.style)},
+  attribution: ${JSON.stringify(BASEMAP.attribution)}}).addTo(map);
 var overlays = {};
 var everything = [];
 if (DATA.boundary.length) {

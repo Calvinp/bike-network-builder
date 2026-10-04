@@ -19,6 +19,7 @@ one embedded on the MSS website.
 ```bash
 python -m venv .venv && .venv\Scripts\activate     # Windows; source .venv/bin/activate elsewhere
 pip install -r requirements.txt
+python -m playwright install --only-shell chromium   # once: draws the PNG basemap
 python -m pytest -q          # offline + deterministic
 python editor.py             # -> http://127.0.0.1:5000
 ```
@@ -117,7 +118,7 @@ network.yaml  ─►  editor.py (Flask + Leaflet/Geoman UI)
                      │ regenerate / export
                      ▼
               bikenetwork/pipeline.render_all()
-                     ├─► output/map.png        (matplotlib + contextily basemap)
+                     ├─► output/map.png        (matplotlib + OpenFreeMap basemap)
                      ├─► output/map.html       (folium interactive)
                      └─► output/network.geojson
 corridors.yaml ─► build.py ─► OSM resolve ─► output/network.yaml (seed)

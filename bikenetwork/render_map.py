@@ -1,7 +1,7 @@
 """Render the network to a geographic PNG that reads like a real map.
 
 Improvements over a bare matplotlib plot:
-  * a tiled street basemap (via contextily) with real street names,
+  * a street basemap (OpenFreeMap, via basemap.py) with real street names,
   * the city boundary drawn on top,
   * Web Mercator projection so tiles line up sharply (no lat/lon "graph" axes),
   * each corridor's street name labeled,
@@ -14,8 +14,8 @@ Three user-selectable color modes (shared with render_html and the editor JS):
                funded/existing still dashed.
   * "single" — the whole network in one color, to show its full extent.
 
-A basemap requires network access; pass basemap=False (the tests do) to render
-offline with a plain background.
+A basemap requires network access and Playwright's Chromium (see basemap.py);
+pass basemap=False (the tests do) to render offline with a plain background.
 """
 from __future__ import annotations
 
@@ -31,6 +31,8 @@ import matplotlib.pyplot as plt
 from matplotlib import patheffects
 from matplotlib.lines import Line2D
 
+from .basemap import ATTRIBUTION as BASEMAP_ATTRIBUTION
+from .basemap import render_basemap
 from .geometry import lonlat_to_mercator
 from .network_format import BikePath, Network, superseded_ids
 
@@ -259,17 +261,27 @@ def render_map(
     _place_route_labels(ax, label_pick, paths, avoid_pts=arrow_pts + spot_pts,
                         fig_width_in=figsize[0])
 
-    # Tiled street basemap (network); silently fall back to a plain background.
+    # Street basemap (OpenFreeMap, rendered by a headless browser — see
+    # basemap.py) exactly covering the map; the plain background shows if it
+    # can't be had (offline, no browser installed).
+    ax.set_facecolor("#eef0ef")
     if basemap:
-        try:
-            import contextily as cx  # type: ignore
-            cx.add_basemap(ax, crs="EPSG:3857", source=cx.providers.CartoDB.Voyager,
-                           attribution_size=6)
-        except Exception as e:  # offline / not installed
-            ax.set_facecolor("#eef0ef")
-            print(f"  (map basemap skipped: {e})")
-    else:
-        ax.set_facecolor("#eef0ef")
+        x0, x1 = ax.get_xlim()
+        y0, y1 = ax.get_ylim()
+        # Rendered at the figure's full width: a little more than the axes
+        # get, so matplotlib only ever scales it down (stays sharp).
+        width_px = round(figsize[0] * dpi)
+        height_px = max(1, round(width_px * (y1 - y0) / (x1 - x0)))
+        img = render_basemap((x0, x1, y0, y1), width_px, height_px,
+                             round(max(figsize) * dpi))
+        if img is not None:
+            ax.imshow(img, extent=(x0, x1, y0, y1), zorder=0,
+                      interpolation="antialiased")
+            ax.set_xlim(x0, x1)    # imshow re-autoscales; keep the map's view
+            ax.set_ylim(y0, y1)
+            ax.text(0.995, 0.005, BASEMAP_ATTRIBUTION, transform=ax.transAxes,
+                    ha="right", va="bottom", fontsize=6, color="#000000",
+                    alpha=0.6, zorder=20)
 
     _add_scale_bar(ax, all_lats)
     _add_north_arrow(ax)
