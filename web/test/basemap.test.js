@@ -6,7 +6,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BASEMAP } from "../js/basemap.js";
+import { BASEMAP, basemapCamera, renderBasemap } from "../js/basemap.js";
+import { WEB_MERCATOR_R, lonlatToMercator } from "../js/geometry.js";
 import { renderHtml } from "../js/render_html.js";
 import { makeNetwork, makePath } from "../js/network_format.js";
 
@@ -18,6 +19,7 @@ const SURFACES = {
   "editor/index.html": read("../../editor/index.html"),
   "editor/app.js": read("../../editor/app.js"),
   "bikenetwork/render_html.py": read("../../bikenetwork/render_html.py"),
+  "web/js/render_png.js": read("../js/render_png.js"),
 };
 
 function exportedHtml() {
@@ -84,4 +86,42 @@ for (const [name, call] of [["web/app.js", /basemapLayer\(L\)\.addTo\(map\)/],
 
 test("web/app.js takes the basemap from basemap.js (one setting to change)", () => {
   assert.match(SURFACES["web/app.js"], /from "\.\/js\/basemap\.js"/);
+});
+
+// ---- PNG export: the basemap rendered off-screen by MapLibre ------------- //
+
+// render_png's view: mercator bounds plus canvas pixels per mercator meter.
+function viewOf([lat0, lon0], [lat1, lon1], widthPx) {
+  const [minX, minY] = lonlatToMercator(lat0, lon0);
+  const [maxX, maxY] = lonlatToMercator(lat1, lon1);
+  return { minX, maxX, minY, maxY, scale: widthPx / (maxX - minX) };
+}
+
+test("the PNG basemap camera centers on the view and matches its scale", () => {
+  const view = viewOf([42.40, -71.09], [42.45, -71.02], 4000);
+  const cam = basemapCamera(view, 2);
+  const [lon, lat] = cam.center;
+  const [cx, cy] = lonlatToMercator(lat, lon);
+  assert.ok(Math.abs(cx - (view.minX + view.maxX) / 2) < 1e-6);
+  assert.ok(Math.abs(cy - (view.minY + view.maxY) / 2) < 1e-6);
+  // MapLibre's world is 512 * 2^zoom CSS px wide; at pixelRatio 2 every CSS
+  // px is 2 canvas px, so the world must span exactly scale * circumference.
+  const worldCanvasPx = 512 * 2 ** cam.zoom * 2;
+  const expected = 2 * Math.PI * WEB_MERCATOR_R * view.scale;
+  assert.ok(Math.abs(worldCanvasPx / expected - 1) < 1e-9);
+});
+
+test("a smaller image zooms out instead of shrinking the map's labels", () => {
+  const big = basemapCamera(viewOf([42.40, -71.09], [42.45, -71.02], 4000), 2);
+  const small = basemapCamera(viewOf([42.40, -71.09], [42.45, -71.02], 1000), 2);
+  assert.ok(Math.abs(big.zoom - small.zoom - 2) < 1e-9);   // 4x smaller = 2 zooms
+});
+
+test("no MapLibre (offline, or node) means no basemap rather than an error", async () => {
+  const view = viewOf([42.40, -71.09], [42.45, -71.02], 400);
+  assert.equal(await renderBasemap(view, 400, 400, { maplibregl: null }), null);
+});
+
+test("web/js/render_png.js draws the basemap through renderBasemap", () => {
+  assert.match(SURFACES["web/js/render_png.js"], /renderBasemap\(/);
 });

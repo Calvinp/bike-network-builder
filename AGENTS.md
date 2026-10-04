@@ -146,6 +146,18 @@ tests/                      incl. test_network_format, test_editor_api (Flask cl
   - *folium has no vector-tile layer:* render_html.py passes `tiles=None` and injects the
     layer — scripts into the BODY (folium adds leaflet.js to the header at render time,
     after anything we add there) and `addTo(map)` inside DOMContentLoaded (see below).
+  - *PNG export (web):* vector tiles aren't images, so `renderBasemap()` in basemap.js
+    renders the exact extent in a hidden MapLibre map (`basemapCamera()` turns
+    render_png's mercator view into center/zoom), waits for `idle`, and copies the pixels
+    out. It needs `preserveDrawingBuffer` (MapLibre 5: under `canvasContextAttributes`)
+    and a raised `maxCanvasSize` (default 4096 is smaller than the print). Any failure
+    resolves null → plain background, never an error. Renders are cached by extent, so
+    per-phase PNGs and every GIF frame cost one render. Basemap pixelRatio is 2 for the
+    print and shrinks toward 1 for small frames (`2·√S`), or Bright's labels swamp a
+    900 px GIF frame. Self-contained so V2 can take it by copying basemap.js.
+  - *Open:* the Python PNG (`render_map.py`, contextily, used by `python editor.py` and
+    `build.py`) still requests CARTO Voyager and so bakes in the watermark. It runs
+    locally, so a CARTO key in an env var would stay private there — Calvin's call.
   - *Being a good citizen / scaling plan* (Calvin's call: start small, grow gracefully):
     1. Now: OpenFreeMap's public instance. It runs on donations — MSS should sponsor it
        (GitHub Sponsors) rather than ration use. Keep the attribution visible.
@@ -249,8 +261,8 @@ maldensafestreets.org; also servable from any static host). Key facts:
   geometry, boundary, geojson, costs, pipeline, routing) plus web-only pieces: `store.js`
   (localStorage persistence + asset fetching — the Flask API equivalent), `zip.js`
   (dependency-free zip read/write on native (De)CompressionStream), `render_html.js`
-  (standalone map.html string), `render_png.js` (canvas port of render_map: CARTO tiles
-  drawn with CORS, label auto-placement, chevrons, legend/scale/north), `export.js`
+  (standalone map.html string), `render_png.js` (canvas port of render_map: basemap from
+  `basemap.js`, label auto-placement, chevrons, legend/scale/north), `export.js`
   (render_all equivalent), `render_common.js` (the ONE palette copy on the JS side),
   `basemap.js` (the ONE basemap setting — see "Basemap" under gotchas).
 - `web/app.js` is `editor/app.js` with the fetch() calls swapped for Store/export calls;
